@@ -12,23 +12,23 @@ export const config = {
   port: Number(process.env.PORT) || 8080,
   baseUrl: process.env.APP_BASE_URL!,
   frontendUrl: process.env.FRONTEND_URL!,
-
-  dpo: {
-    companyToken: process.env.DPO_COMPANY_TOKEN,
-    apiUrl: process.env.DPO_API_URL || "https://secure.3gdirectpay.com/API/v6/",
-    paymentBaseUrl:
-      process.env.DPO_PAYMENT_BASE_URL ||
-      "https://secure.3gdirectpay.com/payv2.php",
-    timeoutMs: 10000,
-    defaultCurrency: "USD",
-  },
-
-  pesapal: {
-    publicKey: process.env.PESAPAL_PUBLIC_KEY,
-    consumerKey: process.env.PESAPAL_CONSUMER_KEY,
-    consumerSecret: process.env.PESAPAL_CONSUMER_SECRET,
-    apiUrl: `${process.env.PESAPAL_TEST_URL}`,
-    paymentUrl: `${process.env.PESAPAL_TEST_URL}`,
+  surepass: {
+    environment: process.env.SUREPASS_ENVIRONMENT || "sandbox",
+    timeoutMs: Number(process.env.SUREPASS_TIMEOUT_MS || 10000),
+    sandbox: {
+      baseUrl:
+        process.env.SUREPASS_SANDBOX_BASE_URL || "https://sandbox.surepass.app",
+      token: process.env.SUREPASS_SANDBOX_TOKEN || "",
+    },
+    production: {
+      baseUrl:
+        process.env.SUREPASS_PRODUCTION_BASE_URL ||
+        "https://kyc-api.surepass.app",
+      token: process.env.SUREPASS_PRODUCTION_TOKEN || "",
+    },
+    endpoints: {
+      cibil: "/api/v1/credit-report-cibil/fetch-report",
+    },
   },
 
   cors: {
