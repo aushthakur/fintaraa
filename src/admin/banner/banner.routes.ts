@@ -6,6 +6,8 @@ import {
   dynamicUpload,
   s3UploaderMiddleware,
 } from "../../middlewares/s3FileUploadMiddleware";
+import { Banner } from "../../modals/banner.model";
+import { mediaUrlMiddleware } from "../../middlewares/mediaUrlMiddleware";
 
 const {
   createBanner,
@@ -25,6 +27,9 @@ router
     authorize("admin"),
     dynamicUpload([{ name: "image", maxCount: 1 }]),
     s3UploaderMiddleware("banner"),
+    asyncHandler(
+      mediaUrlMiddleware(Banner, [{ key: "image", type: "single" }])
+    ),
     asyncHandler(createBanner)
   )
   .get(
@@ -39,6 +44,11 @@ router
     authorize("admin"),
     dynamicUpload([{ name: "image", maxCount: 1 }]),
     s3UploaderMiddleware("banner"),
+    asyncHandler(
+      mediaUrlMiddleware(Banner, [
+        { key: "image", type: "single", useExtractOnUpdate: true },
+      ])
+    ),
     asyncHandler(updateBannerById)
   )
   .delete(

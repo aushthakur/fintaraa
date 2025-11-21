@@ -34,6 +34,36 @@ export enum PropertyOwnerType {
   PARTNERSHIP = "partnership",
 }
 
+export enum LoginMethodType {
+  MOBILE_OTP = "mobile_otp",
+  EMAIL_PASSWORD = "email_password",
+  GOOGLE = "google",
+  APPLE = "apple",
+}
+
+export enum EmploymentType {
+  SALARIED = "salaried",
+  SELF_EMPLOYED = "self_employed",
+  BUSINESS_OWNER = "business_owner",
+  STUDENT = "student",
+  RETIRED = "retired",
+}
+
+export enum KycVerificationStatus {
+  NOT_STARTED = "not_started",
+  IN_PROGRESS = "in_progress",
+  VERIFIED = "verified",
+  REJECTED = "rejected",
+}
+
+export enum LoanProductType {
+  PERSONAL_LOAN = "personal_loan",
+  HOME_LOAN = "home_loan",
+  BUSINESS_LOAN = "business_loan",
+  CREDIT_CARD = "credit_card",
+  BNPL = "bnpl",
+}
+
 const BankDetailsSchema = new Schema(
   {
     ifscCode: String,
@@ -71,6 +101,312 @@ const EmergencyContactSchema = new Schema(
   { _id: false }
 );
 
+export interface IDocumentRecord {
+  docType: string;
+  number?: string;
+  issuer?: string;
+  fileUrl?: string;
+  issuedOn?: Date;
+  verified?: boolean;
+  referenceId?: string;
+}
+
+const DocumentSchema = new Schema(
+  {
+    docType: { type: String, required: true, trim: true },
+    number: { type: String, trim: true },
+    issuer: { type: String, trim: true },
+    fileUrl: { type: String, trim: true },
+    issuedOn: { type: Date },
+    verified: { type: Boolean, default: false },
+    referenceId: { type: String, trim: true },
+  },
+  { _id: false }
+);
+
+export interface ILoginMethod {
+  type: LoginMethodType;
+  enabled: boolean;
+  verified: boolean;
+  lastUsedAt?: Date;
+  deviceLimit?: number;
+}
+
+const LoginMethodSchema = new Schema(
+  {
+    type: {
+      type: String,
+      enum: Object.values(LoginMethodType),
+      required: true,
+    },
+    enabled: { type: Boolean, default: false },
+    verified: { type: Boolean, default: false },
+    lastUsedAt: { type: Date },
+    deviceLimit: { type: Number, default: 3 },
+  },
+  { _id: false }
+);
+
+export interface IDeviceAuth {
+  deviceId: string;
+  deviceName?: string;
+  platform?: string;
+  lastLoginAt?: Date;
+  biometricEnabled?: boolean;
+  pushToken?: string;
+}
+
+const DeviceAuthSchema = new Schema(
+  {
+    deviceId: { type: String, required: true },
+    deviceName: { type: String },
+    platform: { type: String, enum: ["ios", "android", "web"], default: "web" },
+    lastLoginAt: { type: Date },
+    biometricEnabled: { type: Boolean, default: false },
+    pushToken: { type: String },
+  },
+  { _id: false }
+);
+
+export interface ISecurityPreferences {
+  mfaEnabled: boolean;
+  preferredMfaMethods: string[];
+  biometricEnabled: boolean;
+  deviceLevelAuth: boolean;
+  trustedDevices: IDeviceAuth[];
+  lastMfaChallengeAt?: Date;
+}
+
+const SecurityPreferencesSchema = new Schema(
+  {
+    mfaEnabled: { type: Boolean, default: false },
+    preferredMfaMethods: [
+      {
+        type: String,
+        enum: ["otp", "email", "auth_app"],
+      },
+    ],
+    biometricEnabled: { type: Boolean, default: false },
+    deviceLevelAuth: { type: Boolean, default: false },
+    trustedDevices: { type: [DeviceAuthSchema], default: [] },
+    lastMfaChallengeAt: { type: Date },
+  },
+  { _id: false }
+);
+
+export interface IEmploymentDetails {
+  employmentType?: EmploymentType;
+  employerName?: string;
+  employerType?: string;
+  industry?: string;
+  monthlyIncome?: number;
+  businessIncome?: number;
+  workEmail?: string;
+  workPhone?: string;
+  taxId?: string;
+  startDate?: Date;
+  organizationId?: string;
+}
+
+const EmploymentDetailsSchema = new Schema(
+  {
+    employmentType: {
+      type: String,
+      enum: Object.values(EmploymentType),
+    },
+    employerName: { type: String, trim: true },
+    employerType: { type: String, trim: true },
+    industry: { type: String, trim: true },
+    monthlyIncome: { type: Number },
+    businessIncome: { type: Number },
+    workEmail: { type: String, trim: true },
+    workPhone: { type: String, trim: true },
+    taxId: { type: String, trim: true },
+    startDate: { type: Date },
+    organizationId: { type: String, trim: true },
+  },
+  { _id: false }
+);
+
+export interface IFinancialDetails {
+  monthlyIncome?: number;
+  annualIncome?: number;
+  creditScore?: number;
+  existingEmiObligations?: number;
+  averageBankBalance?: number;
+  preferredProducts?: Array<{
+    productType: LoanProductType;
+    desiredLimit?: number;
+    preferredLimit?: number;
+    tenurePreferenceMonths?: number;
+    priority?: number;
+  }>;
+}
+
+const FinancialDetailsSchema = new Schema(
+  {
+    monthlyIncome: { type: Number },
+    annualIncome: { type: Number },
+    creditScore: { type: Number },
+    existingEmiObligations: { type: Number },
+    averageBankBalance: { type: Number },
+    preferredProducts: [
+      {
+        productType: {
+          type: String,
+          enum: Object.values(LoanProductType),
+        },
+        desiredLimit: { type: Number },
+        preferredLimit: { type: Number },
+        tenurePreferenceMonths: { type: Number },
+        priority: { type: Number, default: 1 },
+      },
+    ],
+  },
+  { _id: false }
+);
+
+export interface IKycProfile {
+  reusableAcrossApplications: boolean;
+  personalDetails?: {
+    fullName?: string;
+    fatherName?: string;
+    motherName?: string;
+    dateOfBirth?: Date;
+    gender?: string;
+    aadhaarNumber?: string;
+    panNumber?: string;
+    maritalStatus?: string;
+    dependents?: number;
+  };
+  addressDetails?: {
+    currentAddress?: Record<string, unknown>;
+    permanentAddress?: Record<string, unknown>;
+    proofOfAddress?: IDocumentRecord;
+  };
+  employmentDetails?: IEmploymentDetails;
+  financialDetails?: IFinancialDetails;
+  documents?: IDocumentRecord[];
+  verification?: {
+    status: KycVerificationStatus;
+    verifiedAt?: Date;
+    verifiedBy?: string;
+    notes?: string;
+  };
+}
+
+const KycProfileSchema = new Schema(
+  {
+    reusableAcrossApplications: { type: Boolean, default: true },
+    personalDetails: {
+      fullName: { type: String, trim: true },
+      fatherName: { type: String, trim: true },
+      motherName: { type: String, trim: true },
+      dateOfBirth: { type: Date },
+      gender: { type: String },
+      aadhaarNumber: { type: String, trim: true },
+      panNumber: { type: String, trim: true },
+      maritalStatus: { type: String, trim: true },
+      dependents: { type: Number },
+    },
+    addressDetails: {
+      currentAddress: { type: AddressSchema },
+      permanentAddress: { type: AddressSchema },
+      proofOfAddress: { type: DocumentSchema },
+    },
+    employmentDetails: { type: EmploymentDetailsSchema },
+    financialDetails: { type: FinancialDetailsSchema },
+    documents: { type: [DocumentSchema], default: [] },
+    verification: {
+      status: {
+        type: String,
+        enum: Object.values(KycVerificationStatus),
+        default: KycVerificationStatus.NOT_STARTED,
+      },
+      verifiedAt: { type: Date },
+      verifiedBy: { type: String },
+      notes: { type: String },
+    },
+  },
+  { _id: false }
+);
+
+export interface IDigiLockerVault {
+  syncedAt?: Date;
+  storageProvider?: string;
+  documents: Array<
+    IDocumentRecord & {
+      parsedData?: Record<string, unknown>;
+    }
+  >;
+}
+
+const DigiLockerVaultSchema = new Schema(
+  {
+    syncedAt: { type: Date },
+    storageProvider: { type: String, default: "internal" },
+    documents: {
+      type: [
+        {
+          ...DocumentSchema.obj,
+          parsedData: { type: Object },
+        },
+      ],
+      default: [],
+    },
+  },
+  { _id: false }
+);
+
+export interface ILoanCreditProfile {
+  preferredProducts: Array<{
+    productType: LoanProductType;
+    preferredLimit?: number;
+    tenurePreferenceMonths?: number;
+  }>;
+  lastEligibilityCheck?: Date;
+  eligibilityScore?: number;
+  existingObligations?: Array<{
+    lender?: string;
+    type?: string;
+    outstandingAmount?: number;
+    emi?: number;
+    active?: boolean;
+  }>;
+  reusableProfileReferenceId?: string;
+}
+
+const LoanCreditProfileSchema = new Schema(
+  {
+    preferredProducts: {
+      type: [
+        {
+          productType: {
+            type: String,
+            enum: Object.values(LoanProductType),
+          },
+          preferredLimit: { type: Number },
+          tenurePreferenceMonths: { type: Number },
+        },
+      ],
+      default: [],
+    },
+    lastEligibilityCheck: { type: Date },
+    eligibilityScore: { type: Number },
+    existingObligations: [
+      {
+        lender: { type: String },
+        type: { type: String },
+        outstandingAmount: { type: Number },
+        emi: { type: Number },
+        active: { type: Boolean, default: true },
+      },
+    ],
+    reusableProfileReferenceId: { type: String },
+  },
+  { _id: false }
+);
+
 export interface IUser extends Document {
   name: string;
   role: string;
@@ -103,6 +439,11 @@ export interface IUser extends Document {
   emergencyContact?: typeof EmergencyContactSchema;
   addresses: Types.DocumentArray<typeof AddressSchema>;
   comparePassword(candidatePassword: string): Promise<boolean>;
+  loginMethods?: ILoginMethod[];
+  securityPreferences?: ISecurityPreferences;
+  kycProfile?: IKycProfile;
+  digiLockerVault?: IDigiLockerVault;
+  loanCreditProfile?: ILoanCreditProfile;
 
   // ✅ New KYC fields
   panCard?: string;
@@ -161,6 +502,33 @@ const UserSchema = new Schema<IUser>(
     aadhaarCard: { type: String, unique: true, sparse: true, trim: true },
     aadhaarCardUrl: { type: String, unique: true, sparse: true, trim: true },
     cancelledChequeOrPassbook: { type: String, default: null },
+    loginMethods: {
+      type: [LoginMethodSchema],
+      default: [
+        { type: LoginMethodType.MOBILE_OTP, enabled: true, verified: false },
+        {
+          type: LoginMethodType.EMAIL_PASSWORD,
+          enabled: true,
+          verified: false,
+        },
+      ],
+    },
+    securityPreferences: {
+      type: SecurityPreferencesSchema,
+      default: {},
+    },
+    kycProfile: {
+      type: KycProfileSchema,
+      default: {},
+    },
+    digiLockerVault: {
+      type: DigiLockerVaultSchema,
+      default: {},
+    },
+    loanCreditProfile: {
+      type: LoanCreditProfileSchema,
+      default: {},
+    },
   },
   { timestamps: true }
 );

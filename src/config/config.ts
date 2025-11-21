@@ -92,6 +92,38 @@ export const config = {
       keySecret: process.env.RAZORPAY_KEY_SECRET!,
       webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET!,
     },
+    razorpayX: {
+      accountNumber: process.env.RAZORPAYX_ACCOUNT_NUMBER || "",
+      keyId: process.env.RAZORPAYX_KEY_ID || process.env.RAZORPAY_KEY_ID!,
+      keySecret:
+        process.env.RAZORPAYX_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET!,
+      webhookSecret: process.env.RAZORPAYX_WEBHOOK_SECRET || "",
+      contactType: process.env.RAZORPAYX_CONTACT_TYPE || "employee",
+    },
+  },
+
+  integrations: {
+    inboundWebhookKey: process.env.LEAD_WEBHOOK_KEY || "",
+    allowedSources:
+      process.env.LEAD_ALLOWED_SOURCES?.split(",")
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean) ||
+      [
+        "meta_ads",
+        "google_ads",
+        "landing_page",
+        "affiliate",
+        "zapier",
+        "manual",
+      ],
+    zapier: {
+      signingSecret: process.env.ZAPIER_SIGNING_SECRET || "",
+      webhookKey: process.env.ZAPIER_WEBHOOK_KEY || "",
+    },
+    ads: {
+      metaVerifyToken: process.env.META_LEAD_VERIFY_TOKEN || "",
+      googleLeadKey: process.env.GOOGLE_LEAD_KEY || "",
+    },
   },
 
   s3: {

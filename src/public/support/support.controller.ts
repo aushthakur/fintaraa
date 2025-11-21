@@ -12,10 +12,140 @@ import ApiResponse from "../../utils/ApiResponse";
 import { extractImageUrl } from "../../utils/helper";
 import { deleteFromS3 } from "../../config/s3Uploader";
 import { Request, Response, NextFunction } from "express";
+import { emitSupportMessage } from "../../config/socket.io";
 import { CommonService } from "../../services/common.services";
 
 const agentService = new CommonService(Agent);
 const ticketService = new CommonService(Ticket);
+
+const ensureTagArray = (tags: unknown): string[] => {
+  if (Array.isArray(tags)) {
+    return tags.filter((tag): tag is string => Boolean(tag));
+  }
+  if (typeof tags === "string" && tags.trim()) {
+    return [tags.trim()];
+  }
+  return [];
+};
+
+const findEligibleAgentForTicket = async (tags: string[]) => {
+  const skillQuery = tags.length ? { skills: { $in: tags } } : {};
+
+  let agent = await Agent.findOne({
+    availability: true,
+    ...skillQuery,
+  }).sort({ activeTickets: 1, resolvedTickets: -1, createdAt: 1 });
+
+  if (!agent && tags.length) {
+    agent = await Agent.findOne({ availability: true }).sort({
+      activeTickets: 1,
+      resolvedTickets: -1,
+      createdAt: 1,
+    });
+  }
+
+  return agent;
+};
+
+const assignTicketDocument = async (
+  ticket: any,
+  agent: any
+): Promise<{ assigned: boolean; ticket: any; agent: any }> => {
+  ticket.assignee = agent._id;
+  ticket.status =
+    ticket.status === "open" || ticket.status === "re_assigned"
+      ? "in_progress"
+      : ticket.status;
+  await ticket.save();
+
+  await Agent.updateOne({ _id: agent._id }, { $inc: { activeTickets: 1 } });
+
+  return { assigned: true, ticket, agent };
+};
+
+const assignTicketAutomatically = async (ticket: any) => {
+  if (!ticket) throw new ApiError(404, "Ticket not found");
+  if (ticket.assignee) {
+    return { assigned: false, ticket, reason: "already_assigned" };
+  }
+
+  const tags = ensureTagArray(ticket.tags);
+  const agent = await findEligibleAgentForTicket(tags);
+
+  if (!agent) {
+    if (ticket.status !== "open") {
+      ticket.status = "open";
+      await ticket.save();
+    }
+    return { assigned: false, ticket, reason: "no_agent_available" };
+  }
+
+  return assignTicketDocument(ticket, agent);
+};
+
+const assignTicketToAgent = async (
+  ticketId: string,
+  agentId?: string
+): Promise<{
+  assigned: boolean;
+  ticket: any;
+  agent?: any;
+  reason?: string;
+}> => {
+  const ticket = await Ticket.findById(ticketId);
+  if (!ticket) {
+    throw new ApiError(404, "Ticket not found");
+  }
+
+  if (ticket.assignee) {
+    return { assigned: false, ticket, reason: "already_assigned" };
+  }
+
+  if (agentId) {
+    const agent = await Agent.findOne({
+      _id: agentId,
+      availability: true,
+    });
+
+    if (!agent) {
+      throw new ApiError(404, "Agent not found or inactive");
+    }
+
+    const tags = ensureTagArray(ticket.tags);
+    if (
+      tags.length &&
+      agent.skills &&
+      agent.skills.length &&
+      !agent.skills.some((skill: string) => tags.includes(skill))
+    ) {
+      throw new ApiError(
+        400,
+        "Selected agent does not have required skills for this ticket"
+      );
+    }
+
+    return assignTicketDocument(ticket, agent);
+  }
+
+  return assignTicketAutomatically(ticket);
+};
+
+const autoAllocateQueuedTickets = async (): Promise<number> => {
+  const queuedTickets = await Ticket.find({
+    $or: [{ assignee: { $exists: false } }, { assignee: null }],
+    status: { $in: ["open", "re_assigned"] },
+  })
+    .sort({ priority: 1, dueDate: 1, createdAt: 1 })
+    .limit(50);
+
+  let assignedCount = 0;
+  for (const ticket of queuedTickets) {
+    const result = await assignTicketAutomatically(ticket);
+    if (result.assigned) assignedCount += 1;
+  }
+
+  return assignedCount;
+};
 
 export const createTicket = async (
   req: Request | any,
@@ -23,11 +153,22 @@ export const createTicket = async (
   next: NextFunction
 ): Promise<any> => {
   try {
-    const { id } = req.user;
+    const { _id: id } = req.user;
     const { tags, title, description } = req.body;
 
+    if (!title || !description) {
+      return next(new ApiError(400, "Title and description are required"));
+    }
+
+    const tagList = ensureTagArray(tags);
+    if (!tagList.length) {
+      return next(new ApiError(400, "At least one valid tag is required"));
+    }
+
     const duplicate = await Ticket.findOne({
-      $or: [{ tags: tags }, { title: title }, { description: description }],
+      requester: id,
+      $or: [{ tags: { $all: tagList } }, { title }, { description }],
+      status: { $nin: ["closed", "resolved"] },
     });
 
     if (duplicate) {
@@ -59,12 +200,15 @@ export const createTicket = async (
       },
     ]);
 
-    if (result.length === 2)
-      return res.status(200).json({
-        data: result,
-        success: true,
-        message: "You can raise upto 2 tickets a day",
-      });
+    if (result.length >= 2)
+      return res
+        .status(429)
+        .json(
+          new ApiError(
+            429,
+            "Daily ticket limit reached. Please try again tomorrow."
+          )
+        );
 
     const parsedDueDate = new Date();
     const dueDatePlus24 = new Date(
@@ -72,7 +216,7 @@ export const createTicket = async (
     );
 
     const obj = {
-      tags,
+      tags: tagList,
       title,
       description,
       requester: id,
@@ -82,20 +226,24 @@ export const createTicket = async (
       relatedTickets: await checkRelatedTickets(tags),
     };
 
-    const ticket = new Ticket(obj);
-    const response: any = await ticket.save();
-    await assignTicketToAgent(response._id);
-    return res.status(200).json({
+    const ticket = await Ticket.create(obj);
+    const assignment = await assignTicketToAgent(
+      (ticket as any)._id.toString()
+    );
+
+    return res.status(201).json({
       data: ticket,
       success: true,
-      message: "Ticket generated successfully",
+      message: assignment.assigned
+        ? "Ticket generated and assigned successfully"
+        : "Ticket generated successfully. Our agents will pick it up shortly.",
     });
   } catch (error) {
-    console.log(error);
-    return res.status(400).json({
-      success: false,
-      message: "Failed to create ticket",
-    });
+    next(
+      error instanceof ApiError
+        ? error
+        : new ApiError(500, "Failed to create ticket", error)
+    );
   }
 };
 
@@ -140,6 +288,7 @@ export const createAgent = async (
         .status(400)
         .json(new ApiError(400, "Failed to create Agent profile"));
     }
+    await autoAllocateQueuedTickets();
 
     return res
       .status(201)
@@ -149,34 +298,6 @@ export const createAgent = async (
     return res
       .status(500)
       .json(new ApiError(400, "Failed to create ticket", error));
-  }
-};
-
-const assignTicketToAgent = async (ticketId: string): Promise<any> => {
-  try {
-    let ticket: any = await Ticket.findById(ticketId);
-    const availableAgents = await Agent.find({
-      availability: true,
-      skills: { $in: ticket.tags },
-    }).sort("activeTickets");
-
-    let assignedAgent;
-    if (availableAgents.length > 0) {
-      assignedAgent = availableAgents[0];
-      ticket.assignee = assignedAgent._id;
-      ticket.status = "in_progress";
-      await ticket.save();
-
-      assignedAgent.activeTickets += 1;
-      await assignedAgent.save();
-    } else {
-      ticket.status = "open";
-      await ticket.save();
-    }
-
-    return true;
-  } catch (error: any) {
-    throw new Error("Error assigning ticket to agent: " + error.message);
   }
 };
 
@@ -254,14 +375,21 @@ export const deactivateAgent = async (
       { $unset: { assignee: "" }, $set: { status: "re_assigned" } }
     );
 
-    agent.availability = !agent.availability;
-    agent.activeTickets = 0;
+    const toggledAvailability = !agent.availability;
+    agent.availability = toggledAvailability;
+    if (!toggledAvailability) {
+      agent.activeTickets = 0;
+    }
     await agent.save();
+
+    if (toggledAvailability) {
+      await autoAllocateQueuedTickets();
+    }
 
     return res.status(200).json({
       success: true,
       message: `Agent ${
-        agent.availability ? "activated " : "deactivated "
+        toggledAvailability ? "activated" : "deactivated"
       } successfully`,
     });
   } catch (error) {
@@ -296,11 +424,11 @@ export const getTickets = async (
   next: NextFunction
 ): Promise<any> => {
   try {
-    const { id, role } = req.user;
+    const { _id: userId, role } = req.user;
     const { assignee } = req.query;
     const query: any = { ...req.query };
 
-    if (role === "agent") query.assignee = assignee || id;
+    if (role === "agent") query.assignee = assignee || userId;
     const pipeline = [
       {
         $lookup: {
@@ -347,8 +475,9 @@ export const getTickets = async (
           assigneeEmail: "$assigneeInfo.email",
           assigneeMobile: "$assigneeInfo.mobile",
           requesterEmail: "$requesterInfo.email",
-          requesterName: "$requesterInfo.fullName",
           requesterNumber: "$requesterInfo.mobile",
+          requesterLastName: "$requesterInfo.lastName",
+          requesterFirstName: "$requesterInfo.firstName",
         },
       },
     ];
@@ -390,11 +519,15 @@ export const deleteTicket = async (
     if (ticketDaTa && ticketDaTa?.assignee) {
       const agentData = await Agent.findById({ _id: ticketDaTa?.assignee });
       if (agentData) {
-        if (agentData.activeTickets > 0) agentData.activeTickets -= 1;
+        agentData.activeTickets = Math.max(
+          0,
+          (agentData.activeTickets || 0) - 1
+        );
         await agentData.save();
       }
     }
     await Ticket.findByIdAndDelete(id);
+    await autoAllocateQueuedTickets();
     res
       .status(200)
       .json({ success: true, message: "Ticket deleted successfully" });
@@ -425,6 +558,7 @@ export const deleteAgent = async (
     );
 
     await Agent.findByIdAndDelete(id);
+    await autoAllocateQueuedTickets();
     res
       .status(200)
       .json({ success: true, message: "Agent deleted successfully!" });
@@ -465,7 +599,7 @@ export const addInteraction = async (
   res: Response
 ): Promise<any> => {
   try {
-    let { role, id } = req.user;
+    let { role, _id } = req.user;
     const { initiator, receiver, action, content, ticketId } = req.body;
 
     const ticket = await Ticket.findById(ticketId);
@@ -474,8 +608,8 @@ export const addInteraction = async (
 
     // Only initiator or assignee can interact
     if (
-      ticket.requester?.toString() !== id &&
-      ticket.assignee?.toString() !== id
+      ticket.requester?.toString() !== _id &&
+      ticket.assignee?.toString() !== _id
     ) {
       return res
         .status(403)
@@ -487,9 +621,7 @@ export const addInteraction = async (
     if (ticket.status === "closed")
       return res.status(400).json(new ApiError(400, "Ticket has been closed"));
 
-    const isUserRole = ["worker", "employer", "contractor"].includes(
-      role?.toLowerCase()
-    );
+    const isUserRole = role === "user";
 
     const userExist = await User.findById({
       _id: isUserRole ? initiator : receiver,
@@ -515,6 +647,17 @@ export const addInteraction = async (
     ticket.interactions.push(interaction);
     await ticket.save();
 
+    const senderId = initiator?.toString?.() ?? initiator;
+    const receiverId = receiver?.toString?.() ?? receiver;
+    if (content && senderId && receiverId) {
+      emitSupportMessage({
+        text: content,
+        senderId,
+        receiverId,
+        ticketId: ticketId?.toString?.() ?? ticketId,
+      });
+    }
+
     res.status(200).json({ success: true, data: ticket });
   } catch (error) {
     console.log(error);
@@ -529,37 +672,25 @@ export const manualAssignTicketToAgent = async (
   try {
     const { ticketId, agentId } = req.body;
 
-    const ticket: any = await Ticket.findById({ _id: ticketId });
-    if (!ticket)
-      return res.status(404).json(new ApiError(404, "Ticket not found"));
+    const result = await assignTicketToAgent(ticketId, agentId);
 
-    if (ticket?.assignee)
+    if (!result.assigned) {
       return res
-        .status(404)
-        .json(new ApiError(404, "Ticket is already assigned"));
+        .status(409)
+        .json(new ApiError(409, "Ticket could not be assigned"));
+    }
 
-    const assignedAgent = await Agent.findById({ _id: agentId });
-    if (!assignedAgent)
-      return res.status(404).json(new ApiError(404, "Agent not found"));
-
-    if (!assignedAgent?.availability)
-      return res.status(404).json(new ApiError(404, "Agent is not available"));
-
-    ticket.assignee = assignedAgent._id;
-    ticket.status = "in_progress";
-    await ticket.save();
-
-    assignedAgent.activeTickets += 1;
-    await assignedAgent.save();
-
-    res.status(200).json({
-      success: true,
-      data: ticket,
-      message: "Successfully assigned to agent",
-    });
+    res
+      .status(200)
+      .json(
+        new ApiResponse(200, result.ticket, "Successfully assigned to agent")
+      );
   } catch (error) {
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json(error);
+    }
     console.log(error);
-    res.status(500).json(new ApiError(500, "Failed to Assigned manually"));
+    res.status(500).json(new ApiError(500, "Failed to assign ticket", error));
   }
 };
 
@@ -617,7 +748,7 @@ export const updateTicketStatus = async (
     ) {
       ticket.resolutionDate = new Date();
       const agentData: any = await Agent.findById({ _id: ticket.assignee });
-      agentData.activeTickets -= 1;
+      agentData.activeTickets = Math.max(0, (agentData.activeTickets || 0) - 1);
       agentData.resolvedTickets += 1;
       await agentData.save();
     }
@@ -626,6 +757,10 @@ export const updateTicketStatus = async (
     await ticket.save();
 
     const data = await getData(id, role);
+
+    if (status === "closed" || status === "resolved") {
+      await autoAllocateQueuedTickets();
+    }
 
     return res.status(200).json({
       data: data,
@@ -645,6 +780,7 @@ export const updateAgent = async (
   let { availability } = req.body;
   if (availability === "active" || availability === "inactive") {
     req.body.availability = availability === "active";
+    availability = req.body.availability;
   }
   try {
     const userId = req.params.id;
@@ -658,7 +794,7 @@ export const updateAgent = async (
       return res.status(404).json(new ApiError(404, "Agent not found"));
     }
 
-    if (!availability) {
+    if (availability === false) {
       await Ticket.updateMany(
         {
           assignee: userId,
@@ -667,6 +803,7 @@ export const updateAgent = async (
         { $unset: { assignee: "" }, $set: { status: "re_assigned" } }
       );
       agent.activeTickets = 0;
+      req.body.activeTickets = 0;
     }
     let document;
     if (req?.body?.profilePictureUrl && agent.profilePictureUrl) {
@@ -675,12 +812,27 @@ export const updateAgent = async (
         agent.profilePictureUrl as string
       );
     }
-    const result = await agentService.updateById(userId, {
+    const updatePayload: any = {
       ...req.body,
       profilePictureUrl: document || profilePictureUrl,
-    });
+    };
+
+    if (typeof updatePayload.password === "string") {
+      if (updatePayload.password.trim().length === 0) {
+        delete updatePayload.password;
+      }
+    }
+    if (typeof updatePayload.password === "undefined") {
+      delete updatePayload.password;
+    }
+    delete updatePayload["password-confirm"];
+
+    const result = await agentService.updateById(userId, updatePayload);
     if (!result)
       return res.status(404).json(new ApiError(404, "Failed to update agent"));
+    if (result.availability) {
+      await autoAllocateQueuedTickets();
+    }
     return res
       .status(200)
       .json(new ApiResponse(200, result, "Updated successfully"));

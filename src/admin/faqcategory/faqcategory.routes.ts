@@ -13,10 +13,35 @@ const {
 const router = express.Router();
 
 router
-  .post("/", authenticateToken, asyncHandler(createFaqCategory))
-  .get("/", authenticateToken, asyncHandler(getAllFaqCategorys))
-  .get("/:id", authenticateToken, asyncHandler(getFaqCategoryById))
-  .put("/:id", authenticateToken, asyncHandler(updateFaqCategoryById))
-  .delete("/:id", authenticateToken, asyncHandler(deleteFaqCategoryById));
+  .post(
+    "/",
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(createFaqCategory)
+  )
+  .get(
+    "/",
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(getAllFaqCategorys)
+  )
+  .get(
+    "/:id",
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(getFaqCategoryById)
+  )
+  .put(
+    "/:id",
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(updateFaqCategoryById)
+  )
+  .delete(
+    "/:id",
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(deleteFaqCategoryById)
+  );
 
 export default router;

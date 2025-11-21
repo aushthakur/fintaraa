@@ -1,22 +1,15 @@
-import mongoose from "mongoose";
 import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
 import { Banner } from "../../modals/banner.model";
 import { NextFunction, Request, Response } from "express";
 import { CommonService } from "../../services/common.services";
-import { extractImageUrl } from "../../utils/helper";
 
 const BannerService = new CommonService(Banner);
 
 export class BannerController {
   static async createBanner(req: Request, res: Response, next: NextFunction) {
     try {
-      const image = req?.body?.image?.[0]?.url;
-      if (!image)
-        return res
-          .status(403)
-          .json(new ApiError(403, "Banner Image is Required."));
-      const result = await BannerService.create({ ...req.body, image });
+      const result = await BannerService.create(req.body);
       if (!result)
         return res
           .status(400)
@@ -63,31 +56,7 @@ export class BannerController {
     next: NextFunction
   ) {
     try {
-      const id = req.params.id;
-      const image = req?.body?.image?.[0]?.url;
-      if (!mongoose.Types.ObjectId.isValid(id))
-        return res
-          .status(400)
-          .json(new ApiError(400, "Invalid banner doc ID"));
-
-      const record = await BannerService.getById(id);
-      if (!record) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Job Requirement (On Demand) not found."));
-      }
-
-      let imageUrl;
-      if (req?.body?.image && record.image)
-        imageUrl = await extractImageUrl(
-          req?.body?.image,
-          record.image as string
-        );
-
-      const result = await BannerService.updateById(req.params.id, {
-        ...req.body,
-        image: imageUrl || image,
-      });
+      const result = await BannerService.updateById(req.params.id, req.body);
       if (!result)
         return res
           .status(404)

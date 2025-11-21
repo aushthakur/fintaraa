@@ -1,5 +1,6 @@
 import bcrypt from "bcrypt";
 import mongoose, { Document, Schema, Model } from "mongoose";
+import { LoanProductType } from "./user.model";
 
 export interface IAgent extends Document {
   name: string;
@@ -7,6 +8,7 @@ export interface IAgent extends Document {
   email: string;
   mobile?: string;
   password: string;
+  refreshToken?: string;
   skills: string[];
   createdAt?: Date;
   updatedAt?: Date;
@@ -17,6 +19,12 @@ export interface IAgent extends Document {
   resolvedTickets: number;
   profilePictureUrl?: string;
   role: Schema.Types.ObjectId;
+  leadCapacity?: number;
+  activeLeads: number;
+  serviceablePincodes?: string[];
+  productFocus?: LoanProductType[];
+  leadAutoAssign?: boolean;
+  lastLeadAssignedAt?: Date;
 }
 
 const AgentSchema: Schema<IAgent> = new Schema(
@@ -69,12 +77,44 @@ const AgentSchema: Schema<IAgent> = new Schema(
       type: Number,
       default: 0,
     },
+    leadCapacity: {
+      type: Number,
+      default: 40,
+      min: 5,
+    },
+    activeLeads: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    leadAutoAssign: {
+      type: Boolean,
+      default: true,
+    },
+    lastLeadAssignedAt: {
+      type: Date,
+    },
+    serviceablePincodes: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
+    productFocus: [
+      {
+        type: String,
+        enum: Object.values(LoanProductType),
+      },
+    ],
     skills: [
       {
         type: String,
         trim: true,
       },
     ],
+    refreshToken: {
+      type: String,
+    },
   },
   { timestamps: true }
 );

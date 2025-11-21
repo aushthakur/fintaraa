@@ -13,10 +13,35 @@ const {
 const router = express.Router();
 
 router
-  .post("/", authenticateToken, asyncHandler(createBlogCategory))
-  .get("/", authenticateToken, asyncHandler(getAllBlogCategorys))
-  .get("/:id", authenticateToken, asyncHandler(getBlogCategoryById))
-  .put("/:id", authenticateToken, asyncHandler(updateBlogCategoryById))
-  .delete("/:id", authenticateToken, asyncHandler(deleteBlogCategoryById));
+  .post(
+    "/",
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(createBlogCategory)
+  )
+  .get(
+    "/",
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(getAllBlogCategorys)
+  )
+  .get(
+    "/:id",
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(getBlogCategoryById)
+  )
+  .put(
+    "/:id",
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(updateBlogCategoryById)
+  )
+  .delete(
+    "/:id",
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(deleteBlogCategoryById)
+  );
 
 export default router;

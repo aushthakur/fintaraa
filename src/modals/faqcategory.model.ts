@@ -19,4 +19,5 @@ const FaqCategorySchema = new Schema<IFaqCategory>(
 );
 
 export const FaqCategory =
-  mongoose.models.FaqCategory || model<IFaqCategory>("FaqCategory", FaqCategorySchema);
+  mongoose.models.FaqCategory ||
+  model<IFaqCategory>("FaqCategory", FaqCategorySchema);

@@ -7,7 +7,10 @@ import {
   getNotificationStats,
   markNotificationRead,
 } from "../../services/notification.service";
-import { dynamicUpload, s3UploaderMiddleware } from "../../middlewares/s3FileUploadMiddleware";
+import {
+  dynamicUpload,
+  s3UploaderMiddleware,
+} from "../../middlewares/s3FileUploadMiddleware";
 
 const router = Router();
 
@@ -20,7 +23,8 @@ router.post(
     { name: "cancelledChequeOrPassbook", maxCount: 1 },
   ]),
   s3UploaderMiddleware("profile"),
-  asyncHandler(UserController.createUser));
+  asyncHandler(UserController.createUser)
+);
 router.post("/login", asyncHandler(UserController.loginUser));
 router.post("/send-otp", asyncHandler(UserController.generateOtp));
 router.post("/verify-otp", asyncHandler(UserController.verifyOtp));
@@ -33,10 +37,32 @@ router
   .put(
     dynamicUpload([{ name: "profilePicture", maxCount: 1 }]),
     s3UploaderMiddleware("profile"),
-    asyncHandler(UserController.updateUser))
+    asyncHandler(UserController.updateUser)
+  )
   .delete(asyncHandler(UserController.deleteUserById));
 
 router.get("/get-current", asyncHandler(UserController.getCurrentUser));
+router.put(
+  "/kyc-profile",
+  dynamicUpload([
+    { name: "kycDocuments", maxCount: 10 },
+    { name: "addressProof", maxCount: 3 },
+    { name: "incomeProof", maxCount: 5 },
+  ]),
+  s3UploaderMiddleware("kyc"),
+  asyncHandler(UserController.completeKycProfile)
+);
+router.put(
+  "/security/preferences",
+  asyncHandler(UserController.updateSecurityPreferences)
+);
+router.post(
+  "/digilocker-sync",
+  dynamicUpload([{ name: "digiLockerFiles", maxCount: 10 }]),
+  s3UploaderMiddleware("digilocker"),
+  asyncHandler(UserController.syncDigiLocker)
+);
+router.get("/digilocker", asyncHandler(UserController.getDigiLockerDocuments));
 
 /* ----------- NOTIFICATIONS ----------- */
 router.get("/notifications", asyncHandler(getAllNotifications));
@@ -44,9 +70,7 @@ router.get("/notifications-stats", asyncHandler(getNotificationStats));
 router.put("/notifications/mark-read", asyncHandler(markNotificationRead));
 
 /* ----------- DYNAMIC USER-TYPE ROUTES ----------- */
-router
-  .route("/")
-  .get(asyncHandler(UserController.getAllUsers));
+router.route("/").get(asyncHandler(UserController.getAllUsers));
 
 router
   .route("/:id")

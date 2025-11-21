@@ -53,9 +53,7 @@ export class FaqCategoryController {
         role !== "admin"
       );
       if (!result)
-        return res
-          .status(404)
-          .json(new ApiError(404, "FaqCategory not found"));
+        return res.status(404).json(new ApiError(404, "FaqCategory not found"));
       return res
         .status(200)
         .json(new ApiResponse(200, result, "Data fetched successfully"));
