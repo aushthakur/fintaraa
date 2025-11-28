@@ -1,0 +1,348 @@
+import ApiError from "../../utils/ApiError";
+import ApiResponse from "../../utils/ApiResponse";
+import { NextFunction, Request, Response } from "express";
+import { CommonService } from "../../services/common.services";
+import { LoanQuery, allowedFieldsByFormType } from "../../modals/loanquery.model";
+import { ApplicationStatus } from "../../modals/insurancequery.model";
+
+  const loanQueryService = new CommonService(LoanQuery);
+
+// Helper function to extract URL from uploaded file object
+const extractFileUrl = (file: any): string | undefined => {
+  if (!file) return undefined;
+  if (typeof file === "string") return file;
+  if (Array.isArray(file) && file.length > 0) {
+    return file[0]?.url || file[0];
+  }
+  return file.url || file;
+};
+
+// Helper function to process uploaded files and map to request body
+const processFileUploads = (req: Request) => {
+  // Initialize policyDetails if it doesn't exist
+  if (!req.body.policyDetails) {
+    req.body.policyDetails = {};
+  }
+
+  // Initialize documents if it doesn't exist
+  if (!req.body.documents) {
+    req.body.documents = {};
+  }
+
+  // Process bankStatementUrl (main field)
+  if (req.body.bankStatementUrl) {
+    const url = extractFileUrl(req.body.bankStatementUrl);
+    if (url) req.body.bankStatementUrl = url;
+  }
+
+  // Get allowed fields for this loan type (if loanType is provided)
+  const loanType = req.body.loanType;
+  const allowedFields = loanType ? allowedFieldsByFormType[loanType] || [] : [];
+
+  // Process policyDetails document fields (uploaded files/images)
+  // These are URL fields that go into policyDetails
+  const policyDetailsDocumentFields = [
+    "salarySlipUrl",
+    "admissionLetterUrl",
+    "feeStructureUrl",
+    "rcCopyUrl",
+    "goldPhotosUrl",
+    "carInsuranceUrl",
+    "lastMonthBankStatementUrl",
+    "propertyDocumentsUrl",
+    "propertyOwnershipProofUrl",
+    "renovationEstimateUrl",
+    "itrUrl",
+    "gstReturnsUrl",
+    "dematStatementOrFdCopyUrl",
+    "proformaInvoiceOrQuotationUrl",
+  ];
+
+  policyDetailsDocumentFields.forEach((field) => {
+    // Only process if field is allowed for this loan type (or if loanType is not set yet)
+    if (req.body[field] && (!loanType || allowedFields.includes(field))) {
+      const url = extractFileUrl(req.body[field]);
+      if (url) {
+        req.body.policyDetails[field] = url;
+      }
+      // Remove from body after processing
+      delete req.body[field];
+    }
+  });
+
+  // Process documents field - these are uploaded as separate fields and mapped to documents object
+  // Document types from AllowedDocumentType enum
+  const documentTypes = [
+    "pan_card",
+    "aadhaar_card",
+    "photo",
+    "itr_form_16",
+    "salary_slip",
+    "offer_letter",
+    "relieving_letter",
+    "bank_statement",
+    "gst_certificate",
+    "gst_returns",
+    "shop_act",
+    "govt_license",
+  ];
+
+  documentTypes.forEach((docType) => {
+    if (req.body[docType]) {
+      const url = extractFileUrl(req.body[docType]);
+      if (url) {
+        req.body.documents[docType] = url;
+      }
+      // Remove from body after processing
+      delete req.body[docType];
+    }
+  });
+};
+
+export class LoanQueryController {
+  static async createQuery(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      // Get customer ID from authenticated user token
+      const customerId = (req as any).user?._id;
+      if (!customerId) {
+        return res
+          .status(401)
+          .json(new ApiError(401, "User authentication required"));
+      }
+
+      // Process uploaded files and map URLs
+      processFileUploads(req);
+
+      // Automatically set customerId from token
+      req.body.customerId = customerId;
+
+      // Validate policyDetails against loanType if both are provided (skip for draft)
+      // This must run AFTER processFileUploads since files are moved to policyDetails
+      const isDraft = req.body.status === ApplicationStatus.DRAFT;
+      if (!isDraft && req.body.loanType && req.body.policyDetails && Object.keys(req.body.policyDetails).length > 0) {
+        const allowed = allowedFieldsByFormType[req.body.loanType] || [];
+        const invalidFields = Object.keys(req.body.policyDetails).filter(
+          (field) => !allowed.includes(field)
+        );
+        if (invalidFields.length > 0) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                `Field(s) "${invalidFields.join(", ")}" is/are not allowed for ${req.body.loanType}. Allowed fields: ${allowed.join(", ")}`
+              )
+            );
+        }
+      }
+
+      // Check if user already has an active loan query with the same loanType
+      // User can only have one loanType until status is completed/approved/cancelled
+      if (req.body.loanType) {
+        const existingQuery = await LoanQuery.findOne({
+          customerId: customerId,
+          loanType: req.body.loanType,
+          status: {
+            $nin: [
+              ApplicationStatus.COMPLETED,
+              ApplicationStatus.APPROVED,
+              ApplicationStatus.CANCELLED,
+            ],
+          },
+        });
+
+        if (existingQuery) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                `You already have an active ${req.body.loanType} loan query. Please complete, approve, or cancel the existing query before creating a new one.`
+              )
+            );
+        }
+      }
+
+      // If status is draft, skip all required field validations
+      let result;
+      if (isDraft) {
+        // For draft status, create without validation
+        const draftData = { ...req.body };
+        // Ensure status is set to draft
+        draftData.status = ApplicationStatus.DRAFT;
+        // Create document without running validators
+        result = new LoanQuery(draftData);
+        await result.save({ validateBeforeSave: false });
+      } else {
+        // For non-draft status, use normal validation
+        result = await loanQueryService.create(req.body);
+      }
+
+      if (!result)
+        return res
+          .status(400)
+          .json(new ApiError(400, "Failed to create loan query"));
+      return res
+        .status(201)
+        .json(
+          new ApiResponse(201, result, "Loan query created successfully")
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getAllQueries(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const customerId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      
+      // For non-admin users, only show their own queries
+      if (role !== "admin" && customerId) {
+        req.query.customerId = customerId;
+      }
+      
+      // Exclude draft status queries
+      req.query.status = { $ne: ApplicationStatus.DRAFT };
+      
+      const loanQueries = await loanQueryService.getAll(req.query);
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            loanQueries,
+            "Loan queries fetched successfully"
+          )
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getQueryById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const customerId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      
+      const result = await loanQueryService.getById(
+        req.params.id,
+        role !== "admin"
+      );
+      
+      // Ensure user can only view their own queries (unless admin)
+      if (role !== "admin" && result?.customerId?._id?.toString() !== customerId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only view your own loan queries"));
+      }
+      
+      if(result?.status !== ApplicationStatus.DRAFT) {
+        return res
+          .status(404) 
+          .json(new ApiError(404, "Only draft queries can be fetched"));
+      }
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Loan query fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async updateQueryById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const customerId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      
+      //only draft queries can be updated
+      const existingResult = await loanQueryService.getById(
+        req.params.id,
+        true,
+      );
+      if(existingResult?.status !== ApplicationStatus.DRAFT) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Only draft queries can be updated"));
+      }
+
+      // Ensure user can only update their own queries (unless admin)
+      if (role !== "admin" && existingResult.customerId?._id?.toString() !== customerId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only update your own loan queries"));
+      }
+
+      // Process uploaded files and map URLs
+      processFileUploads(req);
+
+      // Prevent changing customerId
+      delete req.body.customerId;
+
+      // Merge with existing policyDetails if updating
+      if (req.body.policyDetails && existingResult.policyDetails) {
+        req.body.policyDetails = {
+          ...existingResult.policyDetails,
+          ...req.body.policyDetails,
+        };
+      }
+
+      // Merge with existing documents if updating
+      if (req.body.documents && existingResult.documents) {
+        req.body.documents = {
+          ...existingResult.documents,
+          ...req.body.documents,
+        };
+      }
+
+      const updatedResult = await loanQueryService.updateById(req.params.id, req.body, {
+        populate: true,
+        new: true,
+        runValidators: true,
+      }); 
+      return res
+        .status(200)
+        .json(new ApiResponse(200, updatedResult, "Loan query updated successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async deleteQueryById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const result = await loanQueryService.deleteById(req.params.id);
+      if (!result)
+        return res
+          .status(404)
+          .json(new ApiError(404, "Failed to delete loan query"));
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(200, result, "Loan query deleted successfully")
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+}
+

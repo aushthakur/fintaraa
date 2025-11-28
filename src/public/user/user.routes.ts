@@ -21,6 +21,7 @@ router.post(
     { name: "panCardUrl", maxCount: 1 },
     { name: "aadhaarCardUrl", maxCount: 1 },
     { name: "cancelledChequeOrPassbook", maxCount: 1 },
+    {name : "avatar", maxCount: 1},
   ]),
   s3UploaderMiddleware("profile"),
   asyncHandler(UserController.createUser)
@@ -31,6 +32,7 @@ router.post("/verify-otp", asyncHandler(UserController.verifyOtp));
 router.get("/otp/all", asyncHandler(UserController.getAllOTPLogs));
 
 /* ----------- PROTECTED ROUTES ----------- */
+
 router.use(authenticateToken);
 router
   .route("/")

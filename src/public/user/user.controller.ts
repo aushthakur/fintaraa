@@ -149,12 +149,14 @@ export class UserController {
         role = "user",
         agreedToTerms = true,
         privacyPolicyAccepted = true,
+        password,
       } = req.body;
 
       const panCardUrl = req?.body?.panCardUrl?.[0]?.url;
       const aadhaarCardUrl = req?.body?.aadhaarCardUrl?.[0]?.url;
       const cancelledChequeOrPassbook =
         req?.body?.cancelledChequeOrPassbook?.[0]?.url;
+      const avatar = req?.body?.avatar?.[0]?.url;
 
       if (!email || !mobile || !name) {
         return res
@@ -216,8 +218,9 @@ export class UserController {
         panCardUrl,
         aadhaarCard,
         agreedToTerms,
+        avatar,
         aadhaarCardUrl,
-        password: "password",
+        password,
         privacyPolicyAccepted,
         isEmailVerified: false,
         isMobileVerified: false,
@@ -491,7 +494,7 @@ export class UserController {
         });
       }
 
-      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins expiry
 
       // Save or update OTP

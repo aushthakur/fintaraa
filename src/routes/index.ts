@@ -19,13 +19,15 @@ import FaqCategoryRoutes from "../admin/faqcategory/faqcategory.routes";
 import testimonialRoutes from "../admin/testimonial/testimonial.routes";
 import abusereportRoutes from "../public/abusereport/abusereport.routes";
 import blogcategoryRoutes from "../admin/blogcategory/blogcategory.routes";
+import insuranceQueryRoutes from "../public/insurancequery/insurancequery.routes";
+import loanQueryRoutes from "../public/loanquery/loanquery.routes";
 
 const router = Router();
 
 router.use("/faq", faqRoutes);
 router.use("/blog", blogRoutes);
 router.use("/user", userRoutes);
-router.use("/role", roleRoutes);
+router.use("/role", roleRoutes);        
 router.use("/leads", leadRoutes);
 router.use("/admin", adminRoutes);
 router.use("/terms", termsRoutes);
@@ -41,5 +43,7 @@ router.use("/faqcategory", FaqCategoryRoutes);
 router.use("/testimonial", testimonialRoutes);
 router.use("/abusereport", abusereportRoutes);
 router.use("/blogcategory", blogcategoryRoutes);
+router.use("/insurancequery", insuranceQueryRoutes);
+router.use("/loanquery", loanQueryRoutes);
 
 export default router;

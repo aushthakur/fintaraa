@@ -1,0 +1,316 @@
+import ApiError from "../../utils/ApiError";
+import ApiResponse from "../../utils/ApiResponse";
+import { NextFunction, Request, Response } from "express";
+import { CommonService } from "../../services/common.services";
+import { InsuranceQuery } from "../../modals/insurancequery.model";
+import { ApplicationStatus, allowedFieldsByFormType } from "../../modals/insurancequery.model";
+
+  const insuranceQueryService = new CommonService(InsuranceQuery);
+
+// Helper function to extract URL from uploaded file object
+const extractFileUrl = (file: any): string | undefined => {
+  if (!file) return undefined;
+  if (typeof file === "string") return file;
+  if (Array.isArray(file) && file.length > 0) {
+    return file[0]?.url || file[0];
+  }
+  return file.url || file;
+};
+
+// Helper function to process uploaded files and map to request body
+const processFileUploads = (req: Request) => {
+  // Initialize policyDetails if it doesn't exist
+  if (!req.body.policyDetails) {
+    req.body.policyDetails = {};
+  }
+
+  // Process kycDocumentUrl (main field)
+  if (req.body.kycDocumentUrl) {
+    const url = extractFileUrl(req.body.kycDocumentUrl);
+    if (url) req.body.kycDocumentUrl = url;
+  }
+
+  // Get allowed fields for this insurance type (if typeOfInsurance is provided)
+  const typeOfInsurance = req.body.typeOfInsurance;
+  const allowedFields = typeOfInsurance ? allowedFieldsByFormType[typeOfInsurance] || [] : [];
+
+  // Process policyDetails document fields (uploaded files/images)
+  const documentFields = [
+    "healthReports",
+    "drivingLicenseUpload",
+    "rcBookUpload",
+    "medicalReports",
+    "medicalReportUpload",
+    "propertyDocuments",
+    "stockValuationReport",
+    "purchaseInvoice",
+    "maintenanceRecord",
+    "panKycProof",
+    "shopLicense",
+    "gstCertificate",
+  ];
+
+  documentFields.forEach((field) => {
+    // Only process if field is allowed for this insurance type (or if typeOfInsurance is not set yet)
+    if (req.body[field] && (!typeOfInsurance || allowedFields.includes(field))) {
+      if (field === "propertyDocuments" && Array.isArray(req.body[field])) {
+        // Handle array of property documents
+        req.body.policyDetails[field] = req.body[field]
+          .map((file: any) => extractFileUrl(file))
+          .filter((url: any) => url);
+      } else {
+        const url = extractFileUrl(req.body[field]);
+        if (url) {
+          req.body.policyDetails[field] = url;
+        }
+      }
+      // Remove from body after processing
+      delete req.body[field];
+    }
+  });
+};
+
+export class InsuranceQueryController {
+  static async createQuery(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      // Get customer ID from authenticated user token
+      const customerId = (req as any).user?._id;
+      if (!customerId) {
+        return res
+          .status(401)
+          .json(new ApiError(401, "User authentication required"));
+      }
+
+      // Process uploaded files and map URLs
+      processFileUploads(req);
+
+      // Automatically set customerId from token
+      req.body.customerId = customerId;
+
+      // Validate policyDetails against typeOfInsurance if both are provided (skip for draft)
+      // This must run AFTER processFileUploads since files are moved to policyDetails
+      const isDraft = req.body.status === ApplicationStatus.DRAFT;
+      if (!isDraft && req.body.typeOfInsurance && req.body.policyDetails && Object.keys(req.body.policyDetails).length > 0) {
+        const allowed = allowedFieldsByFormType[req.body.typeOfInsurance] || [];
+        const invalidFields = Object.keys(req.body.policyDetails).filter(
+          (field) => !allowed.includes(field)
+        );
+        if (invalidFields.length > 0) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                `Field(s) "${invalidFields.join(", ")}" is/are not allowed for ${req.body.typeOfInsurance}. Allowed fields: ${allowed.join(", ")}`
+              )
+            );
+        }
+      }
+
+      // Check if user already has an active insurance query with the same typeOfInsurance
+      // User can only have one typeOfInsurance until status is completed/approved/cancelled
+      if (req.body.typeOfInsurance) {
+        const existingQuery = await InsuranceQuery.findOne({
+          customerId: customerId,
+          typeOfInsurance: req.body.typeOfInsurance,
+          status: {
+            $nin: [
+              ApplicationStatus.COMPLETED,
+              ApplicationStatus.APPROVED,
+              ApplicationStatus.CANCELLED,
+            ],
+          },
+        });
+
+        if (existingQuery) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                `You already have an active ${req.body.typeOfInsurance} insurance query. Please complete, approve, or cancel the existing query before creating a new one.`
+              )
+            );
+        }
+      }
+
+      // If status is draft, skip all required field validations
+      let result;
+      if (isDraft) {
+        // For draft status, create without validation
+        const draftData = { ...req.body };
+        // Ensure status is set to draft
+        draftData.status = ApplicationStatus.DRAFT;
+        // Create document without running validators
+        result = new InsuranceQuery(draftData);
+        await result.save({ validateBeforeSave: false });
+      } else {
+        // For non-draft status, use normal validation
+        result = await insuranceQueryService.create(req.body);
+      }
+
+      if (!result)
+        return res
+          .status(400)
+          .json(new ApiError(400, "Failed to create insurance query"));
+      return res
+        .status(201)
+        .json(
+          new ApiResponse(201, result, "Insurance query created successfully")
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getAllQueries(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const customerId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      
+      // For non-admin users, only show their own queries
+      if (role !== "admin" && customerId) {
+        req.query.customerId = customerId;
+      }
+      
+      // Exclude draft status queries
+      req.query.status = { $ne: ApplicationStatus.DRAFT };
+      
+      const insuranceQueries = await insuranceQueryService.getAll(req.query);
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            insuranceQueries,
+            "Insurance queries fetched successfully"
+          )
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getQueryById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const customerId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      
+      const result = await insuranceQueryService.getById(
+        req.params.id,
+        role !== "admin"
+      );
+      
+      // console.log("customerId", customerId);
+      // console.log("result?.customerId?._id", result?.customerId?._id);
+      
+      // Ensure user can only view their own queries (unless admin)
+      if (role !== "admin" && result?.customerId?._id?.toString() !== customerId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only view your own insurance queries"));
+      }
+      
+      if(result?.status !== ApplicationStatus.DRAFT) {
+        return res
+          .status(404) 
+          .json(new ApiError(404, "Only draft queries can be fetched"));
+      }
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Insurance query fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async updateQueryById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const customerId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      
+      //only draft queries can be updated
+      const existingResult = await insuranceQueryService.getById(
+        req.params.id,
+        true,
+        
+      );
+      if(existingResult?.status !== ApplicationStatus.DRAFT) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Only draft queries can be updated"));
+      }
+
+      // Ensure user can only update their own queries (unless admin)
+      if (role !== "admin" && existingResult.customerId?._id?.toString() !== customerId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only update your own insurance queries"));
+      }
+
+      // Process uploaded files and map URLs
+      processFileUploads(req);
+
+      // Prevent changing customerId
+      delete req.body.customerId;
+
+      // Merge with existing policyDetails if updating
+      if (req.body.policyDetails && existingResult.policyDetails) {
+        req.body.policyDetails = {
+          ...existingResult.policyDetails,
+          ...req.body.policyDetails,
+        };
+      }
+
+      const updatedResult = await insuranceQueryService.updateById(req.params.id, req.body, {
+        populate: true,
+        new: true,
+        runValidators: true,
+      }); 
+      return res
+        .status(200)
+        .json(new ApiResponse(200, updatedResult, "Insurance query updated successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async deleteQueryById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const result = await insuranceQueryService.deleteById(req.params.id);
+      if (!result)
+        return res
+          .status(404)
+          .json(new ApiError(404, "Failed to delete insurance query"));
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(200, result, "Insurance query deleted successfully")
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+}
+
+
