@@ -173,12 +173,20 @@ export class InsuranceQueryController {
     next: NextFunction
   ) {
     try {
-      const customerId = (req as any).user?._id;
+      const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
       
-      // For non-admin users, only show their own queries
-      if (role !== "admin" && customerId) {
-        req.query.customerId = customerId;
+      // For agents, only show queries assigned to them
+      if (role === "agent" && userId) {
+        req.query.assignedAgent = userId;
+      }
+      // For landers, only show queries assigned to them
+      else if (role === "lander" && userId) {
+        req.query.assignedLander = userId;
+      }
+      // For non-admin, non-agent, non-lander users, only show their own queries
+      else if (role !== "admin" && userId) {
+        req.query.customerId = userId;
       }
       
       // Exclude draft status queries
@@ -306,6 +314,60 @@ export class InsuranceQueryController {
         .status(200)
         .json(
           new ApiResponse(200, result, "Insurance query deleted successfully")
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async assignLander(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { role } = (req as any).user || {};
+      const { landerId } = req.body;
+
+      // Only admin can assign landers
+      if (role !== "admin") {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Only admin can assign landers"));
+      }
+
+      if (!landerId) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Lander ID is required"));
+      }
+
+      // Check if query exists
+      const existingResult = await insuranceQueryService.getById(
+        req.params.id,
+        true,
+      );
+      if (!existingResult) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Insurance query not found"));
+      }
+
+      // Update assignedLander
+      const updatedResult = await insuranceQueryService.updateById(
+        req.params.id,
+        { assignedLander: landerId },
+        {
+          populate: [{ path: "assignedLander", select: "name email mobile" }],
+          new: true,
+          runValidators: true,
+        }
+      );
+
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(200, updatedResult, "Lander assigned successfully")
         );
     } catch (err) {
       next(err);

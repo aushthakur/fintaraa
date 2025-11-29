@@ -50,7 +50,7 @@ const router = express.Router();
 
 // AGENT ROUTES
 router.post(
-  "/create-agent",
+  "/agents",
   authenticateToken,
   dynamicUpload([{ name: "profilePictureUrl", maxCount: 1 }]),
   s3UploaderMiddleware("profile"),

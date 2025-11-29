@@ -174,6 +174,8 @@ export interface IInsuranceQuery extends Document {
   typeOfInsurance: InsuranceType;
   status: ApplicationStatus;
   policyDetails?: Record<string, any>;
+  assignedAgent?: Types.ObjectId;
+  assignedLander?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -233,6 +235,16 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
     policyDetails: {
       type: Object,
       default: {},
+    },
+    assignedAgent: {
+      type: Schema.Types.ObjectId,
+      ref: "Agent",
+      index: true,
+    },
+    assignedLander: {
+      type: Schema.Types.ObjectId,
+      ref: "Lander",
+      index: true,
     },
   },
   { timestamps: true }

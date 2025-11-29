@@ -196,6 +196,9 @@ export interface ILoanQuery extends Document {
   // Mixed documents field for document uploads
   documents?: Record<string, any>;
   
+  assignedAgent?: Types.ObjectId;
+  assignedLander?: Types.ObjectId;
+  
   createdAt: Date;
   updatedAt: Date;
 }
@@ -303,6 +306,16 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
           return `Document type(s) "${invalidDocs.join(", ")}" is/are not allowed. Allowed document types: ${allowedDocumentTypes.join(", ")}`;
         },
       },
+    },
+    assignedAgent: {
+      type: Schema.Types.ObjectId,
+      ref: "Agent",
+      index: true,
+    },
+    assignedLander: {
+      type: Schema.Types.ObjectId,
+      ref: "Lander",
+      index: true,
     },
   },
   { timestamps: true }

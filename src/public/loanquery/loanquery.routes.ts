@@ -84,6 +84,7 @@ router.put(
   asyncHandler(LoanQueryController.updateQueryById)
 );
 router.delete("/:id", asyncHandler(LoanQueryController.deleteQueryById));
+router.patch("/:id/assign-lander", asyncHandler(LoanQueryController.assignLander));
 
 export default router;
 

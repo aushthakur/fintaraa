@@ -193,6 +193,16 @@ export const getPipeline = (
 
     if (isEmpty(value)) continue;
 
+    // If value is already a MongoDB query object (e.g., { $ne: ... }, { $in: ... }), use it directly
+    if (typeof value === "object" && !Array.isArray(value) && value !== null && !(value instanceof Date) && !(value instanceof ObjectId)) {
+      // Check if it's a MongoDB operator object (has keys starting with $)
+      const isMongoOperator = Object.keys(value).some(k => k.startsWith("$"));
+      if (isMongoOperator) {
+        setNestedMatch(match, key, "eq", value);
+        continue;
+      }
+    }
+
     const {
       field,
       operator,

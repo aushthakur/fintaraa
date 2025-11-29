@@ -56,6 +56,7 @@ router.put(
   asyncHandler(InsuranceQueryController.updateQueryById)
 );
 router.delete("/:id", asyncHandler(InsuranceQueryController.deleteQueryById));
+router.patch("/:id/assign-lander", asyncHandler(InsuranceQueryController.assignLander));
 
 export default router;
 

@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { AdminController } from "./admin.controller";
 import { asyncHandler } from "../../utils/asyncHandler";
-import { authenticateToken } from "../../middlewares/authMiddleware";
+import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
+import {
+  dynamicUpload,
+  s3UploaderMiddleware,
+} from "../../middlewares/s3FileUploadMiddleware";
 
 const userRouter = Router();
 
@@ -14,6 +18,52 @@ userRouter.get(
   authenticateToken,
   asyncHandler(AdminController.getCurrentAdmin)
 );
+
+// ==================== LANDER ROUTES ====================
+// Public route - Lander login (must be before /:id route)
+userRouter.post("/lander/login", asyncHandler(AdminController.loginLander));
+
+// Lander CRUD routes (must be before /:id route)
+userRouter
+  .route("/lander")
+  .post(
+    authenticateToken,
+    authorize("admin"),
+    dynamicUpload([{ name: "profilePictureUrl", maxCount: 1 }]),
+    s3UploaderMiddleware("profile"),
+    asyncHandler(AdminController.createLander)
+  )
+  .get(
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(AdminController.getAllLanders)
+  );
+
+userRouter
+  .route("/lander/:id")
+  .get(
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(AdminController.getLanderById)
+  )
+  .put(
+    authenticateToken,
+    authorize("admin"),
+    dynamicUpload([{ name: "profilePictureUrl", maxCount: 1 }]),
+    s3UploaderMiddleware("profile"),
+    asyncHandler(AdminController.updateLanderById)
+  )
+  .delete(
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(AdminController.deleteLanderById)
+  );
+
+// ==================== AGENT ROUTES ====================
+// Public route - Agent login (must be before /:id route)
+userRouter.post("/agent/login", asyncHandler(AdminController.loginAgent));
+
+// Admin routes (parameterized routes must come last)
 userRouter
   .route("/:id")
   .get(asyncHandler(AdminController.getAdminById)) // GET /:id
