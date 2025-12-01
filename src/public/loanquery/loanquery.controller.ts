@@ -2,8 +2,11 @@ import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
 import { NextFunction, Request, Response } from "express";
 import { CommonService } from "../../services/common.services";
-import { LoanQuery, allowedFieldsByFormType } from "../../modals/loanquery.model";
+import { LoanQuery, allowedFieldsByFormType, LoanQueryActivityType } from "../../modals/loanquery.model";
 import { ApplicationStatus } from "../../modals/insurancequery.model";
+import LanderAssignmentEngine from "../../services/landerAssignment.service";
+import { Types } from "mongoose";
+import Lander from "../../modals/lander.model";
 
   const loanQueryService = new CommonService(LoanQuery);
 
@@ -174,12 +177,52 @@ export class LoanQueryController {
         const draftData = { ...req.body };
         // Ensure status is set to draft
         draftData.status = ApplicationStatus.DRAFT;
+        // Initialize activities array
+        draftData.activities = [];
         // Create document without running validators
         result = new LoanQuery(draftData);
         await result.save({ validateBeforeSave: false });
+        
+        // Add created activity
+        result.activities = result.activities || [];
+        result.activities.push({
+          type: LoanQueryActivityType.CREATED,
+          description: "Loan query created as draft",
+          actor: customerId ? new Types.ObjectId(String(customerId)) : undefined,
+          actorModel: "User",
+          createdAt: new Date(),
+        });
+        await result.save({ validateBeforeSave: false });
       } else {
         // For non-draft status, use normal validation
-        result = await loanQueryService.create(req.body);
+        const createData = { ...req.body, activities: [] };
+        result = await loanQueryService.create(createData);
+        
+        // Add created activity
+        result.activities = result.activities || [];
+        result.activities.push({
+          type: LoanQueryActivityType.CREATED,
+          description: "Loan query created",
+          actor: customerId ? new Types.ObjectId(String(customerId)) : undefined,
+          actorModel: "User",
+          createdAt: new Date(),
+        });
+        
+        // Auto-assign lander if not already assigned
+        if (result && !result.assignedLander) {
+          const session = (req as any).mongoSession;
+          result = await LanderAssignmentEngine.ensureAssignment(
+            result,
+            {
+              actorId: customerId?.toString(),
+              reason: "new_loan_query",
+              session,
+            }
+          );
+          await result.save({ session });
+        } else {
+          await result.save();
+        }
       }
 
       if (!result)
@@ -221,7 +264,73 @@ export class LoanQueryController {
       // Exclude draft status queries
       req.query.status = { $ne: ApplicationStatus.DRAFT };
       
-      const loanQueries = await loanQueryService.getAll(req.query);
+      // Add lookup stages to populate assignedAgent and assignedLander
+      const populateStages = [
+        {
+          $lookup: {
+            from: "agents",
+            localField: "assignedAgent",
+            foreignField: "_id",
+            as: "assignedAgentData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$assignedAgentData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "landers",
+            localField: "assignedLander",
+            foreignField: "_id",
+            as: "assignedLanderData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$assignedLanderData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $addFields: {
+            assignedAgent: {
+              $cond: {
+                if: { $ifNull: ["$assignedAgentData", false] },
+                then: {
+                  _id: "$assignedAgentData._id",
+                  name: "$assignedAgentData.name",
+                  email: "$assignedAgentData.email",
+                  mobile: "$assignedAgentData.mobile",
+                },
+                else: "$assignedAgent",
+              },
+            },
+            assignedLander: {
+              $cond: {
+                if: { $ifNull: ["$assignedLanderData", false] },
+                then: {
+                  _id: "$assignedLanderData._id",
+                  name: "$assignedLanderData.name",
+                  email: "$assignedLanderData.email",
+                  mobile: "$assignedLanderData.mobile",
+                },
+                else: "$assignedLander",
+              },
+            },
+          },
+        },
+        {
+          $project: {
+            assignedAgentData: 0,
+            assignedLanderData: 0,
+          },
+        },
+      ];
+      
+      const loanQueries = await loanQueryService.getAll(req.query, populateStages);
       return res
         .status(200)
         .json(
@@ -323,7 +432,57 @@ export class LoanQueryController {
         populate: true,
         new: true,
         runValidators: true,
-      }); 
+      });
+      
+      // Track status change
+      if (updatedResult && existingResult?.status !== updatedResult.status) {
+        updatedResult.activities = updatedResult.activities || [];
+        updatedResult.activities.push({
+          type: LoanQueryActivityType.STATUS_CHANGED,
+          description: `Status changed from ${existingResult?.status} to ${updatedResult.status}`,
+          actor: customerId ? new Types.ObjectId(String(customerId)) : undefined,
+          actorModel: role === "admin" ? "Admin" : "User",
+          payload: {
+            previousStatus: existingResult?.status,
+            newStatus: updatedResult.status,
+          },
+          createdAt: new Date(),
+        });
+      } else {
+        // Track update if status didn't change
+        updatedResult.activities = updatedResult.activities || [];
+        updatedResult.activities.push({
+          type: LoanQueryActivityType.UPDATED,
+          description: "Loan query updated",
+          actor: customerId ? new Types.ObjectId(String(customerId)) : undefined,
+          actorModel: role === "admin" ? "Admin" : "User",
+          createdAt: new Date(),
+        });
+      }
+      
+      // Auto-assign lander if status changed from draft to non-draft and no lander assigned
+      if (
+        updatedResult &&
+        existingResult?.status === ApplicationStatus.DRAFT &&
+        updatedResult.status !== ApplicationStatus.DRAFT &&
+        !updatedResult.assignedLander
+      ) {
+        const session = (req as any).mongoSession;
+        const result = await LanderAssignmentEngine.ensureAssignment(
+          updatedResult,
+          {
+            actorId: customerId?.toString(),
+            reason: "draft_submitted",
+            session,
+          }
+        );
+        await result.save({ session });
+        return res
+          .status(200)
+          .json(new ApiResponse(200, result, "Loan query updated successfully"));
+      }
+      
+      await updatedResult.save();
       return res
         .status(200)
         .json(new ApiResponse(200, updatedResult, "Loan query updated successfully"));
@@ -386,15 +545,55 @@ export class LoanQueryController {
           .json(new ApiError(404, "Loan query not found"));
       }
 
-      // Update assignedLander
+      // Get lander information for activity
+      const lander = await Lander.findById(landerId).select("name email");
+      if (!lander) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Lander not found"));
+      }
+
+      const actorId = (req as any).user?._id;
+      const previousLanderId = existingResult.assignedLander;
+
+      // Update assignedLander and add activity
       const updatedResult = await loanQueryService.updateById(
         req.params.id,
-        { assignedLander: landerId },
+        { 
+          assignedLander: landerId,
+          $push: {
+            activities: {
+              type: LoanQueryActivityType.LANDER_ASSIGNED,
+              description: `Lander assigned: ${lander.name}${previousLanderId ? " (reassigned)" : ""}`,
+              actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+              actorModel: "Admin",
+              payload: {
+                landerId: landerId,
+                landerName: lander.name,
+                previousLanderId: previousLanderId ? String(previousLanderId) : undefined,
+                mode: "manual",
+              },
+              createdAt: new Date(),
+            },
+          },
+        },
         {
           populate: [{ path: "assignedLander", select: "name email mobile" }],
           new: true,
           runValidators: true,
         }
+      );
+
+      // Adjust lander load if needed
+      if (previousLanderId && previousLanderId.toString() !== landerId.toString()) {
+        await LanderAssignmentEngine.adjustLanderLoad(
+          previousLanderId,
+          -1
+        );
+      }
+      await LanderAssignmentEngine.adjustLanderLoad(
+        new Types.ObjectId(landerId),
+        1
       );
 
       return res

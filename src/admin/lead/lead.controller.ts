@@ -1,6 +1,7 @@
 import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
 import { Request, Response, NextFunction } from "express";
+import { Types } from "mongoose";
 import Lead, {
   LeadStatus,
   LeadConnectorType,
@@ -8,6 +9,7 @@ import Lead, {
 } from "../../modals/lead.model";
 import { CommonService } from "../../services/common.services";
 import { leadManagementService } from "../../services/leadManagement.service";
+import Agent from "../../modals/agent.model";
 
 const leadService = new CommonService(Lead);
 
@@ -72,7 +74,36 @@ export class LeadController {
 
   static async getLeads(req: Request, res: Response, next: NextFunction) {
     try {
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+
+      // Build match stage for role-based filtering
+      let matchStage: any = {};
+      
+      // For non-admin users (agents, landers, etc.), only show leads assigned to them
+      // Admin role is typically "admin", all other roles should be filtered
+      if (role !== "admin" && userId) {
+        const userObjectId = new Types.ObjectId(String(userId));
+        // Match leads where assignment.current exists and agent matches
+        matchStage = {
+          "assignment.current": { $exists: true, $ne: null },
+          "assignment.current.agent": userObjectId,
+        };
+        
+        // Debug logging
+        console.log("🔍 Filtering leads for user:", {
+          userId: String(userId),
+          role,
+          userObjectId: userObjectId.toString(),
+          filter: JSON.stringify(matchStage),
+        });
+      } else {
+        console.log("👑 Admin access - showing all leads");
+      }
+
       const pipeline = [
+        // Add match stage at the beginning if filtering is needed
+        ...(Object.keys(matchStage).length > 0 ? [{ $match: matchStage }] : []),
         {
           $lookup: {
             from: "agents",
@@ -144,6 +175,16 @@ export class LeadController {
   static async getLead(req: Request, res: Response, next: NextFunction) {
     try {
       const lead = await leadService.getById(req.params.id, true);
+      
+      // Manually populate the current agent if exists
+      if (lead.assignment?.current?.agent) {
+        const agent = await Agent.findById(lead.assignment.current.agent)
+          .select("name email mobile availability activeLeads leadCapacity profilePictureUrl");
+        if (agent) {
+          lead.assignment.current.agent = agent as any;
+        }
+      }
+
       res
         .status(200)
         .json(new ApiResponse(200, lead, "Lead fetched successfully"));
@@ -196,24 +237,48 @@ export class LeadController {
     try {
       const actorId = (req as any).user?._id;
       const session = (req as any).mongoSession;
-      const { status, followUpId, outcome } = req.body;
+      
+      // Check both body and query parameters, and also check for alternative property names
+      const status = 
+        req.body?.status || 
+        req.query?.status || 
+        req.body?.Status;
+      
+      const followUpId = 
+        (req.body?.followUpId && String(req.body.followUpId).trim()) || 
+        (req.query?.followUpId && String(req.query.followUpId).trim()) ||
+        (req.body?.followupId && String(req.body.followupId).trim()) ||
+        (req.body?.follow_up_id && String(req.body.follow_up_id).trim()) ||
+        (req.body?.id && String(req.body.id).trim()) ||
+        (req.query?.id && String(req.query.id).trim());
+
+      const outcome = req.body?.outcome || req.query?.outcome;
 
       if (!followUpId || !status) {
-        throw new ApiError(400, "followUpId and status are required");
+        // Log the actual request for debugging
+        console.log("Request body:", JSON.stringify(req.body, null, 2));
+        console.log("Request query:", JSON.stringify(req.query, null, 2));
+        console.log("Request params:", JSON.stringify(req.params, null, 2));
+        console.log("Content-Type:", req.headers["content-type"]);
+        
+        throw new ApiError(
+          400,
+          `followUpId and status are required. Received - followUpId: ${followUpId ? "present" : "missing"}, status: ${status ? "present" : "missing"}. Body keys: ${Object.keys(req.body || {}).join(", ") || "empty"}. Full body: ${JSON.stringify(req.body)}`
+        );
       }
 
-      const value = status.toLowerCase() as LeadFollowUpStatus;
+      const value = String(status).toLowerCase() as LeadFollowUpStatus;
       if (!Object.values(LeadFollowUpStatus).includes(value)) {
-        throw new ApiError(400, "Invalid follow up status");
+        throw new ApiError(400, `Invalid follow up status: ${value}. Valid values: ${Object.values(LeadFollowUpStatus).join(", ")}`);
       }
 
       const lead = await leadManagementService.updateFollowUpStatus(
         req.params.id,
-        followUpId,
+        String(followUpId),
         value,
         actorId,
         session,
-        outcome
+        outcome ? String(outcome) : undefined
       );
 
       res.status(200).json(new ApiResponse(200, lead, "Follow-up updated"));

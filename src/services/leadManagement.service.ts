@@ -451,7 +451,7 @@ export class LeadManagementService {
     return lead;
   }
 
-  async updateStatus(
+async updateStatus(
     leadId: string,
     status: LeadStatus,
     actorId: string,

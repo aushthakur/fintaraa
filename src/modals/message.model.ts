@@ -15,6 +15,9 @@ export interface IMessage extends Document {
   receiver: Types.ObjectId;
   status: "sent" | "delivered" | "read";
   readAt?: Date | null;
+  leadId?: Types.ObjectId; // Optional: for lead-based chat
+  senderModel?: "User" | "Admin" | "Agent" | "Lander"; // Model type of sender
+  receiverModel?: "User" | "Admin" | "Agent" | "Lander"; // Model type of receiver
 }
 
 const messageSchema = new Schema<IMessage>(
@@ -56,9 +59,23 @@ const messageSchema = new Schema<IMessage>(
       type: Date,
       default: null,
     },
+    leadId: {
+      type: Schema.Types.ObjectId,
+      ref: "Lead",
+      index: true,
+    },
+    senderModel: {
+      type: String,
+      enum: ["User", "Admin", "Agent", "Lander"],
+    },
+    receiverModel: {
+      type: String,
+      enum: ["User", "Admin", "Agent", "Lander"],
+    },
   },
   { timestamps: true }
 );
 
 messageSchema.index({ sender: 1, receiver: 1, createdAt: -1 });
+messageSchema.index({ leadId: 1, createdAt: -1 });
 export const Message = mongoose.model<IMessage>("Message", messageSchema);

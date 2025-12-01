@@ -21,6 +21,7 @@ import abusereportRoutes from "../public/abusereport/abusereport.routes";
 import blogcategoryRoutes from "../admin/blogcategory/blogcategory.routes";
 import insuranceQueryRoutes from "../public/insurancequery/insurancequery.routes";
 import loanQueryRoutes from "../public/loanquery/loanquery.routes";
+import adminAgentChatRoutes from "../admin/chat/adminAgentChat.routes";
 
 const router = Router();
 
@@ -45,5 +46,6 @@ router.use("/abusereport", abusereportRoutes);
 router.use("/blogcategory", blogcategoryRoutes);
 router.use("/insurancequery", insuranceQueryRoutes);
 router.use("/loanquery", loanQueryRoutes);
+router.use("/chat", adminAgentChatRoutes);
 
 export default router;

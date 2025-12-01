@@ -14,6 +14,25 @@ export enum InsuranceType {
   SHOP = "shop",
 }
 
+export enum InsuranceQueryActivityType {
+  CREATED = "created",
+  UPDATED = "updated",
+  STATUS_CHANGED = "status_changed",
+  LANDER_ASSIGNED = "lander_assigned",
+  AGENT_ASSIGNED = "agent_assigned",
+  DOCUMENT_UPLOADED = "document_uploaded",
+  NOTE_ADDED = "note_added",
+}
+
+export interface IInsuranceQueryActivity {
+  type: InsuranceQueryActivityType;
+  description?: string;
+  actor?: Types.ObjectId;
+  actorModel?: "Admin" | "Agent" | "Lander" | "User";
+  payload?: Record<string, any>;
+  createdAt: Date;
+}
+
 export enum ApplicationStatus {
   DRAFT = "draft",
   PENDING = "pending",
@@ -163,6 +182,7 @@ export interface IInsuranceQuery extends Document {
   email: string;
   isEmailVerified: boolean;
   fullAddress: string;
+  pincode: string;
   city: string;
   state: string;
   nomineeName: string;
@@ -176,6 +196,7 @@ export interface IInsuranceQuery extends Document {
   policyDetails?: Record<string, any>;
   assignedAgent?: Types.ObjectId;
   assignedLander?: Types.ObjectId;
+  activities: IInsuranceQueryActivity[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -207,6 +228,7 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
     },
     isEmailVerified: { type: Boolean, default: false },
     fullAddress: { type: String, required: true, trim: true },
+    pincode: { type: String, required: true, trim: true },
     city: { type: String, required: true, trim: true },
     state: { type: String, required: true, trim: true },
     nomineeName: { type: String, required: true, trim: true },
@@ -245,6 +267,26 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
       type: Schema.Types.ObjectId,
       ref: "Lander",
       index: true,
+    },
+    activities: {
+      type: [
+        {
+          type: {
+            type: String,
+            enum: Object.values(InsuranceQueryActivityType),
+            required: true,
+          },
+          description: { type: String },
+          actor: { type: Schema.Types.ObjectId },
+          actorModel: {
+            type: String,
+            enum: ["Admin", "Agent", "Lander", "User"],
+          },
+          payload: { type: Schema.Types.Mixed },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
     },
   },
   { timestamps: true }

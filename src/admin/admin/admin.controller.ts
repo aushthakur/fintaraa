@@ -198,12 +198,100 @@ export class AdminController {
       next(error); // Pass errors to the error handling middleware
     }
   }
+
+  /**
+   * Get the current lander details based on the provided JWT token
+   * @param {Request} req - The request object
+   * @param {Response} res - The response object
+   * @param {NextFunction} next - The next middleware function
+   */
+  static async getCurrentLander(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const userId = (req as any).user._id; // Extracted from the decoded JWT token
+      const lander = await AdminController.findLanderById(userId);
+
+      if (!lander) {
+        res.status(404).json({ message: "Lander not found" });
+        return; // Returning to prevent further execution
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "Lander details fetched successfully",
+        user: {
+          _id: lander._id,
+          role: lander.role,
+          email: lander.email,
+          name: lander.name,
+          mobile: lander.mobile,
+        },
+      });
+    } catch (error) {
+      next(error); // Pass errors to the error handling middleware
+    }
+  }
+
+  /**
+   * Get the current agent details based on the provided JWT token
+   * @param {Request} req - The request object
+   * @param {Response} res - The response object
+   * @param {NextFunction} next - The next middleware function
+   */
+  static async getCurrentAgent(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const userId = (req as any).user._id; // Extracted from the decoded JWT token
+      const agent = await AdminController.findAgentById(userId);
+
+      if (!agent) {
+        res.status(404).json({ message: "Agent not found" });
+        return; // Returning to prevent further execution
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "Agent details fetched successfully",
+        user: {
+          _id: agent._id,
+          role: agent.role,
+          email: agent.email,
+          name: agent.name,
+          mobile: agent.mobile,
+        },
+      });
+    } catch (error) {
+      next(error); // Pass errors to the error handling middleware
+    }
+  }
   /**
    * Get user details by user ID
    */
   static async getUserById(userId: string) {
     const user = await Admin.findById({ _id: userId, status: true }).populate("role");
     return user;
+  }
+
+  /**
+   * Get lander details by lander ID (helper method)
+   */
+  static async findLanderById(userId: string) {
+    const lander = await Lander.findById(userId).populate("role");
+    return lander;
+  }
+
+  /**
+   * Get agent details by agent ID (helper method)
+   */
+  static async findAgentById(userId: string) {
+    const agent = await Agent.findById(userId).populate("role");
+    return agent;
   }
 
   /**
@@ -293,6 +381,7 @@ export class AdminController {
       next(error);
     }
   }
+
 
   /**
    * Login a lander user (helper method)
@@ -436,12 +525,13 @@ export class AdminController {
             mobile: 1,
             location: 1,
             availability: 1,
-            activeAssignments: 1,
-            completedAssignments: 1,
             profilePictureUrl: 1,
             serviceablePincodes: 1,
             createdAt: 1,
             updatedAt: 1,
+            leadCapacity: 1,
+            activeLeads: 1,
+            completedLeads: 1,
             role: "$roleData.name",
           },
         },

@@ -10,10 +10,12 @@ export interface ILander extends Document {
   role: Schema.Types.ObjectId;
   location?: string;
   availability: boolean;
-  activeAssignments: number;
-  completedAssignments: number;
+  leadCapacity?: number;
+  activeLeads: number;
+  completedLeads: number;
   profilePictureUrl?: string;
   serviceablePincodes?: string[];
+  lastLeadAssignedAt?: Date;
   createdAt?: Date;
   updatedAt?: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
@@ -57,12 +59,17 @@ const LanderSchema: Schema<ILander> = new Schema(
       type: Boolean,
       default: true,
     },
-    activeAssignments: {
+    leadCapacity: {
+      type: Number,
+      default: 50,
+      min: 5,
+    },
+    activeLeads: {
       type: Number,
       default: 0,
       min: 0,
     },
-    completedAssignments: {
+    completedLeads: {
       type: Number,
       default: 0,
       min: 0,
@@ -76,6 +83,9 @@ const LanderSchema: Schema<ILander> = new Schema(
         trim: true,
       },
     ],
+    lastLeadAssignedAt: {
+      type: Date,
+    },
     refreshToken: {
       type: String,
     },

@@ -14,7 +14,7 @@ userRouter.post("/", asyncHandler(AdminController.createAdmin));
 userRouter.post("/login", asyncHandler(AdminController.loginAdmin));
 userRouter.route("/").get(asyncHandler(AdminController.getAllAdmins));
 userRouter.get(
-  "/current/user",
+  "/current/admin",
   authenticateToken,
   asyncHandler(AdminController.getCurrentAdmin)
 );
@@ -23,6 +23,11 @@ userRouter.get(
 // Public route - Lander login (must be before /:id route)
 userRouter.post("/lander/login", asyncHandler(AdminController.loginLander));
 
+userRouter.get(
+  "/current/lander",
+  authenticateToken,
+  asyncHandler(AdminController.getCurrentLander)
+);
 // Lander CRUD routes (must be before /:id route)
 userRouter
   .route("/lander")
@@ -62,6 +67,12 @@ userRouter
 // ==================== AGENT ROUTES ====================
 // Public route - Agent login (must be before /:id route)
 userRouter.post("/agent/login", asyncHandler(AdminController.loginAgent));
+
+userRouter.get(
+  "/current/agent",
+  authenticateToken,
+  asyncHandler(AdminController.getCurrentAgent)
+);
 
 // Admin routes (parameterized routes must come last)
 userRouter

@@ -1,5 +1,6 @@
 import express, { Request, Response, NextFunction } from "express";
 import { LeadController } from "./lead.controller";
+import { LeadChatController } from "./leadChat.controller";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
 import { config } from "../../config/config";
@@ -31,7 +32,7 @@ router.post(
   asyncHandler(LeadController.ingestFromConnector)
 );
 
-router.use(authenticateToken, authorize("admin"));
+router.use(authenticateToken);
 
 router
   .route("/")
@@ -51,5 +52,10 @@ router.post("/:id/status", asyncHandler(LeadController.updateStatus));
 router.post("/:id/reassign", asyncHandler(LeadController.reassign));
 router.post("/:id/escalate", asyncHandler(LeadController.escalate));
 router.post("/:id/convert", asyncHandler(LeadController.convert));
+
+// Chat routes
+router.get("/:id/chat/messages", asyncHandler(LeadChatController.getLeadMessages));
+router.post("/:id/chat/messages", asyncHandler(LeadChatController.sendMessage));
+router.post("/:id/chat/mark-read", asyncHandler(LeadChatController.markAsRead));
 
 export default router;

@@ -36,6 +36,25 @@ export enum LoanType {
   BUSINESS_LOAN = "business_loan",
 }
 
+export enum LoanQueryActivityType {
+  CREATED = "created",
+  UPDATED = "updated",
+  STATUS_CHANGED = "status_changed",
+  LANDER_ASSIGNED = "lander_assigned",
+  AGENT_ASSIGNED = "agent_assigned",
+  DOCUMENT_UPLOADED = "document_uploaded",
+  NOTE_ADDED = "note_added",
+}
+
+export interface ILoanQueryActivity {
+  type: LoanQueryActivityType;
+  description?: string;
+  actor?: Types.ObjectId;
+  actorModel?: "Admin" | "Agent" | "Lander" | "User";
+  payload?: Record<string, any>;
+  createdAt: Date;
+}
+
 // Allowed fields mapping based on loan type
 export const allowedFieldsByFormType: Record<string, string[]> = {
   [LoanType.PERSONAL_LOAN]: [
@@ -198,6 +217,7 @@ export interface ILoanQuery extends Document {
   
   assignedAgent?: Types.ObjectId;
   assignedLander?: Types.ObjectId;
+  activities: ILoanQueryActivity[];
   
   createdAt: Date;
   updatedAt: Date;
@@ -316,6 +336,26 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
       type: Schema.Types.ObjectId,
       ref: "Lander",
       index: true,
+    },
+    activities: {
+      type: [
+        {
+          type: {
+            type: String,
+            enum: Object.values(LoanQueryActivityType),
+            required: true,
+          },
+          description: { type: String },
+          actor: { type: Schema.Types.ObjectId },
+          actorModel: {
+            type: String,
+            enum: ["Admin", "Agent", "Lander", "User"],
+          },
+          payload: { type: Schema.Types.Mixed },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
     },
   },
   { timestamps: true }

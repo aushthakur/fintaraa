@@ -238,7 +238,7 @@ const LeadFollowUpSchema = new Schema<ILeadFollowUp>(
     outcome: { type: String },
     completedAt: { type: Date },
   },
-  { _id: false, timestamps: true }
+  { _id: true, timestamps: true }
 );
 
 const LeadActivitySchema = new Schema<ILeadActivity>(
