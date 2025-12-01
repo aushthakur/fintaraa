@@ -547,6 +547,12 @@ async updateStatus(
 
     const borrower = await this.ensureBorrowerProfile(lead, { session });
     lead.status = LeadStatus.CONVERTED;
+    
+    // Clear escalation when converting (escalation is no longer relevant for converted leads)
+    if (lead.escalation) {
+      lead.escalation = undefined;
+    }
+    
     lead.activities.push({
       type: LeadActivityType.CONVERTED,
       description: `Borrower profile linked (${borrower._id})`,
