@@ -22,6 +22,7 @@ import blogcategoryRoutes from "../admin/blogcategory/blogcategory.routes";
 import insuranceQueryRoutes from "../public/insurancequery/insurancequery.routes";
 import loanQueryRoutes from "../public/loanquery/loanquery.routes";
 import adminAgentChatRoutes from "../admin/chat/adminAgentChat.routes";
+import landerRoutes from "../lander/lander.routes";
 
 const router = Router();
 
@@ -47,5 +48,6 @@ router.use("/blogcategory", blogcategoryRoutes);
 router.use("/insurancequery", insuranceQueryRoutes);
 router.use("/loanquery", loanQueryRoutes);
 router.use("/chat", adminAgentChatRoutes);
+router.use("/lander", landerRoutes);
 
 export default router;

@@ -10,7 +10,7 @@ export type PayoutStatus =
   | "failed";
 
 export interface IPayoutRequest extends Document {
-  agent: Schema.Types.ObjectId;
+  lander: Schema.Types.ObjectId;
   amount: number;
   method: PayoutMethod;
   upiId?: string;
@@ -34,7 +34,7 @@ export interface IPayoutRequest extends Document {
 
 const PayoutRequestSchema = new Schema<IPayoutRequest>(
   {
-    agent: { type: Schema.Types.ObjectId, ref: "Agent", required: true },
+    lander: { type: Schema.Types.ObjectId, ref: "Lander", required: true },
     amount: { type: Number, required: true },
     method: {
       type: String,
@@ -64,7 +64,7 @@ const PayoutRequestSchema = new Schema<IPayoutRequest>(
   { timestamps: true }
 );
 
-PayoutRequestSchema.index({ agent: 1, status: 1 });
+PayoutRequestSchema.index({ lander: 1, status: 1 });
 
 const PayoutRequest = mongoose.model<IPayoutRequest>(
   "PayoutRequest",

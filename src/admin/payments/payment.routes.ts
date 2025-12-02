@@ -18,8 +18,8 @@ router.post(
 );
 
 router.get(
-  "/agents/:agentId/wallet",
-  asyncHandler(PaymentController.getAgentWallet)
+  "/landers/:landerId/wallet",
+  asyncHandler(PaymentController.getLanderWallet)
 );
 router.get("/transactions", asyncHandler(PaymentController.listTransactions));
 

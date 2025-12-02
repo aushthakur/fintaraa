@@ -24,6 +24,8 @@ export interface IMessage extends Document {
   status: "sent" | "delivered" | "read";
   readAt?: Date | null;
   leadId?: Types.ObjectId; // Optional: for lead-based chat
+  loanQueryId?: Types.ObjectId; // Optional: for loan query chat
+  insuranceQueryId?: Types.ObjectId; // Optional: for insurance query chat
   senderModel?: "User" | "Admin" | "Agent" | "Lander"; // Model type of sender
   receiverModel?: "User" | "Admin" | "Agent" | "Lander"; // Model type of receiver
   attachments?: IMessageAttachment[]; // Media/file attachments
@@ -86,6 +88,16 @@ const messageSchema = new Schema<IMessage>(
       ref: "Lead",
       index: true,
     },
+    loanQueryId: {
+      type: Schema.Types.ObjectId,
+      ref: "LoanQuery",
+      index: true,
+    },
+    insuranceQueryId: {
+      type: Schema.Types.ObjectId,
+      ref: "InsuranceQuery",
+      index: true,
+    },
     senderModel: {
       type: String,
       enum: ["User", "Admin", "Agent", "Lander"],
@@ -116,4 +128,6 @@ const messageSchema = new Schema<IMessage>(
 
 messageSchema.index({ sender: 1, receiver: 1, createdAt: -1 });
 messageSchema.index({ leadId: 1, createdAt: -1 });
+messageSchema.index({ loanQueryId: 1, createdAt: -1 });
+messageSchema.index({ insuranceQueryId: 1, createdAt: -1 });
 export const Message = mongoose.model<IMessage>("Message", messageSchema);

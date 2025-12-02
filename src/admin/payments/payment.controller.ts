@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import ApiResponse from "../../utils/ApiResponse";
 import ApiError from "../../utils/ApiError";
 import CommissionRule from "../../modals/commissionRule.model";
-import AgentWallet from "../../modals/agentWallet.model";
+import LanderWallet from "../../modals/landerWallet.model";
 import WalletTransaction from "../../modals/walletTransaction.model";
 import PayoutRequest from "../../modals/payoutRequest.model";
 import BankSubscription from "../../modals/bankSubscription.model";
@@ -59,14 +59,14 @@ export class PaymentController {
     }
   }
 
-  static async getAgentWallet(
+  static async getLanderWallet(
     req: Request,
     res: Response,
     next: NextFunction
   ) {
     try {
-      const wallet = await AgentWallet.findOne({ agent: req.params.agentId });
-      const transactions = await WalletTransaction.find({ agent: req.params.agentId })
+      const wallet = await LanderWallet.findOne({ lander: req.params.landerId });
+      const transactions = await WalletTransaction.find({ lander: req.params.landerId })
         .sort({ createdAt: -1 })
         .limit(Number(req.query.limit) || 50);
 
@@ -85,7 +85,7 @@ export class PaymentController {
   ) {
     try {
       const query: Record<string, any> = {};
-      if (req.query.agentId) query.agent = req.query.agentId;
+      if (req.query.landerId) query.lander = req.query.landerId;
       if (req.query.category) query.category = req.query.category;
       const transactions = await WalletTransaction.find(query)
         .sort({ createdAt: -1 })
@@ -110,7 +110,7 @@ export class PaymentController {
     try {
       const session = (req as any).mongoSession;
       const payout = await payoutService.requestPayout({
-        agentId: req.body.agentId,
+        landerId: req.body.landerId,
         amount: req.body.amount,
         method: req.body.method,
         upiId: req.body.upiId,

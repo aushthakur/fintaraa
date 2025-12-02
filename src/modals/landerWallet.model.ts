@@ -1,7 +1,7 @@
 import mongoose, { Document, Schema } from "mongoose";
 
-export interface IAgentWallet extends Document {
-  agent: Schema.Types.ObjectId;
+export interface ILanderWallet extends Document {
+  lander: Schema.Types.ObjectId;
   balance: number;
   pendingPayout: number;
   lockedBalance: number;
@@ -11,9 +11,9 @@ export interface IAgentWallet extends Document {
   updatedAt: Date;
 }
 
-const AgentWalletSchema = new Schema<IAgentWallet>(
+const LanderWalletSchema = new Schema<ILanderWallet>(
   {
-    agent: { type: Schema.Types.ObjectId, ref: "Agent", unique: true },
+    lander: { type: Schema.Types.ObjectId, ref: "Lander", unique: true },
     balance: { type: Number, default: 0 },
     pendingPayout: { type: Number, default: 0 },
     lockedBalance: { type: Number, default: 0 },
@@ -23,9 +23,10 @@ const AgentWalletSchema = new Schema<IAgentWallet>(
   { timestamps: true }
 );
 
-const AgentWallet = mongoose.model<IAgentWallet>(
-  "AgentWallet",
-  AgentWalletSchema
+const LanderWallet = mongoose.model<ILanderWallet>(
+  "LanderWallet",
+  LanderWalletSchema
 );
 
-export default AgentWallet;
+export default LanderWallet;
+

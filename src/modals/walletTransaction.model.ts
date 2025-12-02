@@ -9,7 +9,7 @@ export type WalletTransactionCategory =
   | "refund";
 
 export interface IWalletTransaction extends Document {
-  agent: Schema.Types.ObjectId;
+  lander: Schema.Types.ObjectId;
   amount: number;
   runningBalance: number;
   type: WalletTransactionType;
@@ -24,7 +24,7 @@ export interface IWalletTransaction extends Document {
 
 const WalletTransactionSchema = new Schema<IWalletTransaction>(
   {
-    agent: { type: Schema.Types.ObjectId, ref: "Agent", index: true },
+    lander: { type: Schema.Types.ObjectId, ref: "Lander", index: true },
     amount: { type: Number, required: true },
     runningBalance: { type: Number, required: true },
     type: { type: String, enum: ["credit", "debit"], required: true },
@@ -45,7 +45,7 @@ const WalletTransactionSchema = new Schema<IWalletTransaction>(
   { timestamps: true }
 );
 
-WalletTransactionSchema.index({ agent: 1, createdAt: -1 });
+WalletTransactionSchema.index({ lander: 1, createdAt: -1 });
 
 const WalletTransaction = mongoose.model<IWalletTransaction>(
   "WalletTransaction",

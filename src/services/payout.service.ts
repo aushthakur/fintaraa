@@ -1,7 +1,7 @@
 import { ClientSession } from "mongoose";
 import ApiError from "../utils/ApiError";
-import AgentWallet from "../modals/agentWallet.model";
-import Agent from "../modals/agent.model";
+import LanderWallet from "../modals/landerWallet.model";
+import Lander from "../modals/lander.model";
 import PayoutRequest, {
   IPayoutRequest,
   PayoutMethod,
@@ -11,7 +11,7 @@ import { WalletService } from "./wallet.service";
 import { RazorpayService } from "../config/razorpay";
 
 interface PayoutRequestInput {
-  agentId: string;
+  landerId: string;
   amount: number;
   method: PayoutMethod;
   upiId?: string;
@@ -21,7 +21,7 @@ interface PayoutRequestInput {
 
 export class PayoutService {
   async requestPayout({
-    agentId,
+    landerId,
     amount,
     method,
     upiId,
@@ -35,7 +35,7 @@ export class PayoutService {
     if (method === "bank_transfer" && !bankDetails?.accountNumber) {
       throw new ApiError(400, "Bank details required for bank transfer payouts");
     }
-    const wallet = await WalletService.getOrCreateWallet(agentId, session);
+    const wallet = await WalletService.getOrCreateWallet(landerId, session);
 
     if (wallet.balance - wallet.lockedBalance < amount) {
       throw new ApiError(400, "Insufficient balance for payout");
@@ -48,7 +48,7 @@ export class PayoutService {
     const request = await PayoutRequest.create(
       [
         {
-          agent: agentId,
+          lander: landerId,
           amount,
           method,
           upiId,
@@ -90,7 +90,7 @@ export class PayoutService {
       payout.status = "processing";
       await payout.save({ session });
 
-      const agent = await Agent.findById(payout.agent).lean();
+      const lander = await Lander.findById(payout.lander).lean();
 
       const payoutReference = (payout._id as any).toString();
 
@@ -99,16 +99,16 @@ export class PayoutService {
         : {
             type: "bank_account" as const,
             accountNumber: payout.bankDetails?.accountNumber!,
-            accountHolder: payout.bankDetails?.accountHolder || "Agent",
+            accountHolder: payout.bankDetails?.accountHolder || "Lander",
             ifsc: payout.bankDetails?.ifsc!,
           };
 
       const payoutResult = await RazorpayService.initiateAgentPayout({
         amount: payout.amount,
         contact: {
-          name: agent?.name || payout.agent.toString(),
-          email: agent?.email,
-          contact: agent?.mobile,
+          name: lander?.name || payout.lander.toString(),
+          email: lander?.email,
+          contact: lander?.mobile,
         },
         destination,
         referenceId: payoutReference,
@@ -122,7 +122,7 @@ export class PayoutService {
       payout.processedAt = new Date();
       await payout.save({ session });
 
-      const wallet = await AgentWallet.findOne({ agent: payout.agent });
+      const wallet = await LanderWallet.findOne({ lander: payout.lander });
       if (wallet) {
         wallet.pendingPayout = Math.max(0, wallet.pendingPayout - payout.amount);
         wallet.lockedBalance = Math.max(0, wallet.lockedBalance - payout.amount);
@@ -130,7 +130,7 @@ export class PayoutService {
       }
 
       await WalletService.debit({
-        agentId: payout.agent as any,
+        landerId: payout.lander as any,
         amount: payout.amount,
         referenceId: payoutReference,
         description: "Commission payout",
@@ -146,7 +146,7 @@ export class PayoutService {
       payout.failureReason = error.message;
       await payout.save({ session });
 
-      const wallet = await AgentWallet.findOne({ agent: payout.agent });
+      const wallet = await LanderWallet.findOne({ lander: payout.lander });
       if (wallet) {
         wallet.pendingPayout = Math.max(0, wallet.pendingPayout - payout.amount);
         wallet.lockedBalance = Math.max(0, wallet.lockedBalance - payout.amount);

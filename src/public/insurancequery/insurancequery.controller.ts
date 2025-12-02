@@ -6,6 +6,7 @@ import { InsuranceQuery } from "../../modals/insurancequery.model";
 import { ApplicationStatus, allowedFieldsByFormType, InsuranceQueryActivityType } from "../../modals/insurancequery.model";
 import LanderAssignmentEngine from "../../services/landerAssignment.service";
 import { Types } from "mongoose";
+import Lander from "../../modals/lander.model";
 
   const insuranceQueryService = new CommonService(InsuranceQuery);
 
@@ -527,6 +528,347 @@ export class InsuranceQueryController {
         .json(
           new ApiResponse(200, updatedResult, "Lander assigned successfully")
         );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ====== DETAIL VIEW AND OPERATIONS FOR ADMIN PANEL ======
+
+  static async getQueryDetail(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      
+      const query = await InsuranceQuery.findById(req.params.id)
+        .populate("customerId", "name email mobile profilePictureUrl")
+        .populate("assignedAgent", "name email mobile profilePictureUrl")
+        .populate("assignedLander", "name email mobile profilePictureUrl")
+        .lean();
+
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Insurance query not found"));
+      }
+
+      // Check permissions - landers should use their own routes at /lander/*
+      if (role === "lander" && query.assignedLander?._id?.toString() !== userId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only view queries assigned to you"));
+      }
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Insurance query details fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async addNote(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const actorId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      const { note } = req.body;
+
+      if (!note) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Note is required"));
+      }
+
+      const query = await InsuranceQuery.findById(req.params.id);
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Insurance query not found"));
+      }
+
+      // Check permissions for lander
+      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only add notes to queries assigned to you"));
+      }
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: InsuranceQueryActivityType.NOTE_ADDED,
+        description: note,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: role === "admin" ? "Admin" : "Lander",
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Note added successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async updateStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const actorId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      const { status, remarks } = req.body;
+
+      if (!status) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Status is required"));
+      }
+
+      const query = await InsuranceQuery.findById(req.params.id);
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Insurance query not found"));
+      }
+
+      // Check permissions for lander
+      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only update status of queries assigned to you"));
+      }
+
+      const oldStatus = query.status;
+      query.status = status;
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: InsuranceQueryActivityType.STATUS_CHANGED,
+        description: `Status changed from ${oldStatus} to ${status}${remarks ? `: ${remarks}` : ""}`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: role === "admin" ? "Admin" : "Lander",
+        payload: {
+          oldStatus,
+          newStatus: status,
+          remarks,
+        },
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Status updated successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async updateDocuments(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const actorId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+
+      const query = await InsuranceQuery.findById(req.params.id);
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Insurance query not found"));
+      }
+
+      // Check permissions for lander
+      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only update documents of queries assigned to you"));
+      }
+
+      // Initialize policy details if not exists
+      if (!query.policyDetails) {
+        query.policyDetails = {};
+      }
+
+      // Handle file uploads from multer/S3 middleware
+      const documentTypes = [
+        "healthReports", "drivingLicenseUpload", "rcBookUpload", "medicalReports",
+        "propertyDocuments", "stockValuationReport", "purchaseInvoice",
+        "maintenanceRecord", "panKycProof", "shopLicense", "gstCertificate"
+      ];
+
+      const uploadedDocs: string[] = [];
+      documentTypes.forEach((docType) => {
+        if (req.body[docType]) {
+          const urlData = req.body[docType];
+          // Extract URL from multer/S3 response format
+          const url = Array.isArray(urlData) ? urlData[0]?.url : urlData?.url || urlData;
+          if (url && query.policyDetails) {
+            query.policyDetails[docType] = url;
+            uploadedDocs.push(docType);
+          }
+        }
+      });
+
+      // Also support direct URL input
+      if (req.body.documentUrl && req.body.documentType && query.policyDetails) {
+        query.policyDetails[req.body.documentType] = req.body.documentUrl;
+        uploadedDocs.push(req.body.documentType);
+      }
+
+      if (uploadedDocs.length === 0) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "No documents provided"));
+      }
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: InsuranceQueryActivityType.DOCUMENT_UPLOADED,
+        description: `Documents uploaded: ${uploadedDocs.join(", ")}`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: role === "admin" ? "Admin" : "Lander",
+        payload: { uploadedDocuments: uploadedDocs },
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Documents updated successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async updatePolicyDetails(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const actorId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      const { policyDetails } = req.body;
+
+      if (!policyDetails || typeof policyDetails !== "object") {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Policy details object is required"));
+      }
+
+      const query = await InsuranceQuery.findById(req.params.id);
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Insurance query not found"));
+      }
+
+      // Check permissions for lander
+      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only update policy details of queries assigned to you"));
+      }
+
+      // Merge policy details
+      query.policyDetails = { ...query.policyDetails, ...policyDetails };
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: InsuranceQueryActivityType.UPDATED,
+        description: `Policy details updated`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: role === "admin" ? "Admin" : "Lander",
+        payload: { updatedFields: Object.keys(policyDetails) },
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Policy details updated successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async reassignLander(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { role } = (req as any).user || {};
+      const { landerId, reason } = req.body;
+
+      // Only admin can reassign
+      if (role !== "admin") {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Only admin can reassign landers"));
+      }
+
+      if (!landerId) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Lander ID is required"));
+      }
+
+      const query = await InsuranceQuery.findById(req.params.id);
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Insurance query not found"));
+      }
+
+      const actorId = (req as any).user?._id;
+      const previousLanderId = query.assignedLander;
+
+      query.assignedLander = new Types.ObjectId(landerId);
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: InsuranceQueryActivityType.LANDER_ASSIGNED,
+        description: `Lander reassigned${reason ? `: ${reason}` : ""}`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: "Admin",
+        payload: {
+          landerId,
+          previousLanderId: previousLanderId ? String(previousLanderId) : undefined,
+          reason,
+        },
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      // Adjust lander loads
+      if (previousLanderId && previousLanderId.toString() !== landerId.toString()) {
+        await LanderAssignmentEngine.adjustLanderLoad(previousLanderId, -1);
+      }
+      await LanderAssignmentEngine.adjustLanderLoad(new Types.ObjectId(landerId), 1);
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Lander reassigned successfully"));
     } catch (err) {
       next(err);
     }

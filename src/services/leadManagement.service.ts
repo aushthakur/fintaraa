@@ -130,9 +130,24 @@ class LeadAssignmentEngine {
     session?: ClientSession
   ) {
     if (!agentId || !delta) return;
-    const update: Record<string, any> = { $inc: { activeLeads: delta } };
-    if (delta > 0) update.$set = { lastLeadAssignedAt: new Date() };
-    await Agent.updateOne({ _id: agentId }, update, { session });
+    
+    // If decrementing, ensure activeLeads doesn't go below 0
+    if (delta < 0) {
+      const agent = await Agent.findById(agentId).session(session || null);
+      if (!agent) return;
+      
+      const newCount = Math.max(0, (agent.activeLeads || 0) + delta);
+      await Agent.updateOne(
+        { _id: agentId },
+        { $set: { activeLeads: newCount } },
+        { session }
+      );
+    } else {
+      // For incrementing, use $inc and update lastLeadAssignedAt
+      const update: Record<string, any> = { $inc: { activeLeads: delta } };
+      update.$set = { lastLeadAssignedAt: new Date() };
+      await Agent.updateOne({ _id: agentId }, update, { session });
+    }
   }
 
   private static async applyAssignment(

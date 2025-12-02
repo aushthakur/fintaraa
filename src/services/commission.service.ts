@@ -65,7 +65,7 @@ export class CommissionService {
 
   async recordCommission(
     payload: {
-      agentId: string;
+      landerId: string;
       loanAmount: number;
       loanId: string;
       productType?: LoanProductType;
@@ -92,7 +92,7 @@ export class CommissionService {
     const commissionAmount = this.computeFromRule(rule, payload.loanAmount);
 
     const { wallet, transaction } = await WalletService.credit({
-      agentId: payload.agentId,
+      landerId: payload.landerId,
       amount: commissionAmount,
       referenceId: payload.loanId,
       type: "credit",

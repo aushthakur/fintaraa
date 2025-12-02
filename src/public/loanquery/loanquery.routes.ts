@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { LoanQueryController } from "./loanquery.controller";
+import { LoanQueryChatController } from "./loanQueryChat.controller";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticateToken } from "../../middlewares/authMiddleware";
 import {
@@ -85,6 +86,42 @@ router.put(
 );
 router.delete("/:id", asyncHandler(LoanQueryController.deleteQueryById));
 router.patch("/:id/assign-lander", asyncHandler(LoanQueryController.assignLander));
+
+// ====== DETAIL VIEW AND OPERATIONS FOR ADMIN/LANDER ======
+router.get("/:id/detail", asyncHandler(LoanQueryController.getQueryDetail));
+router.post("/:id/notes", asyncHandler(LoanQueryController.addNote));
+router.post("/:id/status", asyncHandler(LoanQueryController.updateStatus));
+router.patch(
+  "/:id/documents",
+  dynamicUpload([
+    { name: "pan_card", maxCount: 1 },
+    { name: "aadhaar_card", maxCount: 1 },
+    { name: "photo", maxCount: 1 },
+    { name: "itr_form_16", maxCount: 1 },
+    { name: "salary_slip", maxCount: 1 },
+    { name: "offer_letter", maxCount: 1 },
+    { name: "relieving_letter", maxCount: 1 },
+    { name: "bank_statement", maxCount: 1 },
+    { name: "gst_certificate", maxCount: 1 },
+    { name: "gst_returns", maxCount: 1 },
+    { name: "shop_act", maxCount: 1 },
+    { name: "govt_license", maxCount: 1 },
+  ]),
+  s3UploaderMiddleware("loan-query-documents"),
+  asyncHandler(LoanQueryController.updateDocuments)
+);
+router.patch("/:id/policy-details", asyncHandler(LoanQueryController.updatePolicyDetails));
+router.post("/:id/reassign", asyncHandler(LoanQueryController.reassignLander));
+
+// ====== CHAT ROUTES ======
+router.get("/:id/chat/messages", asyncHandler(LoanQueryChatController.getMessages));
+router.post(
+  "/:id/chat/messages",
+  dynamicUpload([{ name: "media", maxCount: 5 }]),
+  s3UploaderMiddleware("loan-query-chat"),
+  asyncHandler(LoanQueryChatController.sendMessage)
+);
+router.post("/:id/chat/mark-read", asyncHandler(LoanQueryChatController.markAsRead));
 
 export default router;
 

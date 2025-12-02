@@ -1,13 +1,13 @@
 import ApiError from "../utils/ApiError";
 import { ClientSession, Types } from "mongoose";
-import AgentWallet from "../modals/agentWallet.model";
+import LanderWallet from "../modals/landerWallet.model";
 import WalletTransaction, {
   WalletTransactionType,
   WalletTransactionCategory,
 } from "../modals/walletTransaction.model";
 
 interface WalletTxInput {
-  agentId: string | Types.ObjectId;
+  landerId: string | Types.ObjectId;
   amount: number;
   type: WalletTransactionType;
   category?: WalletTransactionCategory;
@@ -20,12 +20,12 @@ interface WalletTxInput {
 
 export class WalletService {
   static async getOrCreateWallet(
-    agentId: string | Types.ObjectId,
+    landerId: string | Types.ObjectId,
     session?: ClientSession
   ) {
-    const wallet = await AgentWallet.findOneAndUpdate(
-      { agent: agentId },
-      { $setOnInsert: { agent: agentId } },
+    const wallet = await LanderWallet.findOneAndUpdate(
+      { lander: landerId },
+      { $setOnInsert: { lander: landerId } },
       { upsert: true, new: true, session }
     );
     return wallet;
@@ -35,7 +35,7 @@ export class WalletService {
     if (input.amount <= 0) {
       throw new ApiError(400, "Credit amount must be positive");
     }
-    const wallet = await this.getOrCreateWallet(input.agentId, input.session);
+    const wallet = await this.getOrCreateWallet(input.landerId, input.session);
     wallet.balance += input.amount;
     wallet.lifetimeEarnings += input.amount;
     wallet.lastTransactionAt = new Date();
@@ -44,7 +44,7 @@ export class WalletService {
     const transaction = await WalletTransaction.create(
       [
         {
-          agent: wallet.agent,
+          lander: wallet.lander,
           amount: input.amount,
           runningBalance: wallet.balance,
           type: input.type || "credit",
@@ -65,7 +65,7 @@ export class WalletService {
     if (input.amount <= 0) {
       throw new ApiError(400, "Debit amount must be positive");
     }
-    const wallet = await this.getOrCreateWallet(input.agentId, input.session);
+    const wallet = await this.getOrCreateWallet(input.landerId, input.session);
 
     if (wallet.balance < input.amount && input.enforce !== false) {
       throw new ApiError(400, "Insufficient wallet balance");
@@ -78,7 +78,7 @@ export class WalletService {
     const transaction = await WalletTransaction.create(
       [
         {
-          agent: wallet.agent,
+          lander: wallet.lander,
           amount: input.amount,
           runningBalance: wallet.balance,
           type: input.type || "debit",

@@ -605,5 +605,352 @@ export class LoanQueryController {
       next(err);
     }
   }
+
+  // ====== DETAIL VIEW AND OPERATIONS FOR ADMIN PANEL ======
+
+  static async getQueryDetail(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      
+      const query = await LoanQuery.findById(req.params.id)
+        .populate("customerId", "name email mobile profilePictureUrl")
+        .populate("assignedAgent", "name email mobile profilePictureUrl")
+        .populate("assignedLander", "name email mobile profilePictureUrl")
+        .lean();
+
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Loan query not found"));
+      }
+
+      // Check permissions - landers should use their own routes at /lander/*
+      if (role === "lander" && query.assignedLander?._id?.toString() !== userId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only view queries assigned to you"));
+      }
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Loan query details fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async addNote(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const actorId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      const { note } = req.body;
+
+      if (!note) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Note is required"));
+      }
+
+      const query = await LoanQuery.findById(req.params.id);
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Loan query not found"));
+      }
+
+      // Check permissions for lander
+      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only add notes to queries assigned to you"));
+      }
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: LoanQueryActivityType.NOTE_ADDED,
+        description: note,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: role === "admin" ? "Admin" : "Lander",
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Note added successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async updateStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const actorId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      const { status, remarks } = req.body;
+
+      if (!status) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Status is required"));
+      }
+
+      const query = await LoanQuery.findById(req.params.id);
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Loan query not found"));
+      }
+
+      // Check permissions for lander
+      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only update status of queries assigned to you"));
+      }
+
+      const oldStatus = query.status;
+      query.status = status;
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: LoanQueryActivityType.STATUS_CHANGED,
+        description: `Status changed from ${oldStatus} to ${status}${remarks ? `: ${remarks}` : ""}`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: role === "admin" ? "Admin" : "Lander",
+        payload: {
+          oldStatus,
+          newStatus: status,
+          remarks,
+        },
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Status updated successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async updateDocuments(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const actorId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+
+      const query = await LoanQuery.findById(req.params.id);
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Loan query not found"));
+      }
+
+      // Check permissions for lander
+      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only update documents of queries assigned to you"));
+      }
+
+      // Handle file uploads from multer/S3 middleware
+      let documentsToAdd: Record<string, string> = {};
+      
+      // Files uploaded via multer middleware will be in req.body with URLs
+      const documentTypes = [
+        "pan_card", "aadhaar_card", "photo", "itr_form_16", "salary_slip",
+        "offer_letter", "relieving_letter", "bank_statement", "gst_certificate",
+        "gst_returns", "shop_act", "govt_license"
+      ];
+
+      documentTypes.forEach((docType) => {
+        if (req.body[docType]) {
+          const urlData = req.body[docType];
+          // Extract URL from multer/S3 response format
+          const url = Array.isArray(urlData) ? urlData[0]?.url : urlData?.url || urlData;
+          if (url) {
+            documentsToAdd[docType] = url;
+          }
+        }
+      });
+
+      // Also support direct URL input via documents object
+      if (req.body.documents && typeof req.body.documents === "object") {
+        documentsToAdd = { ...documentsToAdd, ...req.body.documents };
+      }
+
+      if (Object.keys(documentsToAdd).length === 0) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "No documents provided"));
+      }
+
+      // Merge documents
+      query.documents = { ...query.documents, ...documentsToAdd };
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: LoanQueryActivityType.DOCUMENT_UPLOADED,
+        description: `Documents uploaded: ${Object.keys(documentsToAdd).join(", ")}`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: role === "admin" ? "Admin" : "Lander",
+        payload: { uploadedDocuments: Object.keys(documentsToAdd) },
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Documents updated successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async updatePolicyDetails(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const actorId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      const { policyDetails } = req.body;
+
+      if (!policyDetails || typeof policyDetails !== "object") {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Policy details object is required"));
+      }
+
+      const query = await LoanQuery.findById(req.params.id);
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Loan query not found"));
+      }
+
+      // Check permissions for lander
+      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only update policy details of queries assigned to you"));
+      }
+
+      // Merge policy details
+      query.policyDetails = { ...query.policyDetails, ...policyDetails };
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: LoanQueryActivityType.UPDATED,
+        description: `Policy details updated`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: role === "admin" ? "Admin" : "Lander",
+        payload: { updatedFields: Object.keys(policyDetails) },
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Policy details updated successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async reassignLander(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { role } = (req as any).user || {};
+      const { landerId, reason } = req.body;
+
+      // Only admin can reassign
+      if (role !== "admin") {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Only admin can reassign landers"));
+      }
+
+      if (!landerId) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Lander ID is required"));
+      }
+
+      const query = await LoanQuery.findById(req.params.id);
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Loan query not found"));
+      }
+
+      const lander = await Lander.findById(landerId).select("name email");
+      if (!lander) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Lander not found"));
+      }
+
+      const actorId = (req as any).user?._id;
+      const previousLanderId = query.assignedLander;
+
+      query.assignedLander = new Types.ObjectId(landerId);
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: LoanQueryActivityType.LANDER_ASSIGNED,
+        description: `Lander reassigned to ${lander.name}${reason ? `: ${reason}` : ""}`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: "Admin",
+        payload: {
+          landerId,
+          landerName: lander.name,
+          previousLanderId: previousLanderId ? String(previousLanderId) : undefined,
+          reason,
+        },
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      // Adjust lander loads
+      if (previousLanderId && previousLanderId.toString() !== landerId.toString()) {
+        await LanderAssignmentEngine.adjustLanderLoad(previousLanderId, -1);
+      }
+      await LanderAssignmentEngine.adjustLanderLoad(new Types.ObjectId(landerId), 1);
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Lander reassigned successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
