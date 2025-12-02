@@ -7,6 +7,14 @@ function sanitizeMessageText(text: string): string {
   return text.trim();
 }
 
+export interface IMessageAttachment {
+  url: string;
+  type: "image" | "video" | "audio" | "document" | "other";
+  name: string;
+  size: number;
+  mimetype: string;
+}
+
 export interface IMessage extends Document {
   text: string;
   createdAt: Date;
@@ -18,6 +26,7 @@ export interface IMessage extends Document {
   leadId?: Types.ObjectId; // Optional: for lead-based chat
   senderModel?: "User" | "Admin" | "Agent" | "Lander"; // Model type of sender
   receiverModel?: "User" | "Admin" | "Agent" | "Lander"; // Model type of receiver
+  attachments?: IMessageAttachment[]; // Media/file attachments
 }
 
 const messageSchema = new Schema<IMessage>(
@@ -34,21 +43,34 @@ const messageSchema = new Schema<IMessage>(
     },
     text: {
       type: String,
-      required: true,
-      minlength: [1, "Message cannot be empty"],
-      maxlength: [500, "Message too long (max 500 chars)"],
+      default: "",
       validate: {
-        validator: function (value: string) {
-          const forbiddenPatterns = [
-            /https?:\/\/\S+/i, // links
-            /\S+@\S+\.\S+/i, // emails
-            /\b\d{7,15}\b/, // phone numbers
-          ];
-          return !forbiddenPatterns.some((pattern) => pattern.test(value));
+        validator: function (this: IMessage, value: string) {
+          // If no text and no attachments, fail validation
+          if ((!value || value.trim().length === 0) && (!this.attachments || this.attachments.length === 0)) {
+            return false;
+          }
+          // If text exists, check length and patterns
+          if (value && value.trim().length > 0) {
+            if (value.length > 500) return false;
+            const forbiddenPatterns = [
+              /https?:\/\/\S+/i, // links
+            ];
+            return !forbiddenPatterns.some((pattern) => pattern.test(value));
+          }
+          return true;
         },
-        message: "Links, emails, and phone numbers are not allowed",
+        message: function(this: IMessage) {
+          if ((!this.text || this.text.trim().length === 0) && (!this.attachments || this.attachments.length === 0)) {
+            return "Message must contain either text or attachments";
+          }
+          if (this.text && this.text.length > 500) {
+            return "Message too long (max 500 chars)";
+          }
+          return "Links are not allowed";
+        },
       },
-      set: (value: string) => sanitizeMessageText(value),
+      set: (value: string) => value ? sanitizeMessageText(value) : "",
     },
     status: {
       type: String,
@@ -71,6 +93,22 @@ const messageSchema = new Schema<IMessage>(
     receiverModel: {
       type: String,
       enum: ["User", "Admin", "Agent", "Lander"],
+    },
+    attachments: {
+      type: [
+        {
+          url: { type: String, required: true },
+          type: {
+            type: String,
+            enum: ["image", "video", "audio", "document", "other"],
+            required: true,
+          },
+          name: { type: String, required: true },
+          size: { type: Number, required: true },
+          mimetype: { type: String, required: true },
+        },
+      ],
+      default: [],
     },
   },
   { timestamps: true }

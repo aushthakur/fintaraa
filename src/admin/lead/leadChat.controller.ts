@@ -134,6 +134,7 @@ export class LeadChatController {
             updatedAt: msg.updatedAt,
             senderModel: msg.senderModel,
             receiverModel: msg.receiverModel,
+            attachments: msg.attachments || [],
           };
         })
       );
@@ -158,12 +159,13 @@ export class LeadChatController {
   ) {
     try {
       const leadId = req.params.id;
-      const { text, receiverId } = req.body;
+      const { text, receiverId, media } = req.body;
       const senderId = (req as any).user?._id;
       const { role } = (req as any).user || {};
 
-      if (!text || !text.trim()) {
-        throw new ApiError(400, "Message text is required");
+      // Either text or media must be provided
+      if ((!text || !text.trim()) && (!media || media.length === 0)) {
+        throw new ApiError(400, "Message text or media is required");
       }
 
       // Verify lead exists
@@ -228,15 +230,44 @@ export class LeadChatController {
       // For simplicity, assume receiver is a User (lead owner)
       // You can enhance this by checking the receiver's actual role
 
+      // Helper function to determine media type from mimetype
+      const getMediaType = (mimetype: string): "image" | "video" | "audio" | "document" | "other" => {
+        if (mimetype.startsWith("image/")) return "image";
+        if (mimetype.startsWith("video/")) return "video";
+        if (mimetype.startsWith("audio/")) return "audio";
+        if (
+          mimetype.includes("pdf") ||
+          mimetype.includes("document") ||
+          mimetype.includes("text") ||
+          mimetype.includes("msword") ||
+          mimetype.includes("wordprocessingml") ||
+          mimetype.includes("spreadsheet") ||
+          mimetype.includes("presentation")
+        ) return "document";
+        return "other";
+      };
+
+      // Process media attachments if present
+      const attachments = media && Array.isArray(media) 
+        ? media.map((file: any) => ({
+            url: file.url,
+            type: getMediaType(file.mimetype),
+            name: file.name || file.originalname,
+            size: file.size,
+            mimetype: file.mimetype,
+          }))
+        : [];
+
       // Create message
       const message = await Message.create({
-        text: text.trim(),
+        text: text ? text.trim() : "",
         sender: senderId,
         receiver: finalReceiverId,
         leadId: leadId,
         status: "sent",
         senderModel,
         receiverModel,
+        attachments,
       });
 
       // Manually fetch sender and receiver data based on model type
@@ -313,6 +344,7 @@ export class LeadChatController {
         senderModel: message.senderModel,
         receiverModel: message.receiverModel,
         leadId: message.leadId ? (message.leadId as Types.ObjectId).toString() : undefined,
+        attachments: message.attachments || [],
       };
 
       // Emit socket event if socket.io is available

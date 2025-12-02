@@ -3,6 +3,7 @@ import { LeadController } from "./lead.controller";
 import { LeadChatController } from "./leadChat.controller";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
+import { dynamicUpload, s3UploaderMiddleware } from "../../middlewares/s3FileUploadMiddleware";
 import { config } from "../../config/config";
 import ApiError from "../../utils/ApiError";
 
@@ -55,7 +56,12 @@ router.post("/:id/convert", asyncHandler(LeadController.convert));
 
 // Chat routes
 router.get("/:id/chat/messages", asyncHandler(LeadChatController.getLeadMessages));
-router.post("/:id/chat/messages", asyncHandler(LeadChatController.sendMessage));
+router.post(
+  "/:id/chat/messages",
+  dynamicUpload([{ name: "media", maxCount: 5 }]),
+  s3UploaderMiddleware("chat-media"),
+  asyncHandler(LeadChatController.sendMessage)
+);
 router.post("/:id/chat/mark-read", asyncHandler(LeadChatController.markAsRead));
 
 export default router;

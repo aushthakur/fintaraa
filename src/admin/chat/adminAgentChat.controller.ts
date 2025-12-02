@@ -383,6 +383,7 @@ export class AdminAgentChatController {
             updatedAt: msg.updatedAt,
             senderModel: msg.senderModel,
             receiverModel: msg.receiverModel,
+            attachments: msg.attachments || [],
             isOwn: msg.sender.toString() === currentUserId.toString(),
           };
         })
@@ -417,14 +418,15 @@ export class AdminAgentChatController {
     try {
       const currentUserId = (req as any).user?._id;
       const { role } = (req as any).user || {};
-      const { text, receiverId } = req.body;
+      const { text, receiverId, media } = req.body;
 
       if (!role || (role !== "admin" && role !== "agent" && role !== "lander")) {
         throw new ApiError(403, "Access denied");
       }
 
-      if (!text || !text.trim()) {
-        throw new ApiError(400, "Message text is required");
+      // Either text or media must be provided
+      if ((!text || !text.trim()) && (!media || media.length === 0)) {
+        throw new ApiError(400, "Message text or media is required");
       }
 
       if (!receiverId) {
@@ -464,14 +466,43 @@ export class AdminAgentChatController {
 
       const senderModel = role === "admin" ? "Admin" : role === "lander" ? "Lander" : "Agent";
 
+      // Helper function to determine media type from mimetype
+      const getMediaType = (mimetype: string): "image" | "video" | "audio" | "document" | "other" => {
+        if (mimetype.startsWith("image/")) return "image";
+        if (mimetype.startsWith("video/")) return "video";
+        if (mimetype.startsWith("audio/")) return "audio";
+        if (
+          mimetype.includes("pdf") ||
+          mimetype.includes("document") ||
+          mimetype.includes("text") ||
+          mimetype.includes("msword") ||
+          mimetype.includes("wordprocessingml") ||
+          mimetype.includes("spreadsheet") ||
+          mimetype.includes("presentation")
+        ) return "document";
+        return "other";
+      };
+
+      // Process media attachments if present
+      const attachments = media && Array.isArray(media) 
+        ? media.map((file: any) => ({
+            url: file.url,
+            type: getMediaType(file.mimetype),
+            name: file.name || file.originalname,
+            size: file.size,
+            mimetype: file.mimetype,
+          }))
+        : [];
+
       // Create message
       const message = await Message.create({
-        text: text.trim(),
+        text: text ? text.trim() : "",
         sender: currentUserId,
         receiver: receiverId,
         status: "sent",
         senderModel,
         receiverModel,
+        attachments,
       });
 
       // Manually fetch sender and receiver data
@@ -555,6 +586,7 @@ export class AdminAgentChatController {
         updatedAt: message.updatedAt,
         senderModel: message.senderModel,
         receiverModel: message.receiverModel,
+        attachments: message.attachments || [],
         isOwn: true,
       };
 

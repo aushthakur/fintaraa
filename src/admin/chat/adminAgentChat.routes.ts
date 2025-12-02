@@ -2,6 +2,7 @@ import { Router } from "express";
 import { AdminAgentChatController } from "./adminAgentChat.controller";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticateToken } from "../../middlewares/authMiddleware";
+import { dynamicUpload, s3UploaderMiddleware } from "../../middlewares/s3FileUploadMiddleware";
 
 const router = Router();
 
@@ -15,7 +16,12 @@ router.get("/conversations", asyncHandler(AdminAgentChatController.getConversati
 router.get("/messages/:receiverId", asyncHandler(AdminAgentChatController.getMessages));
 
 // Send a message
-router.post("/messages", asyncHandler(AdminAgentChatController.sendMessage));
+router.post(
+  "/messages",
+  dynamicUpload([{ name: "media", maxCount: 5 }]),
+  s3UploaderMiddleware("chat-media"),
+  asyncHandler(AdminAgentChatController.sendMessage)
+);
 
 // Mark messages as read
 router.post("/messages/:receiverId/read", asyncHandler(AdminAgentChatController.markAsRead));
