@@ -261,8 +261,11 @@ export class LoanQueryController {
         req.query.customerId = userId;
       }
       
-      // Exclude draft status queries
-      req.query.status = { $ne: ApplicationStatus.DRAFT };
+      // Handle status filtering
+      // If status is explicitly provided, use it; otherwise exclude draft queries
+      if (!req.query.status) {
+        req.query.status = { $ne: ApplicationStatus.DRAFT };
+      }
       
       // Add lookup stages to populate assignedAgent and assignedLander
       const populateStages = [
@@ -948,6 +951,88 @@ export class LoanQueryController {
       return res
         .status(200)
         .json(new ApiResponse(200, query, "Lander reassigned successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async completeQuery(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { role } = (req as any).user || {};
+      const actorId = (req as any).user?._id;
+      const { remarks } = req.body;
+
+      // Only admin or assigned lander can complete a query
+      const query = await LoanQuery.findById(req.params.id);
+      if (!query) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Loan query not found"));
+      }
+
+      // Check permissions for lander
+      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only complete queries assigned to you"));
+      }
+
+      // Check if query is in a valid state to be completed
+      if (query.status === "completed") {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Query is already completed"));
+      }
+
+      if (query.status === "cancelled") {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Cannot complete a cancelled query"));
+      }
+
+      console.log(`🏁 Completing loan query ${query._id}`);
+      console.log(`  Current status: ${query.status}`);
+      console.log(`  Completed by: ${role} (${actorId})`);
+      console.log(`  Assigned Lander: ${query.assignedLander}`);
+
+      const oldStatus = query.status;
+      query.status = "completed" as any;
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: LoanQueryActivityType.STATUS_CHANGED,
+        description: `Query completed${remarks ? `: ${remarks}` : ""}`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: role === "admin" ? "Admin" : "Lander",
+        payload: {
+          oldStatus,
+          newStatus: "completed",
+          remarks,
+        },
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      // Adjust lander load - reduce by 1 as this query is now completed
+      if (query.assignedLander) {
+        console.log(`  📉 Adjusting lander load for ${query.assignedLander}`);
+        await LanderAssignmentEngine.adjustLanderLoad(
+          query.assignedLander,
+          -1
+        );
+        console.log(`  ✅ Lander load decreased`);
+      }
+
+      console.log(`✅ Loan query ${query._id} marked as completed`);
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, query, "Loan query completed successfully"));
     } catch (err) {
       next(err);
     }

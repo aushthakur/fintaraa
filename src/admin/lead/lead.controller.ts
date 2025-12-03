@@ -351,24 +351,183 @@ export class LeadController {
     try {
       const actorId = (req as any).user?._id;
       const session = (req as any).mongoSession;
-      const { lead, borrower } = await leadManagementService.convertLead(
+      
+      console.log("🔄 ============================================");
+      console.log("🔄 LEAD CONVERSION FLOW STARTED");
+      console.log("🔄 ============================================");
+      console.log(`📋 Lead ID: ${req.params.id}`);
+      console.log(`👤 Actor ID: ${actorId}`);
+      console.log(`📝 Query Data Received:`, req.body.queryData ? 'Yes' : 'No');
+      console.log(`🔄 Starting lead conversion process...`);
+      
+      // Process uploaded files similar to loanquery controller
+      const processedQueryData = LeadController.processFileUploads(req);
+      
+      const { lead, borrower, query } = await leadManagementService.convertLead(
         req.params.id,
         actorId,
+        processedQueryData, // Pass the processed query data with file URLs
         session
       );
+
+      let message = "Lead converted successfully";
+      if (query) {
+        const queryType = (query as any).loanType ? "loan" : "insurance";
+        message = `Lead converted successfully and ${queryType} query created`;
+        console.log(`✅ SUCCESS: ${message}`);
+        console.log(`📊 Query ID: ${query._id}`);
+        console.log(`📊 Query Type: ${queryType}`);
+      } else {
+        console.log(`✅ SUCCESS: Lead converted (no query created)`);
+      }
+      
+      console.log("🔄 ============================================");
+      console.log("🔄 LEAD CONVERSION FLOW COMPLETED");
+      console.log("🔄 ============================================\n");
 
       res
         .status(200)
         .json(
           new ApiResponse(
             200,
-            { lead, borrower },
-            "Lead converted successfully"
+            { lead, borrower, query },
+            message
           )
         );
     } catch (error) {
+      console.error("❌ ============================================");
+      console.error("❌ LEAD CONVERSION FLOW FAILED");
+      console.error("❌ ============================================");
+      console.error(`❌ Error:`, error);
+      console.error("❌ ============================================\n");
       next(error);
     }
+  }
+
+  // Helper function to extract URL from uploaded file object
+  private static extractFileUrl(file: any): string | undefined {
+    if (!file) return undefined;
+    if (typeof file === "string") return file;
+    if (Array.isArray(file) && file.length > 0) {
+      return file[0]?.url || file[0];
+    }
+    return file.url || file;
+  }
+
+  // Helper function to process uploaded files and map to queryData
+  private static processFileUploads(req: Request): any {
+    const queryData = req.body.queryData ? JSON.parse(req.body.queryData) : {};
+    
+    console.log(`📎 Processing file uploads...`);
+    
+    // Initialize policyDetails if it doesn't exist
+    if (!queryData.policyDetails) {
+      queryData.policyDetails = {};
+    }
+
+    // Initialize documents if it doesn't exist
+    if (!queryData.documents) {
+      queryData.documents = {};
+    }
+
+    // Process policyDetails document fields (uploaded files/images)
+    const policyDetailsDocumentFields = [
+      "salarySlipUrl",
+      "admissionLetterUrl",
+      "feeStructureUrl",
+      "rcCopyUrl",
+      "goldPhotosUrl",
+      "carInsuranceUrl",
+      "lastMonthBankStatementUrl",
+      "propertyDocumentsUrl",
+      "propertyOwnershipProofUrl",
+      "renovationEstimateUrl",
+      "itrUrl",
+      "gstReturnsUrl",
+      "dematStatementOrFdCopyUrl",
+      "proformaInvoiceOrQuotationUrl",
+    ];
+
+    policyDetailsDocumentFields.forEach((field) => {
+      if (req.body[field]) {
+        const url = this.extractFileUrl(req.body[field]);
+        if (url) {
+          queryData.policyDetails[field] = url;
+          console.log(`  ✅ Uploaded ${field}: ${url}`);
+        }
+      }
+    });
+
+    // Process bankStatementUrl (main field for loans)
+    if (req.body.bankStatementUrl) {
+      const url = this.extractFileUrl(req.body.bankStatementUrl);
+      if (url) {
+        queryData.bankStatementUrl = url;
+        console.log(`  ✅ Uploaded bankStatementUrl: ${url}`);
+      }
+    }
+
+    // Process documents field - these are uploaded as separate fields and mapped to documents object
+    const documentTypes = [
+      "pan_card",
+      "aadhaar_card",
+      "photo",
+      "itr_form_16",
+      "salary_slip",
+      "offer_letter",
+      "relieving_letter",
+      "bank_statement",
+      "gst_certificate",
+      "gst_returns",
+      "shop_act",
+      "govt_license",
+    ];
+
+    documentTypes.forEach((docType) => {
+      if (req.body[docType]) {
+        const url = this.extractFileUrl(req.body[docType]);
+        if (url) {
+          queryData.documents[docType] = url;
+          console.log(`  ✅ Uploaded document ${docType}: ${url}`);
+        }
+      }
+    });
+
+    // Process kycDocument for insurance (maps to kycDocumentUrl)
+    if (req.body.kycDocument) {
+      const url = this.extractFileUrl(req.body.kycDocument);
+      if (url) {
+        queryData.kycDocumentUrl = url;
+        console.log(`  ✅ Uploaded kycDocument: ${url}`);
+      }
+    }
+
+    // Process insurance-specific documents in policyDetails
+    const insuranceDocFields = [
+      "medicalReports",
+      "drivingLicense",
+      "rcBook",
+      "propertyDocuments",
+      "stockValuationReport",
+      "purchaseInvoice",
+      "maintenanceRecord",
+      "medicalReport",
+      "shopLicense",
+      "gstCertificate",
+    ];
+
+    insuranceDocFields.forEach((field) => {
+      if (req.body[field]) {
+        const url = this.extractFileUrl(req.body[field]);
+        if (url) {
+          queryData.policyDetails[field] = url;
+          console.log(`  ✅ Uploaded insurance document ${field}: ${url}`);
+        }
+      }
+    });
+
+    console.log(`📎 File processing complete`);
+    return queryData;
   }
 
   static async pipelineSummary(

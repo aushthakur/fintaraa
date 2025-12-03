@@ -112,6 +112,7 @@ router.patch(
 );
 router.patch("/:id/policy-details", asyncHandler(LoanQueryController.updatePolicyDetails));
 router.post("/:id/reassign", asyncHandler(LoanQueryController.reassignLander));
+router.post("/:id/complete", asyncHandler(LoanQueryController.completeQuery));
 
 // ====== CHAT ROUTES ======
 router.get("/:id/chat/messages", asyncHandler(LoanQueryChatController.getMessages));

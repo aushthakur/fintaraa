@@ -83,6 +83,7 @@ router.patch(
 );
 router.patch("/:id/policy-details", asyncHandler(InsuranceQueryController.updatePolicyDetails));
 router.post("/:id/reassign", asyncHandler(InsuranceQueryController.reassignLander));
+router.post("/:id/complete", asyncHandler(InsuranceQueryController.completeQuery));
 
 // ====== CHAT ROUTES ======
 router.get("/:id/chat/messages", asyncHandler(InsuranceQueryChatController.getMessages));

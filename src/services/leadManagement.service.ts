@@ -17,6 +17,9 @@ import {
   UserStatus,
   LoanProductType,
 } from "../modals/user.model";
+import { LoanQuery, LoanType, LoanQueryActivityType } from "../modals/loanquery.model";
+import { InsuranceQuery, InsuranceType, InsuranceQueryActivityType, ApplicationStatus } from "../modals/insurancequery.model";
+import LanderAssignmentEngine from "./landerAssignment.service";
 
 type NormalizedLeadPayload = {
   email?: string;
@@ -556,15 +559,25 @@ async updateStatus(
     return lead;
   }
 
-  async convertLead(leadId: string, actorId: string, session?: ClientSession) {
+  async convertLead(leadId: string, actorId: string, queryData: any, session?: ClientSession) {
+    console.log(`\n🔍 Step 1: Finding lead with ID: ${leadId}`);
     const lead = await Lead.findById(leadId);
-    if (!lead) throw new ApiError(404, "Lead not found");
+    if (!lead) {
+      console.error(`❌ Lead not found: ${leadId}`);
+      throw new ApiError(404, "Lead not found");
+    }
+    console.log(`✅ Lead found: ${lead.fullName} (${lead.mobile})`);
 
+    console.log(`\n🔍 Step 2: Ensuring borrower profile exists...`);
     const borrower = await this.ensureBorrowerProfile(lead, { session });
+    console.log(`✅ Borrower profile ready: ${borrower._id}`);
+    
+    console.log(`\n🔍 Step 3: Updating lead status to CONVERTED...`);
     lead.status = LeadStatus.CONVERTED;
     
     // Clear escalation when converting (escalation is no longer relevant for converted leads)
     if (lead.escalation) {
+      console.log(`🧹 Clearing escalation data...`);
       lead.escalation = undefined;
     }
     
@@ -576,15 +589,156 @@ async updateStatus(
       payload: { borrowerId: borrower._id },
       createdAt: new Date(),
     });
+    console.log(`✅ Lead status updated and activity logged`);
 
+    console.log(`\n🔍 Step 4: Adjusting agent load...`);
     await LeadAssignmentEngine.adjustAgentLoad(
       lead.assignment?.current?.agent,
       -1,
       session
     );
+    console.log(`✅ Agent load adjusted`);
 
+    // Create query if data provided from admin form
+    let createdQuery = null;
+    if (queryData) {
+      console.log(`\n🔍 Step 5: Creating query from admin form data...`);
+      console.log(`📝 Query Type:`, queryData.loanType ? 'Loan' : queryData.typeOfInsurance ? 'Insurance' : 'Unknown');
+      
+      if (queryData.loanType) {
+        console.log(`💰 Creating loan query...`);
+        createdQuery = await this.createLoanQueryFromFormData(lead, borrower, actorId, queryData, session);
+      } else if (queryData.typeOfInsurance) {
+        console.log(`🏥 Creating insurance query...`);
+        createdQuery = await this.createInsuranceQueryFromFormData(lead, borrower, actorId, queryData, session);
+      } else {
+        console.log(`⚠️ No valid query type in form data`);
+      }
+    } else {
+      console.log(`\n⚠️ No query data provided - skipping query creation`);
+    }
+
+    console.log(`\n🔍 Step 6: Saving lead changes...`);
     await lead.save({ session });
-    return { lead, borrower };
+    console.log(`✅ Lead saved successfully`);
+    
+    return { lead, borrower, query: createdQuery };
+  }
+
+  private async createLoanQueryFromFormData(
+    lead: ILead,
+    borrower: any,
+    actorId: string,
+    formData: any,
+    session?: ClientSession
+  ) {
+    console.log(`  📝 Building loan query from form data...`);
+    
+    // Merge form data with lead/borrower data
+    const loanQueryData: any = {
+      ...formData,
+      customerId: borrower._id,
+      // Ensure bankStatementUrl has a value - use placeholder if not uploaded yet
+      bankStatementUrl: formData.bankStatementUrl || "",
+      status: ApplicationStatus.PENDING, // Set as PENDING - form has all required data
+      activities: [
+        {
+          type: LoanQueryActivityType.CREATED,
+          description: `Loan query created from converted lead ${lead._id}`,
+          actor: new Types.ObjectId(actorId),
+          actorModel: "Admin" as const,
+          payload: { leadId: lead._id },
+          createdAt: new Date(),
+        },
+      ],
+    };
+
+    console.log(`  🔨 Creating LoanQuery document...`);
+    const loanQuery = new LoanQuery(loanQueryData);
+    
+    // Auto-assign lander if available
+    console.log(`  🔍 Attempting to auto-assign lander...`);
+    const assignedQuery = await LanderAssignmentEngine.ensureAssignment(
+      loanQuery,
+      {
+        actorId: actorId,
+        reason: "auto_created_from_lead",
+        session,
+      }
+    );
+    
+    console.log(`  💾 Saving loan query...`);
+    await assignedQuery.save({ session }); // Normal validation will run
+    
+    console.log(`  ✅✅ Loan query created: ${assignedQuery._id}`);
+    console.log(`  📊 Loan Query Details:`, {
+      queryId: assignedQuery._id,
+      loanType: (assignedQuery as any).loanType,
+      loanAmount: (assignedQuery as any).loanAmount,
+      customerId: assignedQuery.customerId,
+      assignedLander: assignedQuery.assignedLander,
+      status: (assignedQuery as any).status
+    });
+    
+    return assignedQuery;
+  }
+
+  private async createInsuranceQueryFromFormData(
+    lead: ILead,
+    borrower: any,
+    actorId: string,
+    formData: any,
+    session?: ClientSession
+  ) {
+    console.log(`  📝 Building insurance query from form data...`);
+    
+    // Merge form data with lead/borrower data
+    const insuranceQueryData: any = {
+      ...formData,
+      customerId: borrower._id,
+      // Ensure kycDocumentUrl has a value - use placeholder if not uploaded yet
+      kycDocumentUrl: formData.kycDocumentUrl || formData.kycDocument || "pending_upload",
+      status: ApplicationStatus.PENDING, // Set as PENDING - form has all required data
+      activities: [
+        {
+          type: InsuranceQueryActivityType.CREATED,
+          description: `Insurance query created from converted lead ${lead._id}`,
+          actor: new Types.ObjectId(actorId),
+          actorModel: "Admin" as const,
+          payload: { leadId: lead._id, insuranceType: formData.typeOfInsurance },
+          createdAt: new Date(),
+        },
+      ],
+    };
+
+    console.log(`  🔨 Creating InsuranceQuery document...`);
+    const insuranceQuery = new InsuranceQuery(insuranceQueryData);
+    
+    // Auto-assign lander if available
+    console.log(`  🔍 Attempting to auto-assign lander...`);
+    const assignedQuery = await LanderAssignmentEngine.ensureAssignment(
+      insuranceQuery,
+      {
+        actorId: actorId,
+        reason: "auto_created_from_lead",
+        session,
+      }
+    );
+    
+    console.log(`  💾 Saving insurance query (with validateBeforeSave for flexibility)...`);
+    await assignedQuery.save({ session, validateBeforeSave: false });
+    
+    console.log(`  ✅✅ Insurance query created: ${assignedQuery._id}`);
+    console.log(`  📊 Insurance Query Details:`, {
+      queryId: assignedQuery._id,
+      insuranceType: (assignedQuery as any).typeOfInsurance,
+      customerId: assignedQuery.customerId,
+      assignedLander: assignedQuery.assignedLander,
+      status: (assignedQuery as any).status,
+      kycDocumentUrl: (assignedQuery as any).kycDocumentUrl
+    });
+    
+    return assignedQuery;
   }
 
   private normalizePayload(
@@ -766,20 +920,29 @@ async updateStatus(
     lead: ILead,
     options: { session?: ClientSession }
   ) {
+    console.log(`\n  👤 Ensuring borrower profile exists...`);
+    
     if (lead.borrowerProfile) {
+      console.log(`  🔍 Lead already has borrowerProfile: ${lead.borrowerProfile}`);
       const borrower = await User.findById(lead.borrowerProfile);
-      if (borrower) return borrower;
+      if (borrower) {
+        console.log(`  ✅ Existing borrower found: ${borrower.name} (${borrower.email})`);
+        return borrower;
+      }
+      console.log(`  ⚠️ Borrower profile ID exists but user not found, will create/find new one`);
     }
 
     const lookup = [] as Record<string, any>[];
     if (lead.email) lookup.push({ email: lead.email });
     if (lead.mobile) lookup.push({ mobile: lead.mobile });
+    console.log(`  🔍 Searching for existing user by:`, lookup);
 
     let borrower = lookup.length ? await User.findOne({ $or: lookup }) : null;
 
     const email = lead.email || `${lead.mobile}@lead.auto`;
 
     if (!borrower) {
+      console.log(`  🆕 No existing user found, creating new borrower profile...`);
       borrower = new User({
         name: lead.fullName,
         email,
@@ -790,13 +953,18 @@ async updateStatus(
         gender: Gender.PREFER_NOT_TO_SAY,
         status: UserStatus.PENDING_VERIFICATION,
       } as any);
+      console.log(`  ✅ New borrower profile created: ${borrower.name} (${email})`);
     } else {
+      console.log(`  ✅ Found existing user: ${borrower.name} (${borrower.email})`);
+      console.log(`  📝 Updating borrower profile if needed...`);
       borrower.name = borrower.name || lead.fullName;
       borrower.email = borrower.email || email;
     }
 
+    console.log(`  💾 Saving borrower profile...`);
     await borrower.save({ session: options.session });
     lead.borrowerProfile = borrower._id as Types.ObjectId;
+    console.log(`  ✅ Borrower profile saved: ${borrower._id}`);
     return borrower;
   }
 }

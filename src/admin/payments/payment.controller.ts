@@ -43,17 +43,35 @@ export class PaymentController {
     }
   }
 
-  static async recordDisbursement(
+  // Record commission for loan query disbursement
+  static async recordLoanCommission(
     req: Request,
     res: Response,
     next: NextFunction
   ) {
     try {
       const session = (req as any).mongoSession;
-      const result = await commissionService.recordCommission(req.body, session);
+      const result = await commissionService.recordLoanCommission(req.body, session);
       res
         .status(200)
-        .json(new ApiResponse(200, result, "Commission credited"));
+        .json(new ApiResponse(200, result, "Loan commission credited"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Record commission for insurance query completion
+  static async recordInsuranceCommission(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const session = (req as any).mongoSession;
+      const result = await commissionService.recordInsuranceCommission(req.body, session);
+      res
+        .status(200)
+        .json(new ApiResponse(200, result, "Insurance commission credited"));
     } catch (error) {
       next(error);
     }

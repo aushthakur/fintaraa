@@ -12,9 +12,15 @@ router
   .post(asyncHandler(PaymentController.createCommissionRule))
   .get(asyncHandler(PaymentController.getCommissionRules));
 
+// Commission recording endpoints
 router.post(
-  "/disbursements",
-  asyncHandler(PaymentController.recordDisbursement)
+  "/commissions/loan",
+  asyncHandler(PaymentController.recordLoanCommission)
+);
+
+router.post(
+  "/commissions/insurance",
+  asyncHandler(PaymentController.recordInsuranceCommission)
 );
 
 router.get(
