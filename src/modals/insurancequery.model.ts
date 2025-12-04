@@ -197,6 +197,12 @@ export interface IInsuranceQuery extends Document {
   assignedAgent?: Types.ObjectId;
   assignedLander?: Types.ObjectId;
   activities: IInsuranceQueryActivity[];
+  
+  // Commission tracking
+  commissionRecorded: boolean;
+  commissionRecordedAt?: Date;
+  commissionTransactionId?: Types.ObjectId;
+  
   createdAt: Date;
   updatedAt: Date;
 }
@@ -288,6 +294,10 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
       ],
       default: [],
     },
+    // Commission tracking
+    commissionRecorded: { type: Boolean, default: false, index: true },
+    commissionRecordedAt: { type: Date },
+    commissionTransactionId: { type: Schema.Types.ObjectId, ref: "WalletTransaction" },
   },
   { timestamps: true }
 );

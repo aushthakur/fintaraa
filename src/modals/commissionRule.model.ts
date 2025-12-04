@@ -1,11 +1,11 @@
 import mongoose, { Document, Schema } from "mongoose";
-import { LoanProductType } from "./user.model";
+import { LoanType } from "./loanquery.model";
 import { InsuranceType } from "./insurancequery.model";
 
 export type CommissionRuleType = "flat" | "percentage" | "slab";
 
 // Unified product type for both loans and insurance
-export type ProductType = LoanProductType | InsuranceType;
+export type ProductType = LoanType | InsuranceType;
 
 export interface ICommissionSlab {
   minAmount: number;
@@ -67,7 +67,7 @@ const CommissionRuleSchema = new Schema<ICommissionRule>(
     description: { type: String },
     productType: {
       type: String,
-      enum: [...Object.values(LoanProductType), ...Object.values(InsuranceType)],
+      enum: [...Object.values(LoanType), ...Object.values(InsuranceType)],
     },
     queryType: {
       type: String,

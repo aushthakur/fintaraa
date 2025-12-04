@@ -9,6 +9,7 @@ import PayoutRequest, {
 } from "../modals/payoutRequest.model";
 import { WalletService } from "./wallet.service";
 import { RazorpayService } from "../config/razorpay";
+import { config } from "../config/config";
 
 interface PayoutRequestInput {
   landerId: string;
@@ -81,9 +82,30 @@ export class PayoutService {
     return await this.processPayout(payout, session);
   }
 
+  /**
+   * Process payout request and transfer funds to lender
+   * 
+   * TEST MODE: When config.payment.testMode is true, creates dummy payout results
+   * without actually initiating payment via Razorpay. Set PAYOUT_TEST_MODE=false
+   * in .env to enable real payments.
+   * 
+   * PRODUCTION MODE: Actually initiates payment via RazorpayX when test mode is disabled
+   */
   async processPayout(payout: IPayoutRequest, session?: ClientSession) {
-    if (!payout.upiId && !payout.bankDetails?.accountNumber) {
-      throw new ApiError(400, "Payout destination missing");
+    const isTestMode = config.payment?.testMode;
+    console.log(`🔧 Payout Processing Mode: ${isTestMode ? "TEST MODE (No real payment)" : "PRODUCTION MODE (Real payment)"}`);
+    
+    // Validate payout destination based on method
+    if (payout.method === "upi") {
+      if (!payout.upiId) {
+        throw new ApiError(400, "UPI ID is required for UPI payout");
+      }
+    } else if (payout.method === "bank_transfer") {
+      if (!payout.bankDetails?.accountNumber || !payout.bankDetails?.ifsc) {
+        throw new ApiError(400, "Bank account number and IFSC code are required for bank transfer");
+      }
+    } else {
+      throw new ApiError(400, "Invalid payout method");
     }
 
     try {
@@ -94,26 +116,73 @@ export class PayoutService {
 
       const payoutReference = (payout._id as any).toString();
 
-      const destination = payout.upiId
-        ? { type: "upi" as const, address: payout.upiId }
-        : {
-            type: "bank_account" as const,
-            accountNumber: payout.bankDetails?.accountNumber!,
-            accountHolder: payout.bankDetails?.accountHolder || "Lander",
-            ifsc: payout.bankDetails?.ifsc!,
-          };
+      // Build destination based on payout method
+      let destination;
+      if (payout.method === "upi" && payout.upiId) {
+        destination = {
+          type: "upi" as const,
+          address: payout.upiId,
+        };
+      } else if (payout.method === "bank_transfer" && payout.bankDetails) {
+        destination = {
+          type: "bank_account" as const,
+          accountNumber: payout.bankDetails.accountNumber!,
+          accountHolder: payout.bankDetails.accountHolder || lander?.name || "Lander",
+          ifsc: payout.bankDetails.ifsc!,
+        };
+      } else {
+        throw new ApiError(400, "Invalid payout destination configuration");
+      }
 
-      const payoutResult = await RazorpayService.initiateAgentPayout({
-        amount: payout.amount,
-        contact: {
-          name: lander?.name || payout.lander.toString(),
-          email: lander?.email,
-          contact: lander?.mobile,
-        },
-        destination,
-        referenceId: payoutReference,
-        purpose: "payout",
-      });
+      // Check if test mode is enabled
+      let payoutResult;
+      if (config.payment?.testMode) {
+        // TEST MODE: Create dummy payout result without actually initiating payment
+        console.log("🧪 TEST MODE: Creating dummy payout result");
+        console.log("💰 Payout Details:", {
+          amount: payout.amount,
+          method: payout.method,
+          destination: payout.method === "upi" ? payout.upiId : payout.bankDetails,
+          lander: lander?.name,
+        });
+
+        // Generate dummy IDs that look realistic
+        const timestamp = Date.now();
+        payoutResult = {
+          contactId: `cont_test_${timestamp}`,
+          fundAccountId: `fa_test_${timestamp}`,
+          payoutId: `pout_test_${timestamp}`,
+          status: "processed",
+          data: {
+            id: `pout_test_${timestamp}`,
+            entity: "payout",
+            amount: Math.round(payout.amount * 100),
+            currency: "INR",
+            mode: payout.method === "upi" ? "upi" : "imps",
+            status: "processed",
+            purpose: "payout",
+            reference_id: payoutReference,
+            narration: "Agent Commission Payout (TEST MODE)",
+            created_at: Math.floor(timestamp / 1000),
+          },
+        };
+        
+        console.log("✅ TEST MODE: Dummy payout created successfully");
+      } else {
+        // PRODUCTION MODE: Actually initiate the payout via Razorpay
+        console.log("💳 PRODUCTION MODE: Initiating real payout via Razorpay");
+        payoutResult = await RazorpayService.initiateAgentPayout({
+          amount: payout.amount,
+          contact: {
+            name: lander?.name || payout.lander.toString(),
+            email: lander?.email,
+            contact: lander?.mobile,
+          },
+          destination,
+          referenceId: payoutReference,
+          purpose: "payout",
+        });
+      }
 
       payout.status = "paid";
       payout.razorpayContactId = payoutResult.contactId;

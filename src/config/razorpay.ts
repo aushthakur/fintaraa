@@ -304,6 +304,13 @@ export class RazorpayService {
     }
   }
 
+  /**
+   * Initiate payout to agent via RazorpayX
+   * Supports both UPI and Bank Account transfers
+   * 
+   * @param options Payout configuration including amount, contact, and destination details
+   * @returns Payout result with contact ID, fund account ID, payout ID, and status
+   */
   static async initiateAgentPayout(options: {
     amount: number;
     currency?: string;
@@ -331,6 +338,18 @@ export class RazorpayService {
       throw new Error("RazorpayX account number missing in config");
     }
 
+    // Validate destination details
+    if (options.destination.type === "upi" && !options.destination.address) {
+      throw new Error("UPI address is required for UPI payouts");
+    }
+    if (options.destination.type === "bank_account") {
+      const { accountNumber, ifsc, accountHolder } = options.destination;
+      if (!accountNumber || !ifsc || !accountHolder) {
+        throw new Error("Account number, IFSC, and account holder name are required for bank transfers");
+      }
+    }
+
+    // Step 1: Create contact in RazorpayX
     const contactPayload = {
       name: options.contact.name,
       email: options.contact.email,
@@ -343,17 +362,26 @@ export class RazorpayService {
       contactPayload
     );
 
-    let accountType = "vpa";
-    let accountDetails: Record<string, string> = {
-      address: (options.destination as any).address,
-    };
-    if (options.destination.type === "bank_account") {
+    // Step 2: Create fund account based on destination type
+    let accountType: string;
+    let accountDetails: Record<string, string>;
+    
+    if (options.destination.type === "upi") {
+      // UPI (VPA - Virtual Payment Address)
+      accountType = "vpa";
+      accountDetails = {
+        address: options.destination.address,
+      };
+    } else if (options.destination.type === "bank_account") {
+      // Bank Account Transfer
       accountType = "bank_account";
       accountDetails = {
         account_number: options.destination.accountNumber,
         ifsc: options.destination.ifsc,
         name: options.destination.accountHolder,
-      } as any;
+      };
+    } else {
+      throw new Error(`Unsupported destination type: ${(options.destination as any).type}`);
     }
 
     const fundAccount = await this.razorpayXRequest<any>("/v1/fund_accounts", {
@@ -362,17 +390,29 @@ export class RazorpayService {
       [accountType]: accountDetails,
     });
 
+    // Step 3: Determine payout mode based on destination type
+    // UPI: Instant transfer via UPI
+    // IMPS: Immediate Payment Service (instant bank transfer)
+    // NEFT: National Electronic Funds Transfer (batch processing)
+    let payoutMode: "upi" | "imps" | "neft";
+    if (options.mode) {
+      payoutMode = options.mode;
+    } else {
+      // Auto-select mode: UPI for UPI addresses, IMPS for bank accounts
+      payoutMode = options.destination.type === "upi" ? "upi" : "imps";
+    }
+
+    // Step 4: Initiate the payout
     const payout = await this.razorpayXRequest<any>("/v1/payouts", {
       account_number: credentials.accountNumber,
       fund_account_id: fundAccount.id,
-      amount: Math.round(options.amount * 100),
+      amount: Math.round(options.amount * 100), // Convert to paise
       currency: options.currency || "INR",
-      mode:
-        options.mode || (options.destination.type === "upi" ? "upi" : "imps"),
+      mode: payoutMode,
       purpose: options.purpose || "payout",
       reference_id: options.referenceId || `payout_${Date.now()}`,
       narration: options.narration || "Agent Commission Payout",
-      queue_if_low_balance: true,
+      queue_if_low_balance: true, // Queue if balance is low instead of failing
     });
 
     return {

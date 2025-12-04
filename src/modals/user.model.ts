@@ -451,6 +451,8 @@ export interface IUser extends Document {
   aadhaarCard?: string;
   aadhaarCardUrl?: string;
   cancelledChequeOrPassbook?: string;
+  cibilScore?: number;
+  cibilLastFetchedAt?: Date;
 }
 
 const UserSchema = new Schema<IUser>(
@@ -502,6 +504,8 @@ const UserSchema = new Schema<IUser>(
     aadhaarCard: { type: String, unique: true, sparse: true, trim: true },
     aadhaarCardUrl: { type: String, unique: true, sparse: true, trim: true },
     cancelledChequeOrPassbook: { type: String, default: null },
+    cibilScore: { type: Number },
+    cibilLastFetchedAt: { type: Date },
     loginMethods: {
       type: [LoginMethodSchema],
       default: [

@@ -87,6 +87,7 @@ export const config = {
   payment: {
     enabled: toBool(process.env.PAYMENT_ENABLED),
     gateway: process.env.PAYMENT_GATEWAY!,
+    testMode: toBool(process.env.PAYOUT_TEST_MODE || "true"), // Enable test mode for payouts by default
     razorpay: {
       keyId: process.env.RAZORPAY_KEY_ID!,
       keySecret: process.env.RAZORPAY_KEY_SECRET!,

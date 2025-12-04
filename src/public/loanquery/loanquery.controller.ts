@@ -639,9 +639,17 @@ export class LoanQueryController {
           .json(new ApiError(403, "You can only view queries assigned to you"));
       }
 
+      // Ensure commission fields are always present (for backward compatibility with old documents)
+      const responseData = {
+        ...query,
+        commissionRecorded: query.commissionRecorded ?? false,
+        commissionRecordedAt: query.commissionRecordedAt ?? null,
+        commissionTransactionId: query.commissionTransactionId ?? null,
+      };
+
       return res
         .status(200)
-        .json(new ApiResponse(200, query, "Loan query details fetched successfully"));
+        .json(new ApiResponse(200, responseData, "Loan query details fetched successfully"));
     } catch (err) {
       next(err);
     }

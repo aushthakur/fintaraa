@@ -5,7 +5,7 @@ import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
 
 const router = express.Router();
 
-router.use(authenticateToken, authorize("admin"));
+router.use(authenticateToken);
 
 router
   .route("/commission-rules")

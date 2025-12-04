@@ -219,6 +219,11 @@ export interface ILoanQuery extends Document {
   assignedLander?: Types.ObjectId;
   activities: ILoanQueryActivity[];
   
+  // Commission tracking
+  commissionRecorded: boolean;
+  commissionRecordedAt?: Date;
+  commissionTransactionId?: Types.ObjectId;
+  
   createdAt: Date;
   updatedAt: Date;
 }
@@ -357,6 +362,10 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
       ],
       default: [],
     },
+    // Commission tracking
+    commissionRecorded: { type: Boolean, default: false, index: true },
+    commissionRecordedAt: { type: Date },
+    commissionTransactionId: { type: Schema.Types.ObjectId, ref: "WalletTransaction" },
   },
   { timestamps: true }
 );

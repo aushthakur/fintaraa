@@ -9,6 +9,10 @@ import BankSubscription from "../../modals/bankSubscription.model";
 import { commissionService } from "../../services/commission.service";
 import { payoutService } from "../../services/payout.service";
 import { bankSubscriptionService } from "../../services/bankSubscription.service";
+import { CommonService } from "../../services/common.services";
+
+const payoutRequestService = new CommonService(PayoutRequest);
+const walletTransactionService = new CommonService(WalletTransaction);
 
 export class PaymentController {
   static async createCommissionRule(
@@ -102,18 +106,60 @@ export class PaymentController {
     next: NextFunction
   ) {
     try {
-      const query: Record<string, any> = {};
-      if (req.query.landerId) query.lander = req.query.landerId;
-      if (req.query.category) query.category = req.query.category;
-      const transactions = await WalletTransaction.find(query)
-        .sort({ createdAt: -1 })
-        .limit(Number(req.query.limit) || 100)
-        .lean();
-
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      
+      // For landers, only show their own transactions
+      if (role === "lander" && userId) {
+        req.query.lander = userId;
+      }
+      // Admin can see all transactions
+      
+      // Add lookup stages to populate lander details
+      const populateStages = [
+        {
+          $lookup: {
+            from: "landers",
+            localField: "lander",
+            foreignField: "_id",
+            as: "landerData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$landerData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $addFields: {
+            lander: {
+              $cond: {
+                if: { $ifNull: ["$landerData", false] },
+                then: {
+                  _id: "$landerData._id",
+                  name: "$landerData.name",
+                  email: "$landerData.email",
+                  mobile: "$landerData.mobile",
+                },
+                else: "$lander",
+              },
+            },
+          },
+        },
+        {
+          $project: {
+            landerData: 0,
+          },
+        },
+      ];
+      
+      const transactions = await walletTransactionService.getAll(req.query, populateStages);
+      
       res
         .status(200)
         .json(
-          new ApiResponse(200, transactions, "Transaction history fetched")
+          new ApiResponse(200, transactions, "Transaction history fetched successfully")
         );
     } catch (error) {
       next(error);
@@ -169,12 +215,85 @@ export class PaymentController {
 
   static async listPayouts(req: Request, res: Response, next: NextFunction) {
     try {
-      const payouts = await PayoutRequest.find(req.query)
-        .sort({ createdAt: -1 })
-        .lean();
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      
+      // For landers, only show their own payout requests
+      if (role === "lander" && userId) {
+        req.query.lander = userId;
+      }
+      // Admin can see all payout requests
+      
+      // Add lookup stages to populate lander and approvedBy
+      const populateStages = [
+        {
+          $lookup: {
+            from: "landers",
+            localField: "lander",
+            foreignField: "_id",
+            as: "landerData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$landerData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "admins",
+            localField: "approvedBy",
+            foreignField: "_id",
+            as: "approvedByData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$approvedByData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $addFields: {
+            lander: {
+              $cond: {
+                if: { $ifNull: ["$landerData", false] },
+                then: {
+                  _id: "$landerData._id",
+                  name: "$landerData.name",
+                  email: "$landerData.email",
+                  mobile: "$landerData.mobile",
+                },
+                else: "$lander",
+              },
+            },
+            approvedBy: {
+              $cond: {
+                if: { $ifNull: ["$approvedByData", false] },
+                then: {
+                  _id: "$approvedByData._id",
+                  name: "$approvedByData.name",
+                  email: "$approvedByData.email",
+                },
+                else: "$approvedBy",
+              },
+            },
+          },
+        },
+        {
+          $project: {
+            landerData: 0,
+            approvedByData: 0,
+          },
+        },
+      ];
+      
+      const payouts = await payoutRequestService.getAll(req.query, populateStages);
+      
       res
         .status(200)
-        .json(new ApiResponse(200, payouts, "Payout requests"));
+        .json(new ApiResponse(200, payouts, "Payout requests fetched successfully"));
     } catch (error) {
       next(error);
     }
