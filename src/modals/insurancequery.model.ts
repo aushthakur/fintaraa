@@ -213,7 +213,6 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
       type: Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
     },
     firstName: { type: String, required: true, trim: true },
     lastName: { type: String, required: true, trim: true },
@@ -309,4 +308,3 @@ export const InsuranceQuery = mongoose.model<IInsuranceQuery>(
   "InsuranceQuery",
   InsuranceQuerySchema
 );
-

@@ -18,9 +18,9 @@ const logger = winston.createLogger({
         });
       },
     }),
-    winston.format.printf(({ timestamp, level, message }) => {
+    winston.format.printf(({ timestamp, level, message }: any) => {
       return `${timestamp.grey} ${level.yellow}: ${message}`;
-    }),
+    })
   ),
   transports: [new winston.transports.Console()],
 });

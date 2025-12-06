@@ -234,7 +234,6 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
       type: Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
     },
     // Personal Details
     loanAmount: { type: Number, required: true },
@@ -377,4 +376,3 @@ export const LoanQuery = mongoose.model<ILoanQuery>(
   "LoanQuery",
   LoanQuerySchema
 );
-

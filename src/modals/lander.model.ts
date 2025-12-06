@@ -138,8 +138,6 @@ LanderSchema.pre("findOneAndUpdate", hashPasswordInUpdate);
 LanderSchema.pre("updateOne", hashPasswordInUpdate);
 
 // Indexes
-LanderSchema.index({ email: 1 });
-LanderSchema.index({ mobile: 1 });
 LanderSchema.index({ availability: 1 });
 LanderSchema.index({ location: 1 });
 
