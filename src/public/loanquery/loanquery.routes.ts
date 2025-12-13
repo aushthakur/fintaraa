@@ -85,7 +85,10 @@ router.put(
   asyncHandler(LoanQueryController.updateQueryById)
 );
 router.delete("/:id", asyncHandler(LoanQueryController.deleteQueryById));
-router.patch("/:id/assign-lander", asyncHandler(LoanQueryController.assignLander));
+router.patch(
+  "/:id/assign-lander",
+  asyncHandler(LoanQueryController.assignLander)
+);
 
 // ====== DETAIL VIEW AND OPERATIONS FOR ADMIN/LANDER ======
 router.get("/:id/detail", asyncHandler(LoanQueryController.getQueryDetail));
@@ -110,19 +113,27 @@ router.patch(
   s3UploaderMiddleware("loan-query-documents"),
   asyncHandler(LoanQueryController.updateDocuments)
 );
-router.patch("/:id/policy-details", asyncHandler(LoanQueryController.updatePolicyDetails));
+router.patch(
+  "/:id/policy-details",
+  asyncHandler(LoanQueryController.updatePolicyDetails)
+);
 router.post("/:id/reassign", asyncHandler(LoanQueryController.reassignLander));
 router.post("/:id/complete", asyncHandler(LoanQueryController.completeQuery));
 
 // ====== CHAT ROUTES ======
-router.get("/:id/chat/messages", asyncHandler(LoanQueryChatController.getMessages));
+router.get(
+  "/:id/chat/messages",
+  asyncHandler(LoanQueryChatController.getMessages)
+);
 router.post(
   "/:id/chat/messages",
   dynamicUpload([{ name: "media", maxCount: 5 }]),
   s3UploaderMiddleware("loan-query-chat"),
   asyncHandler(LoanQueryChatController.sendMessage)
 );
-router.post("/:id/chat/mark-read", asyncHandler(LoanQueryChatController.markAsRead));
+router.post(
+  "/:id/chat/mark-read",
+  asyncHandler(LoanQueryChatController.markAsRead)
+);
 
 export default router;
-

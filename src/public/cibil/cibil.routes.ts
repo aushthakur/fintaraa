@@ -3,13 +3,20 @@ import {
   fetchCibilReport,
   fetchCibilReportWithMiddleware,
   fetchEncryptedCibilReportController,
+  fetchUserCibilReport,
 } from "./cibil.controller";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { cibilScoreMiddleware } from "../../middlewares/cibil.middleware";
+import { authenticateToken } from "../../middlewares/authMiddleware";
 
 const router = Router();
 
 router.post("/fetch", asyncHandler(fetchCibilReport));
+router.post(
+  "/user",
+  authenticateToken,
+  asyncHandler(fetchUserCibilReport)
+);
 router.post(
   "/fetch-with-middleware",
   cibilScoreMiddleware,

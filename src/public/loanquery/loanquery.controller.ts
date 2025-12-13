@@ -2,13 +2,17 @@ import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
 import { NextFunction, Request, Response } from "express";
 import { CommonService } from "../../services/common.services";
-import { LoanQuery, allowedFieldsByFormType, LoanQueryActivityType } from "../../modals/loanquery.model";
+import {
+  LoanQuery,
+  allowedFieldsByFormType,
+  LoanQueryActivityType,
+} from "../../modals/loanquery.model";
 import { ApplicationStatus } from "../../modals/insurancequery.model";
 import LanderAssignmentEngine from "../../services/landerAssignment.service";
 import { Types } from "mongoose";
 import Lander from "../../modals/lander.model";
 
-  const loanQueryService = new CommonService(LoanQuery);
+const loanQueryService = new CommonService(LoanQuery);
 
 // Helper function to extract URL from uploaded file object
 const extractFileUrl = (file: any): string | undefined => {
@@ -103,11 +107,7 @@ const processFileUploads = (req: Request) => {
 };
 
 export class LoanQueryController {
-  static async createQuery(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async createQuery(req: Request, res: Response, next: NextFunction) {
     try {
       // Get customer ID from authenticated user token
       const customerId = (req as any).user?._id;
@@ -126,7 +126,12 @@ export class LoanQueryController {
       // Validate policyDetails against loanType if both are provided (skip for draft)
       // This must run AFTER processFileUploads since files are moved to policyDetails
       const isDraft = req.body.status === ApplicationStatus.DRAFT;
-      if (!isDraft && req.body.loanType && req.body.policyDetails && Object.keys(req.body.policyDetails).length > 0) {
+      if (
+        !isDraft &&
+        req.body.loanType &&
+        req.body.policyDetails &&
+        Object.keys(req.body.policyDetails).length > 0
+      ) {
         const allowed = allowedFieldsByFormType[req.body.loanType] || [];
         const invalidFields = Object.keys(req.body.policyDetails).filter(
           (field) => !allowed.includes(field)
@@ -137,7 +142,11 @@ export class LoanQueryController {
             .json(
               new ApiError(
                 400,
-                `Field(s) "${invalidFields.join(", ")}" is/are not allowed for ${req.body.loanType}. Allowed fields: ${allowed.join(", ")}`
+                `Field(s) "${invalidFields.join(
+                  ", "
+                )}" is/are not allowed for ${
+                  req.body.loanType
+                }. Allowed fields: ${allowed.join(", ")}`
               )
             );
         }
@@ -182,13 +191,15 @@ export class LoanQueryController {
         // Create document without running validators
         result = new LoanQuery(draftData);
         await result.save({ validateBeforeSave: false });
-        
+
         // Add created activity
         result.activities = result.activities || [];
         result.activities.push({
           type: LoanQueryActivityType.CREATED,
           description: "Loan query created as draft",
-          actor: customerId ? new Types.ObjectId(String(customerId)) : undefined,
+          actor: customerId
+            ? new Types.ObjectId(String(customerId))
+            : undefined,
           actorModel: "User",
           createdAt: new Date(),
         });
@@ -197,28 +208,27 @@ export class LoanQueryController {
         // For non-draft status, use normal validation
         const createData = { ...req.body, activities: [] };
         result = await loanQueryService.create(createData);
-        
+
         // Add created activity
         result.activities = result.activities || [];
         result.activities.push({
           type: LoanQueryActivityType.CREATED,
           description: "Loan query created",
-          actor: customerId ? new Types.ObjectId(String(customerId)) : undefined,
+          actor: customerId
+            ? new Types.ObjectId(String(customerId))
+            : undefined,
           actorModel: "User",
           createdAt: new Date(),
         });
-        
+
         // Auto-assign lander if not already assigned
         if (result && !result.assignedLander) {
           const session = (req as any).mongoSession;
-          result = await LanderAssignmentEngine.ensureAssignment(
-            result,
-            {
-              actorId: customerId?.toString(),
-              reason: "new_loan_query",
-              session,
-            }
-          );
+          result = await LanderAssignmentEngine.ensureAssignment(result, {
+            actorId: customerId?.toString(),
+            reason: "new_loan_query",
+            session,
+          });
           await result.save({ session });
         } else {
           await result.save();
@@ -231,23 +241,17 @@ export class LoanQueryController {
           .json(new ApiError(400, "Failed to create loan query"));
       return res
         .status(201)
-        .json(
-          new ApiResponse(201, result, "Loan query created successfully")
-        );
+        .json(new ApiResponse(201, result, "Loan query created successfully"));
     } catch (err) {
       next(err);
     }
   }
 
-  static async getAllQueries(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async getAllQueries(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
-      
+
       // For agents, only show queries assigned to them
       if (role === "agent" && userId) {
         req.query.assignedAgent = userId;
@@ -260,13 +264,13 @@ export class LoanQueryController {
       else if (role !== "admin" && userId) {
         req.query.customerId = userId;
       }
-      
+
       // Handle status filtering
       // If status is explicitly provided, use it; otherwise exclude draft queries
       if (!req.query.status) {
         req.query.status = { $ne: ApplicationStatus.DRAFT };
       }
-      
+
       // Add lookup stages to populate assignedAgent and assignedLander
       const populateStages = [
         {
@@ -332,46 +336,44 @@ export class LoanQueryController {
           },
         },
       ];
-      
-      const loanQueries = await loanQueryService.getAll(req.query, populateStages);
+
+      const loanQueries = await loanQueryService.getAll(
+        req.query,
+        populateStages
+      );
       return res
         .status(200)
         .json(
-          new ApiResponse(
-            200,
-            loanQueries,
-            "Loan queries fetched successfully"
-          )
+          new ApiResponse(200, loanQueries, "Loan queries fetched successfully")
         );
     } catch (err) {
       next(err);
     }
   }
 
-  static async getQueryById(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async getQueryById(req: Request, res: Response, next: NextFunction) {
     try {
       const customerId = (req as any).user?._id;
       const { role } = (req as any).user || {};
-      
+
       const result = await loanQueryService.getById(
         req.params.id,
         role !== "admin"
       );
-      
+
       // Ensure user can only view their own queries (unless admin)
-      if (role !== "admin" && result?.customerId?._id?.toString() !== customerId) {
+      if (
+        role !== "admin" &&
+        result?.customerId?._id?.toString() !== customerId
+      ) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only view your own loan queries"));
       }
-      
-      if(result?.status !== ApplicationStatus.DRAFT) {
+
+      if (result?.status !== ApplicationStatus.DRAFT) {
         return res
-          .status(404) 
+          .status(404)
           .json(new ApiError(404, "Only draft queries can be fetched"));
       }
       return res
@@ -390,20 +392,23 @@ export class LoanQueryController {
     try {
       const customerId = (req as any).user?._id;
       const { role } = (req as any).user || {};
-      
+
       //only draft queries can be updated
       const existingResult = await loanQueryService.getById(
         req.params.id,
-        true,
+        true
       );
-      if(existingResult?.status !== ApplicationStatus.DRAFT) {
+      if (existingResult?.status !== ApplicationStatus.DRAFT) {
         return res
           .status(400)
           .json(new ApiError(400, "Only draft queries can be updated"));
       }
 
       // Ensure user can only update their own queries (unless admin)
-      if (role !== "admin" && existingResult.customerId?._id?.toString() !== customerId) {
+      if (
+        role !== "admin" &&
+        existingResult.customerId?._id?.toString() !== customerId
+      ) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only update your own loan queries"));
@@ -431,19 +436,25 @@ export class LoanQueryController {
         };
       }
 
-      const updatedResult = await loanQueryService.updateById(req.params.id, req.body, {
-        populate: true,
-        new: true,
-        runValidators: true,
-      });
-      
+      const updatedResult = await loanQueryService.updateById(
+        req.params.id,
+        req.body,
+        {
+          populate: true,
+          new: true,
+          runValidators: true,
+        }
+      );
+
       // Track status change
       if (updatedResult && existingResult?.status !== updatedResult.status) {
         updatedResult.activities = updatedResult.activities || [];
         updatedResult.activities.push({
           type: LoanQueryActivityType.STATUS_CHANGED,
           description: `Status changed from ${existingResult?.status} to ${updatedResult.status}`,
-          actor: customerId ? new Types.ObjectId(String(customerId)) : undefined,
+          actor: customerId
+            ? new Types.ObjectId(String(customerId))
+            : undefined,
           actorModel: role === "admin" ? "Admin" : "User",
           payload: {
             previousStatus: existingResult?.status,
@@ -457,12 +468,14 @@ export class LoanQueryController {
         updatedResult.activities.push({
           type: LoanQueryActivityType.UPDATED,
           description: "Loan query updated",
-          actor: customerId ? new Types.ObjectId(String(customerId)) : undefined,
+          actor: customerId
+            ? new Types.ObjectId(String(customerId))
+            : undefined,
           actorModel: role === "admin" ? "Admin" : "User",
           createdAt: new Date(),
         });
       }
-      
+
       // Auto-assign lander if status changed from draft to non-draft and no lander assigned
       if (
         updatedResult &&
@@ -482,13 +495,17 @@ export class LoanQueryController {
         await result.save({ session });
         return res
           .status(200)
-          .json(new ApiResponse(200, result, "Loan query updated successfully"));
+          .json(
+            new ApiResponse(200, result, "Loan query updated successfully")
+          );
       }
-      
+
       await updatedResult.save();
       return res
         .status(200)
-        .json(new ApiResponse(200, updatedResult, "Loan query updated successfully"));
+        .json(
+          new ApiResponse(200, updatedResult, "Loan query updated successfully")
+        );
     } catch (err) {
       next(err);
     }
@@ -507,19 +524,13 @@ export class LoanQueryController {
           .json(new ApiError(404, "Failed to delete loan query"));
       return res
         .status(200)
-        .json(
-          new ApiResponse(200, result, "Loan query deleted successfully")
-        );
+        .json(new ApiResponse(200, result, "Loan query deleted successfully"));
     } catch (err) {
       next(err);
     }
   }
 
-  static async assignLander(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async assignLander(req: Request, res: Response, next: NextFunction) {
     try {
       const { role } = (req as any).user || {};
       const { landerId } = req.body;
@@ -532,28 +543,22 @@ export class LoanQueryController {
       }
 
       if (!landerId) {
-        return res
-          .status(400)
-          .json(new ApiError(400, "Lander ID is required"));
+        return res.status(400).json(new ApiError(400, "Lander ID is required"));
       }
 
       // Check if query exists
       const existingResult = await loanQueryService.getById(
         req.params.id,
-        true,
+        true
       );
       if (!existingResult) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Loan query not found"));
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
       // Get lander information for activity
       const lander = await Lander.findById(landerId).select("name email");
       if (!lander) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Lander not found"));
+        return res.status(404).json(new ApiError(404, "Lander not found"));
       }
 
       const actorId = (req as any).user?._id;
@@ -562,18 +567,22 @@ export class LoanQueryController {
       // Update assignedLander and add activity
       const updatedResult = await loanQueryService.updateById(
         req.params.id,
-        { 
+        {
           assignedLander: landerId,
           $push: {
             activities: {
               type: LoanQueryActivityType.LANDER_ASSIGNED,
-              description: `Lander assigned: ${lander.name}${previousLanderId ? " (reassigned)" : ""}`,
+              description: `Lander assigned: ${lander.name}${
+                previousLanderId ? " (reassigned)" : ""
+              }`,
               actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
               actorModel: "Admin",
               payload: {
                 landerId: landerId,
                 landerName: lander.name,
-                previousLanderId: previousLanderId ? String(previousLanderId) : undefined,
+                previousLanderId: previousLanderId
+                  ? String(previousLanderId)
+                  : undefined,
                 mode: "manual",
               },
               createdAt: new Date(),
@@ -588,11 +597,11 @@ export class LoanQueryController {
       );
 
       // Adjust lander load if needed
-      if (previousLanderId && previousLanderId.toString() !== landerId.toString()) {
-        await LanderAssignmentEngine.adjustLanderLoad(
-          previousLanderId,
-          -1
-        );
+      if (
+        previousLanderId &&
+        previousLanderId.toString() !== landerId.toString()
+      ) {
+        await LanderAssignmentEngine.adjustLanderLoad(previousLanderId, -1);
       }
       await LanderAssignmentEngine.adjustLanderLoad(
         new Types.ObjectId(landerId),
@@ -611,15 +620,11 @@ export class LoanQueryController {
 
   // ====== DETAIL VIEW AND OPERATIONS FOR ADMIN PANEL ======
 
-  static async getQueryDetail(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async getQueryDetail(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
-      
+
       const query = await LoanQuery.findById(req.params.id)
         .populate("customerId", "name email mobile profilePictureUrl")
         .populate("assignedAgent", "name email mobile profilePictureUrl")
@@ -627,13 +632,14 @@ export class LoanQueryController {
         .lean();
 
       if (!query) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Loan query not found"));
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
       // Check permissions - landers should use their own routes at /lander/*
-      if (role === "lander" && query.assignedLander?._id?.toString() !== userId) {
+      if (
+        role === "lander" &&
+        query.assignedLander?._id?.toString() !== userId
+      ) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only view queries assigned to you"));
@@ -649,40 +655,43 @@ export class LoanQueryController {
 
       return res
         .status(200)
-        .json(new ApiResponse(200, responseData, "Loan query details fetched successfully"));
+        .json(
+          new ApiResponse(
+            200,
+            responseData,
+            "Loan query details fetched successfully"
+          )
+        );
     } catch (err) {
       next(err);
     }
   }
 
-  static async addNote(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async addNote(req: Request, res: Response, next: NextFunction) {
     try {
       const actorId = (req as any).user?._id;
       const { role } = (req as any).user || {};
       const { note } = req.body;
 
       if (!note) {
-        return res
-          .status(400)
-          .json(new ApiError(400, "Note is required"));
+        return res.status(400).json(new ApiError(400, "Note is required"));
       }
 
       const query = await LoanQuery.findById(req.params.id);
       if (!query) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Loan query not found"));
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
       // Check permissions for lander
       if (role === "lander" && query.assignedLander?.toString() !== actorId) {
         return res
           .status(403)
-          .json(new ApiError(403, "You can only add notes to queries assigned to you"));
+          .json(
+            new ApiError(
+              403,
+              "You can only add notes to queries assigned to you"
+            )
+          );
       }
 
       query.activities = query.activities || [];
@@ -704,34 +713,31 @@ export class LoanQueryController {
     }
   }
 
-  static async updateStatus(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async updateStatus(req: Request, res: Response, next: NextFunction) {
     try {
       const actorId = (req as any).user?._id;
       const { role } = (req as any).user || {};
       const { status, remarks } = req.body;
 
       if (!status) {
-        return res
-          .status(400)
-          .json(new ApiError(400, "Status is required"));
+        return res.status(400).json(new ApiError(400, "Status is required"));
       }
 
       const query = await LoanQuery.findById(req.params.id);
       if (!query) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Loan query not found"));
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
       // Check permissions for lander
       if (role === "lander" && query.assignedLander?.toString() !== actorId) {
         return res
           .status(403)
-          .json(new ApiError(403, "You can only update status of queries assigned to you"));
+          .json(
+            new ApiError(
+              403,
+              "You can only update status of queries assigned to you"
+            )
+          );
       }
 
       const oldStatus = query.status;
@@ -740,7 +746,9 @@ export class LoanQueryController {
       query.activities = query.activities || [];
       query.activities.push({
         type: LoanQueryActivityType.STATUS_CHANGED,
-        description: `Status changed from ${oldStatus} to ${status}${remarks ? `: ${remarks}` : ""}`,
+        description: `Status changed from ${oldStatus} to ${status}${
+          remarks ? `: ${remarks}` : ""
+        }`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
         actorModel: role === "admin" ? "Admin" : "Lander",
         payload: {
@@ -772,33 +780,47 @@ export class LoanQueryController {
 
       const query = await LoanQuery.findById(req.params.id);
       if (!query) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Loan query not found"));
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
       // Check permissions for lander
       if (role === "lander" && query.assignedLander?.toString() !== actorId) {
         return res
           .status(403)
-          .json(new ApiError(403, "You can only update documents of queries assigned to you"));
+          .json(
+            new ApiError(
+              403,
+              "You can only update documents of queries assigned to you"
+            )
+          );
       }
 
       // Handle file uploads from multer/S3 middleware
       let documentsToAdd: Record<string, string> = {};
-      
+
       // Files uploaded via multer middleware will be in req.body with URLs
       const documentTypes = [
-        "pan_card", "aadhaar_card", "photo", "itr_form_16", "salary_slip",
-        "offer_letter", "relieving_letter", "bank_statement", "gst_certificate",
-        "gst_returns", "shop_act", "govt_license"
+        "pan_card",
+        "aadhaar_card",
+        "photo",
+        "itr_form_16",
+        "salary_slip",
+        "offer_letter",
+        "relieving_letter",
+        "bank_statement",
+        "gst_certificate",
+        "gst_returns",
+        "shop_act",
+        "govt_license",
       ];
 
       documentTypes.forEach((docType) => {
         if (req.body[docType]) {
           const urlData = req.body[docType];
           // Extract URL from multer/S3 response format
-          const url = Array.isArray(urlData) ? urlData[0]?.url : urlData?.url || urlData;
+          const url = Array.isArray(urlData)
+            ? urlData[0]?.url
+            : urlData?.url || urlData;
           if (url) {
             documentsToAdd[docType] = url;
           }
@@ -811,9 +833,7 @@ export class LoanQueryController {
       }
 
       if (Object.keys(documentsToAdd).length === 0) {
-        return res
-          .status(400)
-          .json(new ApiError(400, "No documents provided"));
+        return res.status(400).json(new ApiError(400, "No documents provided"));
       }
 
       // Merge documents
@@ -822,7 +842,9 @@ export class LoanQueryController {
       query.activities = query.activities || [];
       query.activities.push({
         type: LoanQueryActivityType.DOCUMENT_UPLOADED,
-        description: `Documents uploaded: ${Object.keys(documentsToAdd).join(", ")}`,
+        description: `Documents uploaded: ${Object.keys(documentsToAdd).join(
+          ", "
+        )}`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
         actorModel: role === "admin" ? "Admin" : "Lander",
         payload: { uploadedDocuments: Object.keys(documentsToAdd) },
@@ -857,16 +879,19 @@ export class LoanQueryController {
 
       const query = await LoanQuery.findById(req.params.id);
       if (!query) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Loan query not found"));
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
       // Check permissions for lander
       if (role === "lander" && query.assignedLander?.toString() !== actorId) {
         return res
           .status(403)
-          .json(new ApiError(403, "You can only update policy details of queries assigned to you"));
+          .json(
+            new ApiError(
+              403,
+              "You can only update policy details of queries assigned to you"
+            )
+          );
       }
 
       // Merge policy details
@@ -886,17 +911,15 @@ export class LoanQueryController {
 
       return res
         .status(200)
-        .json(new ApiResponse(200, query, "Policy details updated successfully"));
+        .json(
+          new ApiResponse(200, query, "Policy details updated successfully")
+        );
     } catch (err) {
       next(err);
     }
   }
 
-  static async reassignLander(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async reassignLander(req: Request, res: Response, next: NextFunction) {
     try {
       const { role } = (req as any).user || {};
       const { landerId, reason } = req.body;
@@ -909,23 +932,17 @@ export class LoanQueryController {
       }
 
       if (!landerId) {
-        return res
-          .status(400)
-          .json(new ApiError(400, "Lander ID is required"));
+        return res.status(400).json(new ApiError(400, "Lander ID is required"));
       }
 
       const query = await LoanQuery.findById(req.params.id);
       if (!query) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Loan query not found"));
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
       const lander = await Lander.findById(landerId).select("name email");
       if (!lander) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Lander not found"));
+        return res.status(404).json(new ApiError(404, "Lander not found"));
       }
 
       const actorId = (req as any).user?._id;
@@ -936,13 +953,17 @@ export class LoanQueryController {
       query.activities = query.activities || [];
       query.activities.push({
         type: LoanQueryActivityType.LANDER_ASSIGNED,
-        description: `Lander reassigned to ${lander.name}${reason ? `: ${reason}` : ""}`,
+        description: `Lander reassigned to ${lander.name}${
+          reason ? `: ${reason}` : ""
+        }`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
         actorModel: "Admin",
         payload: {
           landerId,
           landerName: lander.name,
-          previousLanderId: previousLanderId ? String(previousLanderId) : undefined,
+          previousLanderId: previousLanderId
+            ? String(previousLanderId)
+            : undefined,
           reason,
         },
         createdAt: new Date(),
@@ -951,10 +972,16 @@ export class LoanQueryController {
       await query.save();
 
       // Adjust lander loads
-      if (previousLanderId && previousLanderId.toString() !== landerId.toString()) {
+      if (
+        previousLanderId &&
+        previousLanderId.toString() !== landerId.toString()
+      ) {
         await LanderAssignmentEngine.adjustLanderLoad(previousLanderId, -1);
       }
-      await LanderAssignmentEngine.adjustLanderLoad(new Types.ObjectId(landerId), 1);
+      await LanderAssignmentEngine.adjustLanderLoad(
+        new Types.ObjectId(landerId),
+        1
+      );
 
       return res
         .status(200)
@@ -964,11 +991,7 @@ export class LoanQueryController {
     }
   }
 
-  static async completeQuery(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async completeQuery(req: Request, res: Response, next: NextFunction) {
     try {
       const { role } = (req as any).user || {};
       const actorId = (req as any).user?._id;
@@ -977,16 +1000,16 @@ export class LoanQueryController {
       // Only admin or assigned lander can complete a query
       const query = await LoanQuery.findById(req.params.id);
       if (!query) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Loan query not found"));
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
       // Check permissions for lander
       if (role === "lander" && query.assignedLander?.toString() !== actorId) {
         return res
           .status(403)
-          .json(new ApiError(403, "You can only complete queries assigned to you"));
+          .json(
+            new ApiError(403, "You can only complete queries assigned to you")
+          );
       }
 
       // Check if query is in a valid state to be completed
@@ -1029,10 +1052,7 @@ export class LoanQueryController {
       // Adjust lander load - reduce by 1 as this query is now completed
       if (query.assignedLander) {
         console.log(`  📉 Adjusting lander load for ${query.assignedLander}`);
-        await LanderAssignmentEngine.adjustLanderLoad(
-          query.assignedLander,
-          -1
-        );
+        await LanderAssignmentEngine.adjustLanderLoad(query.assignedLander, -1);
         console.log(`  ✅ Lander load decreased`);
       }
 
@@ -1046,4 +1066,3 @@ export class LoanQueryController {
     }
   }
 }
-

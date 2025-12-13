@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import Otp from "../../modals/otp.model";
 import ApiError from "../../utils/ApiError";
 import { config } from "../../config/config";
@@ -229,6 +230,10 @@ export class UserController {
         status:
           role === "user" ? UserStatus.ACTIVE : UserStatus.PENDING_VERIFICATION,
       };
+      // Ensure password exists for hashing; generate a fallback if not provided (e.g., OTP-only signup)
+      userData.password =
+        password ||
+        crypto.randomBytes(12).toString("hex") + "@" + Date.now().toString(16);
 
       if (digiLockerVault) userData.digiLockerVault = digiLockerVault;
 
@@ -486,23 +491,31 @@ export class UserController {
         });
       }
 
-      const user = await User.findOne({ mobile });
+      let user = await User.findOne({ mobile });
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: "No user found with this phone number",
+        // Auto-provision lightweight user so OTP flow works for new signups
+        const placeholderEmail = `${mobile}@signup.fintara`;
+        user = await User.create({
+          mobile,
+          role: "user",
+          agreedToTerms: true,
+          email: placeholderEmail,
+          privacyPolicyAccepted: true,
+          name: `User ${mobile.slice(-4)}`,
+          status: UserStatus.PENDING_VERIFICATION,
+          password: crypto.randomBytes(10).toString("hex"),
         });
       }
 
-      const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
+      const otpCode = Math.floor(1000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins expiry
 
       // Save or update OTP
       await Otp.findOneAndUpdate(
         { mobile },
         {
-          expiresAt,
           mobile,
+          expiresAt,
           otp: otpCode,
           verified: false,
         },
@@ -511,15 +524,16 @@ export class UserController {
 
       // TODO: Integrate real SMS service like Twilio or Fast2SMS
       console.log(`OTP sent to ${mobile}: ${otpCode}`);
-      await sendEmail({
-        otp: otpCode,
-        to: user?.email,
-        userName: user?.name,
-      });
+      // await sendEmail({
+      //   otp: otpCode,
+      //   to: user?.email,
+      //   userName: user?.name,
+      // });
 
       return res.status(200).json({
         success: true,
         message: "OTP has been sent successfully",
+        otp: otpCode, // Exposed for QA/demo; hide in production SMS-only flows
       });
     } catch (error) {
       next(error);

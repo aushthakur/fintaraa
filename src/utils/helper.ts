@@ -1,6 +1,8 @@
-import { ObjectId } from "mongodb";
+import mongoose from "mongoose";
 import { toBoolean } from "validator";
 import { deleteFromS3 } from "../config/s3Uploader";
+
+const { ObjectId } = mongoose.Types;
 
 /**
  * @param {Record<string, any>} query - Query filters with pagination, search, projection, sort
@@ -41,6 +43,12 @@ export const getPipeline = (
   const basePipeline: any[] = [];
   const match: Record<string, any> = {};
 
+  // pull out start/end date filters (default to createdAt)
+  const startDateFilter = filters.startDate;
+  const endDateFilter = filters.endDate;
+  delete (filters as any).startDate;
+  delete (filters as any).endDate;
+
   // ==========================================
   // 🔧 HELPER FUNCTIONS
   // ==========================================
@@ -48,7 +56,7 @@ export const getPipeline = (
   /**
    * Safely convert to ObjectId if valid
    */
-  const safeObjectId = (val: any): ObjectId | any => {
+  const safeObjectId = (val: any): mongoose.Types.ObjectId | any => {
     if (typeof val === "string" && ObjectId.isValid(val)) {
       return new ObjectId(val);
     }
@@ -187,21 +195,22 @@ export const getPipeline = (
   // 🔍 BUILD MATCH STAGE
   // ==========================================
 
+  if (startDateFilter || endDateFilter) {
+    const createdAtRange: any = {};
+    const parsedStart = parseValue(startDateFilter);
+    const parsedEnd = parseValue(endDateFilter);
+    if (parsedStart) createdAtRange.$gte = parsedStart;
+    if (parsedEnd) createdAtRange.$lte = parsedEnd;
+    if (Object.keys(createdAtRange).length > 0) {
+      match.createdAt = createdAtRange;
+    }
+  }
+
   // Process all dynamic filters
   for (const key in filters) {
     const value = filters[key];
 
     if (isEmpty(value)) continue;
-
-    // If value is already a MongoDB query object (e.g., { $ne: ... }, { $in: ... }), use it directly
-    if (typeof value === "object" && !Array.isArray(value) && value !== null && !(value instanceof Date) && !(value instanceof ObjectId)) {
-      // Check if it's a MongoDB operator object (has keys starting with $)
-      const isMongoOperator = Object.keys(value).some(k => k.startsWith("$"));
-      if (isMongoOperator) {
-        setNestedMatch(match, key, "eq", value);
-        continue;
-      }
-    }
 
     const {
       field,
@@ -398,7 +407,9 @@ export const paginationResult = (
  * @param {string} id - The string to convert
  * @returns {ObjectId | null} - The ObjectId or null if invalid
  */
-export const convertToObjectId = (id: string): ObjectId | null => {
+export const convertToObjectId = (
+  id: string
+): mongoose.Types.ObjectId | null => {
   try {
     return new ObjectId(id);
   } catch (error) {
@@ -414,8 +425,7 @@ export const convertToObjectId = (id: string): ObjectId | null => {
  */
 export const isValidObjectId = (id: string): boolean => {
   try {
-    new ObjectId(id);
-    return true;
+    return ObjectId.isValid(id);
   } catch (error) {
     return false;
   }

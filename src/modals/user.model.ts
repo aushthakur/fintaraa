@@ -453,6 +453,8 @@ export interface IUser extends Document {
   cancelledChequeOrPassbook?: string;
   cibilScore?: number;
   cibilLastFetchedAt?: Date;
+  cibilReport?: Record<string, any>;
+  cibilRequestPayload?: Record<string, any>;
 }
 
 const UserSchema = new Schema<IUser>(
@@ -506,6 +508,8 @@ const UserSchema = new Schema<IUser>(
     cancelledChequeOrPassbook: { type: String, default: null },
     cibilScore: { type: Number },
     cibilLastFetchedAt: { type: Date },
+    cibilReport: { type: Object },
+    cibilRequestPayload: { type: Object },
     loginMethods: {
       type: [LoginMethodSchema],
       default: [
@@ -550,6 +554,7 @@ export const generateReferralCode = (userId: string) => {
 UserSchema.pre("save", async function (next) {
   const user = this as IUser;
   if (!user.isModified("password")) return next();
+  if (!user.password) return next();
 
   const salt = await bcrypt.genSalt(10);
   user.password = await bcrypt.hash(user.password, salt);

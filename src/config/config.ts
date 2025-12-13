@@ -27,7 +27,7 @@ export const config = {
       token: process.env.SUREPASS_PRODUCTION_TOKEN || "",
     },
     endpoints: {
-      cibil: "/api/v1/credit-report-cibil/fetch-report",
+      cibil: "/api/v1/credit-report-experian/fetch-report",
     },
   },
 
@@ -105,18 +105,16 @@ export const config = {
 
   integrations: {
     inboundWebhookKey: process.env.LEAD_WEBHOOK_KEY || "",
-    allowedSources:
-      process.env.LEAD_ALLOWED_SOURCES?.split(",")
-        .map((value) => value.trim().toLowerCase())
-        .filter(Boolean) ||
-      [
-        "meta_ads",
-        "google_ads",
-        "landing_page",
-        "affiliate",
-        "zapier",
-        "manual",
-      ],
+    allowedSources: process.env.LEAD_ALLOWED_SOURCES?.split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean) || [
+      "meta_ads",
+      "google_ads",
+      "landing_page",
+      "affiliate",
+      "zapier",
+      "manual",
+    ],
     zapier: {
       signingSecret: process.env.ZAPIER_SIGNING_SECRET || "",
       webhookKey: process.env.ZAPIER_WEBHOOK_KEY || "",

@@ -135,7 +135,7 @@ export const fetchSurepassCibilReport = async (
   try {
     const url = `${envConfig.baseUrl}${config.surepass.endpoints.cibil}`;
     payload = { ...payload, consent: "Y" };
-    console.log("first", payload, envConfig, url);
+    console.log(payload, envConfig, url);
     const { data } = await axios.post(url, payload, {
       headers: {
         Authorization: `Bearer ${envConfig.token}`,
