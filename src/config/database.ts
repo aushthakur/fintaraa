@@ -7,15 +7,6 @@ import { config as envConfig } from "dotenv";
 import { MongoClient, ServerApiVersion } from "mongodb";
 import { createDefaultAdmin } from "../utils/createDefaultAdmin";
 
-const options = {
-  family: 4,
-  maxPoolSize: 3,
-  minPoolSize: 1,
-  socketTimeoutMS: 60000,
-  heartbeatFrequencyMS: 10000,
-  serverSelectionTimeoutMS: 15000,
-};
-
 envConfig();
 
 const connectDB = async () => {
@@ -29,7 +20,6 @@ const connectDB = async () => {
 
     const uri = `${dbURL}/${dbName}`;
     const client = new MongoClient(uri, {
-      ...options,
       serverApi: {
         version: ServerApiVersion.v1,
         strict: true,
@@ -45,7 +35,7 @@ const connectDB = async () => {
       await client.close();
     }
 
-    await mongoose.connect(uri, options);
+    await mongoose.connect(uri);
     await createDefaultAdmin();
 
     figlet("Connected!", (err, data: any) => {
