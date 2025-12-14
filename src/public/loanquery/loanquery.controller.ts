@@ -267,9 +267,9 @@ export class LoanQueryController {
 
       // Handle status filtering
       // If status is explicitly provided, use it; otherwise exclude draft queries
-      if (!req.query.status) {
-        req.query.status = { $ne: ApplicationStatus.DRAFT };
-      }
+      // if (!req.query.status) {
+      //   req.query.status = { $ne: ApplicationStatus.DRAFT };
+      // }
 
       // Add lookup stages to populate assignedAgent and assignedLander
       const populateStages = [

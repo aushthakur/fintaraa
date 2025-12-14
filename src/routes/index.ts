@@ -23,6 +23,8 @@ import testimonialRoutes from "../admin/testimonial/testimonial.routes";
 import abusereportRoutes from "../public/abusereport/abusereport.routes";
 import blogcategoryRoutes from "../admin/blogcategory/blogcategory.routes";
 import insuranceQueryRoutes from "../public/insurancequery/insurancequery.routes";
+import offerRoutes from "../public/offer/offer.routes";
+import consentRoutes from "../public/consent/consent.routes";
 
 const router = Router();
 
@@ -49,5 +51,7 @@ router.use("/testimonial", testimonialRoutes);
 router.use("/abusereport", abusereportRoutes);
 router.use("/blogcategory", blogcategoryRoutes);
 router.use("/insurancequery", insuranceQueryRoutes);
+router.use("/offers", offerRoutes);
+router.use("/consent-history", consentRoutes);
 
 export default router;

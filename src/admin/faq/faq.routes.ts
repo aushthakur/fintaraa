@@ -7,6 +7,8 @@ const { createFaq, getFaqById, getAllFaqs, updateFaqById, deleteFaqById } =
 
 const router = express.Router();
 
+router.get("/public", asyncHandler(FaqController.getPublicFaqs));
+
 router
   .post("/", authenticateToken, authorize("admin"), asyncHandler(createFaq))
   .get("/", authenticateToken, authorize("admin"), asyncHandler(getAllFaqs))

@@ -20,6 +20,41 @@ export class FaqController {
     }
   }
 
+  static async getPublicFaqs(req: Request, res: Response, next: NextFunction) {
+    try {
+      const pipeline = [
+        { $match: { isActive: true } },
+        {
+          $lookup: {
+            from: "faqcategories",
+            localField: "category",
+            foreignField: "_id",
+            as: "categoryData",
+          },
+        },
+        { $unwind: { path: "$categoryData", preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            _id: 1,
+            answer: 1,
+            question: 1,
+            isActive: 1,
+            categoryName: "$categoryData.name",
+          },
+        },
+      ];
+      const result = await FaqService.getAll(
+        { ...req.query, pagination: "false" },
+        pipeline
+      );
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Data fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
   static async getAllFaqs(req: Request, res: Response, next: NextFunction) {
     try {
       const pipeline = [
