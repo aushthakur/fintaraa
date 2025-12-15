@@ -691,6 +691,7 @@ export class UserController {
         req.body.financialDetails,
         {}
       ) as Record<string, any>;
+      const bankDetails = parseJSONSafely(req.body.bankDetails, {});
       const verification = parseJSONSafely(req.body.verification, {}) as Record<
         string,
         any
@@ -709,6 +710,28 @@ export class UserController {
         ...mapUploadsToDocuments(req.body.incomeProof, "income_proof"),
       ];
 
+      const normalizeAddress = (addr: any) => {
+        if (!addr || typeof addr !== "object") return undefined;
+        return {
+          street: addr.street || addr.address,
+          city: addr.city,
+          state: addr.state,
+          country: addr.country || "India",
+          postalCode: addr.postalCode || addr.pinCode || addr.pincode,
+          label: addr.label || "home",
+          isDefault: addr.isDefault ?? true,
+        };
+      };
+
+      const currentAddress =
+        normalizeAddress(
+          addressDetails.currentAddress ||
+            addressDetails.address ||
+            addressDetails
+        ) || undefined;
+      const permanentAddress =
+        normalizeAddress(addressDetails.permanentAddress) || currentAddress;
+
       const kycUpdate: IKycProfile = {
         reusableAcrossApplications:
           req.body.reusableAcrossApplications ??
@@ -721,6 +744,22 @@ export class UserController {
         addressDetails: {
           ...(serializedKyc.addressDetails || {}),
           ...addressDetails,
+          ...(currentAddress
+            ? {
+                currentAddress: {
+                  ...(serializedKyc.addressDetails?.currentAddress || {}),
+                  ...currentAddress,
+                },
+              }
+            : {}),
+          ...(permanentAddress
+            ? {
+                permanentAddress: {
+                  ...(serializedKyc.addressDetails?.permanentAddress || {}),
+                  ...permanentAddress,
+                },
+              }
+            : {}),
         },
         employmentDetails: {
           ...(serializedKyc.employmentDetails || {}),
@@ -764,10 +803,36 @@ export class UserController {
         kycProfile: kycUpdate,
       };
 
+      if (currentAddress) {
+        const existingAddresses = (user.addresses || []).map((addr: any) =>
+          addr?.toObject ? addr.toObject() : addr
+        );
+        const updatedAddresses = [...existingAddresses];
+        if (updatedAddresses.length === 0) {
+          updatedAddresses.push(currentAddress);
+        } else {
+          updatedAddresses[0] = {
+            ...updatedAddresses[0],
+            ...currentAddress,
+            isDefault: true,
+          };
+        }
+        updatePayload.addresses = updatedAddresses;
+      }
+
       if (personalDetails?.panNumber)
         updatePayload.panCard = personalDetails.panNumber;
       if (personalDetails?.aadhaarNumber)
         updatePayload.aadhaarCard = personalDetails.aadhaarNumber;
+
+      if (bankDetails && Object.keys(bankDetails).length > 0) {
+        updatePayload.bankDetails = {
+          ...(user.bankDetails?.toObject
+            ? user.bankDetails.toObject()
+            : user.bankDetails || {}),
+          ...bankDetails,
+        };
+      }
 
       if (kycUpdate.documents?.length) {
         const currentVaultDocs =
