@@ -2,6 +2,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { config } from "../config/config";
+import { Counter } from "./counter.model";
 import mongoose, { Schema, Document, Types } from "mongoose";
 
 export enum UserStatus {
@@ -433,6 +434,7 @@ export interface IUser extends Document {
     email: boolean;
   };
   profile: {};
+  customerId?: string;
   generateJWT(): string;
   ownerType?: PropertyOwnerType;
   bankDetails?: typeof BankDetailsSchema;
@@ -478,6 +480,7 @@ const UserSchema = new Schema<IUser>(
       push: { type: Boolean, default: true },
       email: { type: Boolean, default: true },
     },
+    customerId: { type: String, unique: true, sparse: true, index: true },
     profile: {},
     agreedToTerms: { type: Boolean, required: true, default: false },
     ownerType: { type: String, enum: Object.values(PropertyOwnerType) },
@@ -553,6 +556,20 @@ export const generateReferralCode = (userId: string) => {
 // 🔐 Password Hash Middleware
 UserSchema.pre("save", async function (next) {
   const user = this as IUser;
+  if (user.isNew && user.role === "user" && !user.customerId) {
+    const session = user.$session();
+    const counter = await Counter.findOneAndUpdate(
+      { key: "customerId" },
+      { $inc: { seq: 1 } },
+      {
+        new: true,
+        upsert: true,
+        setDefaultsOnInsert: true,
+        ...(session ? { session } : {}),
+      }
+    );
+    user.customerId = `FINT${counter.seq}`;
+  }
   if (!user.isModified("password")) return next();
   if (!user.password) return next();
 

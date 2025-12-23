@@ -75,6 +75,8 @@ export const MEDIUM_PRIORITY_TAGS = [
 
 // 🟡 LOW: Informational updates, feature requests, minor actions
 export const LOW_PRIORITY_TAGS = [
+  "app_support",
+  "callback_request",
   "successful_sale",
   "successful_purchase",
   "successful_barter_exchange",

@@ -11,6 +11,7 @@ import Ticket from "../../modals/ticket.model";
 import ApiResponse from "../../utils/ApiResponse";
 import { extractImageUrl } from "../../utils/helper";
 import { deleteFromS3 } from "../../config/s3Uploader";
+import { LoanQuery } from "../../modals/loanquery.model";
 import { Request, Response, NextFunction } from "express";
 import { emitSupportMessage } from "../../config/socket.io";
 import { CommonService } from "../../services/common.services";
@@ -497,6 +498,20 @@ export const getAgents = async (
   next: NextFunction
 ): Promise<any> => {
   try {
+    const { _id: userId, role } = req.user || {};
+    if (role === "user" && userId) {
+      const assignedAgentIds = await LoanQuery.distinct("assignedAgent", {
+        customerId: userId,
+        assignedAgent: { $exists: true, $ne: null },
+      });
+      const agents = assignedAgentIds.length
+        ? await Agent.find({ _id: { $in: assignedAgentIds } })
+        : [];
+      return res
+        .status(200)
+        .json(new ApiResponse(200, agents, "Data fetched successfully"));
+    }
+
     const result = await agentService.getAll(req.query);
     return res
       .status(200)

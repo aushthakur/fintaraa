@@ -128,11 +128,15 @@ export const fetchUserCibilReport = async (
     const refreshLocked = daysSinceFetch !== null && daysSinceFetch < 30;
     const daysRemaining = Math.max(0, Math.ceil(30 - (daysSinceFetch || 0)));
     const cachedReport = (user as any)?.cibilReport || null;
+    const cachedScoreExists =
+      (user as any)?.cibilReport?.data?.credit_score || null;
     const cachedPayload = (user as any)?.cibilRequestPayload || null;
 
-    console.log(user);
-
-    if (!forceRefresh && user.cibilScore && refreshLocked) {
+    if (!forceRefresh && cachedScoreExists && refreshLocked) {
+      console.log(
+        "Returning cached CIBIL score, refresh locked. Days remaining:",
+        daysRemaining
+      );
       return res.status(200).json(
         new ApiResponse(200, {
           cached: true,
