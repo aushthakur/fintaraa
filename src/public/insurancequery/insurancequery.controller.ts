@@ -7,6 +7,7 @@ import { ApplicationStatus, allowedFieldsByFormType, InsuranceQueryActivityType 
 import LanderAssignmentEngine from "../../services/landerAssignment.service";
 import { Types } from "mongoose";
 import Lander from "../../modals/lander.model";
+import { User } from "../../modals/user.model";
 
   const insuranceQueryService = new CommonService(InsuranceQuery);
 
@@ -73,6 +74,194 @@ const processFileUploads = (req: Request) => {
   });
 };
 
+const toNumber = (value: any) => {
+  if (value === null || value === undefined) return undefined;
+  const cleaned = String(value).replace(/,/g, "").trim();
+  if (!cleaned) return undefined;
+  const num = Number(cleaned);
+  return Number.isFinite(num) ? num : undefined;
+};
+
+const normalizeDateValue = (value: any) => {
+  if (!value) return undefined;
+  if (value instanceof Date) return value;
+  const raw = String(value).trim();
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
+    const [dd, mm, yyyy] = raw.split("/").map(Number);
+    const parsed = new Date(yyyy, mm - 1, dd);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+};
+
+const splitName = (fullName?: string) => {
+  if (!fullName) return { firstName: undefined, lastName: undefined };
+  const parts = fullName.trim().split(/\s+/);
+  const firstName = parts.shift();
+  const lastName = parts.join(" ") || undefined;
+  return { firstName, lastName };
+};
+
+const normalizeInsurancePayload = (
+  req: Request,
+  user?: any,
+  existing?: any
+) => {
+  const body: any = req.body || {};
+  const kyc = user?.kycProfile || {};
+  const personal = kyc.personalDetails || {};
+  const addressDetails = kyc.addressDetails || {};
+  const currentAddress =
+    addressDetails.currentAddress || addressDetails.address || {};
+  const financial = kyc.financialDetails || {};
+  const userAddress =
+    Array.isArray(user?.addresses) && user.addresses.length
+      ? user.addresses[0]
+      : null;
+
+  const pick = (...values: any[]) =>
+    values.find(
+      (value) => value !== undefined && value !== null && value !== ""
+    );
+
+  const nameSource = pick(
+    body.fullName,
+    body.name,
+    body.memberName,
+    personal.fullName,
+    user?.name
+  );
+  if (!body.firstName || !body.lastName) {
+    const derived = splitName(nameSource);
+    if (!body.firstName && derived.firstName) body.firstName = derived.firstName;
+    if (!body.lastName && derived.lastName) body.lastName = derived.lastName;
+  }
+
+  if (!body.dateOfBirth) {
+    body.dateOfBirth = pick(
+      body.dob,
+      body.birthDate,
+      personal.dateOfBirth,
+      user?.dateOfBirth
+    );
+  }
+  body.dateOfBirth = normalizeDateValue(body.dateOfBirth);
+
+  body.gender = pick(body.gender, personal.gender, user?.gender);
+  body.mobile = pick(body.mobile, body.phone, body.phoneNumber, user?.mobile);
+  body.email = pick(body.email, body.emailAddress, user?.email);
+
+  body.fullAddress = pick(
+    body.fullAddress,
+    body.address,
+    body.propertyAddress,
+    body.shopAddress,
+    currentAddress?.street || currentAddress?.address,
+    userAddress?.street || userAddress?.address
+  );
+  body.city = pick(body.city, currentAddress?.city, userAddress?.city);
+  body.state = pick(body.state, currentAddress?.state, userAddress?.state);
+  body.pincode = pick(
+    body.pincode,
+    body.pinCode,
+    body.postalCode,
+    currentAddress?.postalCode || currentAddress?.pincode || currentAddress?.pinCode,
+    userAddress?.postalCode || userAddress?.pincode || userAddress?.pinCode
+  );
+
+  if (!body.nomineeName) {
+    body.nomineeName = pick(body.nominee, user?.name, "Not Provided");
+  }
+  if (!body.nomineeRelation) {
+    body.nomineeRelation = pick(
+      body.nomineeRelation,
+      body.nomineeRel,
+      body.nomineeRelationship,
+      body.relation,
+      "self"
+    );
+  }
+
+  body.occupation = pick(
+    body.occupation,
+    body.jobTitle,
+    kyc.employmentDetails?.employmentType,
+    "not_provided"
+  );
+
+  const annualIncome = pick(
+    toNumber(body.annualIncome),
+    toNumber(body.income),
+    toNumber(body.salary),
+    toNumber(financial.annualIncome)
+  );
+  const monthlyIncome = pick(
+    toNumber(body.monthlyIncome),
+    toNumber(body.netIncome),
+    toNumber(financial.monthlyIncome)
+  );
+  if (annualIncome !== undefined) {
+    body.annualIncome = annualIncome;
+  } else if (monthlyIncome !== undefined) {
+    body.annualIncome = Math.round(monthlyIncome * 12);
+  }
+
+  const kycDocType = pick(body.kycDocumentType, body.kycDocType, body.documentType);
+  if (kycDocType) {
+    const normalizedType = String(kycDocType).toLowerCase();
+    body.kycDocumentType = ["pan", "aadhaar", "driving_license"].includes(normalizedType)
+      ? normalizedType
+      : "pan";
+  } else if (!body.kycDocumentType) {
+    body.kycDocumentType = "pan";
+  }
+
+  const kycDocUrl = pick(
+    body.kycDocumentUrl,
+    body.kycDocs,
+    body.kycDocument,
+    body.panKycProof,
+    user?.panCardUrl,
+    user?.aadhaarCardUrl
+  );
+  if (kycDocUrl && !body.kycDocumentUrl) {
+    body.kycDocumentUrl = extractFileUrl(kycDocUrl);
+  }
+
+  if (!body.typeOfInsurance) {
+    const candidate = pick(body.insuranceType, body.policyType, body.type);
+    if (candidate) body.typeOfInsurance = String(candidate).toLowerCase();
+  }
+
+  if (existing) {
+    const requiredFields = [
+      "firstName",
+      "lastName",
+      "dateOfBirth",
+      "gender",
+      "mobile",
+      "email",
+      "fullAddress",
+      "pincode",
+      "city",
+      "state",
+      "nomineeName",
+      "nomineeRelation",
+      "occupation",
+      "annualIncome",
+      "kycDocumentType",
+      "kycDocumentUrl",
+      "typeOfInsurance",
+    ];
+    requiredFields.forEach((field) => {
+      if (body[field] === undefined || body[field] === null || body[field] === "") {
+        body[field] = existing?.[field];
+      }
+    });
+  }
+};
+
 export class InsuranceQueryController {
   static async createQuery(
     req: Request,
@@ -93,6 +282,8 @@ export class InsuranceQueryController {
 
       // Automatically set customerId from token
       req.body.customerId = customerId;
+      const user = await User.findById(customerId);
+      normalizeInsurancePayload(req, user);
 
       // Validate policyDetails against typeOfInsurance if both are provided (skip for draft)
       // This must run AFTER processFileUploads since files are moved to policyDetails
@@ -389,6 +580,8 @@ export class InsuranceQueryController {
 
       // Prevent changing customerId
       delete req.body.customerId;
+      const user = await User.findById(customerId);
+      normalizeInsurancePayload(req, user, existingResult);
 
       // Merge with existing policyDetails if updating
       if (req.body.policyDetails && existingResult.policyDetails) {
@@ -967,5 +1160,3 @@ export class InsuranceQueryController {
     }
   }
 }
-
-
