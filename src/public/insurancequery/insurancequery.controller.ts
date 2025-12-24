@@ -205,6 +205,8 @@ const normalizeInsurancePayload = (
     body.annualIncome = annualIncome;
   } else if (monthlyIncome !== undefined) {
     body.annualIncome = Math.round(monthlyIncome * 12);
+  } else if (body.annualIncome === undefined || body.annualIncome === null) {
+    body.annualIncome = 0;
   }
 
   const kycDocType = pick(body.kycDocumentType, body.kycDocType, body.documentType);
