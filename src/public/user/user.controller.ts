@@ -11,12 +11,16 @@ import {
   User,
   UserStatus,
   IKycProfile,
+  LoanProductType,
   LoginMethodType,
   KycVerificationStatus,
-  LoanProductType,
 } from "../../modals/user.model";
+import { ReferralEvent } from "../../modals/referralEvent.model";
 import { CommonService } from "../../services/common.services";
 import { generateAccessToken, generateRefreshToken } from "../../utils/token";
+import { rewardReferralIfEligible } from "../../services/referral.service";
+import { sendSingleNotification } from "../../services/notification.service";
+import { UserType } from "../../modals/notification.model";
 
 const otpService = new CommonService(Otp);
 const userService = new CommonService(User);
@@ -59,6 +63,7 @@ const normalizeDocumentEntries = (
       return {
         docType: doc.docType || doc.type || fallbackType,
         number: doc.number || doc.docNumber,
+        password: encryptDocumentPassword(doc.password || doc.docPassword),
         issuer: doc.issuer || doc.issuedBy || "user_provided",
         fileUrl: doc.fileUrl || doc.url,
         issuedOn: doc.issuedOn || doc.issueDate,
@@ -71,15 +76,26 @@ const normalizeDocumentEntries = (
 
 const mapUploadsToDocuments = (
   uploads: any,
-  fallbackType = "supporting_document"
+  fallbackType = "supporting_document",
+  meta?: {
+    docNumbers?: any[];
+    docPasswords?: any[];
+    docTypes?: any[];
+    docNames?: any[];
+  }
 ) => {
+  const docNumbers = meta?.docNumbers || [];
+  const docPasswords = meta?.docPasswords || [];
+  const docTypes = meta?.docTypes || [];
+  const docNames = meta?.docNames || [];
   return toArrayPayload(uploads)
-    .map((file: any) => ({
-      docType: file?.docType || fallbackType,
+    .map((file: any, index: number) => ({
+      docType: file?.docType || docTypes[index] || fallbackType,
       fileUrl: file?.url,
-      number: file?.number,
+      number: file?.number || docNumbers[index],
+      password: encryptDocumentPassword(file?.password || docPasswords[index]),
       issuer: file?.issuer || "user_uploaded",
-      referenceId: file?.name,
+      referenceId: file?.name || docNames[index],
       verified: false,
     }))
     .filter((doc: any) => doc.fileUrl);
@@ -138,6 +154,73 @@ const normalizeLoginMethodType = (method?: string): LoginMethodType | null => {
   return (match as LoginMethodType) || null;
 };
 
+const generateReferralCode = async () => {
+  const prefix = "FINTARA";
+  const maxAttempts = 10;
+  for (let i = 0; i < maxAttempts; i += 1) {
+    const suffix = Math.floor(100 + Math.random() * 900).toString();
+    const code = `${prefix}${suffix}`;
+    const exists = await User.findOne({ referralCode: code }).select("_id");
+    if (!exists) return code;
+  }
+  throw new ApiError(500, "Failed to generate referral code");
+};
+
+const resolveDocPasswordKey = () => {
+  const raw = config.documents?.passwordEncryptionKey || "";
+  if (!raw) return null;
+  const base64 = Buffer.from(raw, "base64");
+  if (base64.length === 32) return base64;
+  const hex = Buffer.from(raw, "hex");
+  if (hex.length === 32) return hex;
+  const utf8 = Buffer.from(raw, "utf8");
+  if (utf8.length === 32) return utf8;
+  return null;
+};
+
+const encryptDocumentPassword = (value?: string) => {
+  if (!value) return undefined;
+  const key = resolveDocPasswordKey();
+  if (!key) {
+    throw new ApiError(
+      500,
+      "Document password encryption key missing or invalid. Set DOC_PASSWORD_KEY (32 bytes)."
+    );
+  }
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(value, "utf8"),
+    cipher.final(),
+  ]);
+  const authTag = cipher.getAuthTag();
+  return `${iv.toString("base64")}:${authTag.toString(
+    "base64"
+  )}:${encrypted.toString("base64")}`;
+};
+
+const safeNotify = async (payload: {
+  type: string;
+  toUserId: string;
+  toRole: UserType;
+  context?: Record<string, string | number>;
+  fromUser?: { _id: string; role: UserType };
+}) => {
+  try {
+    await sendSingleNotification({
+      type: payload.type,
+      toUserId: payload.toUserId,
+      toRole: payload.toRole,
+      fromUser: payload.fromUser,
+      context: payload.context || {},
+    });
+  } catch (error: any) {
+    console.log(
+      `[Notification] Failed to send ${payload.type}: ${error?.message || error}`
+    );
+  }
+};
+
 export class UserController {
   static async createUser(req: Request, res: Response, next: NextFunction) {
     try {
@@ -147,6 +230,7 @@ export class UserController {
         mobile,
         panCard,
         aadhaarCard,
+        referralCode: referralInput,
         role = "user",
         agreedToTerms = true,
         privacyPolicyAccepted = true,
@@ -243,7 +327,39 @@ export class UserController {
           .status(400)
           .json(new ApiError(400, "Phone Number & Email ID Already Exist!"));
       }
+
+      const referralCode = await generateReferralCode();
+      userData.referralCode = referralCode;
+
+      let referrer: any = null;
+      if (referralInput) {
+        referrer = await User.findOne({ referralCode: referralInput });
+        if (!referrer) {
+          return res
+            .status(400)
+            .json(new ApiError(400, "Invalid referral code"));
+        }
+        userData.referredBy = referrer._id;
+      }
+
       const response = await userService.create(userData);
+
+      if (referrer) {
+        await ReferralEvent.create({
+          referrer: referrer._id,
+          referredUser: response._id,
+          referralCode: referrer.referralCode,
+          status: "pending",
+          points: 100,
+        });
+      }
+      await safeNotify({
+        type: "account-created",
+        toUserId: response._id.toString(),
+        toRole: UserType.USER,
+        fromUser: { _id: response._id.toString(), role: UserType.USER },
+        context: { userName: response?.name || "User" },
+      });
       return res
         .status(201)
         .json(
@@ -343,6 +459,12 @@ export class UserController {
         populate: false,
       });
 
+      await safeNotify({
+        type: "preferences-updated",
+        toUserId: updatedUser._id.toString(),
+        toRole: UserType.USER,
+        fromUser: { _id: updatedUser._id.toString(), role: UserType.USER },
+      });
       return res
         .status(200)
         .json(
@@ -369,6 +491,14 @@ export class UserController {
 
       const storageProvider = req.body.storageProvider || "internal";
       const defaultDocType = req.body.defaultDocType || "digital_document";
+      const docNumbers = toArrayPayload(
+        req.body.docNumber || req.body.documentNumber || req.body.number
+      );
+      const docPasswords = toArrayPayload(
+        req.body.docPassword || req.body.password
+      );
+      const docTypes = toArrayPayload(req.body.docType);
+      const docNames = toArrayPayload(req.body.name);
 
       const providedDocs = normalizeDocumentEntries(
         req.body.documents,
@@ -376,15 +506,56 @@ export class UserController {
       );
       const uploadedDocs = mapUploadsToDocuments(
         req.body.digiLockerFiles || req.body.documentsUpload,
-        defaultDocType
+        defaultDocType,
+        {
+          docNumbers,
+          docPasswords,
+          docTypes,
+          docNames,
+        }
       );
 
       const currentVaultDocs =
         JSON.parse(JSON.stringify(user.digiLockerVault?.documents || [])) || [];
-      const mergedDocs = mergeDocuments(currentVaultDocs, [
-        ...providedDocs,
-        ...uploadedDocs,
-      ]);
+      const incomingDocs = [...providedDocs, ...uploadedDocs];
+      const mergedByType = new Map<string, any>();
+      currentVaultDocs.forEach((doc: any) => {
+        if (!doc?.docType) return;
+        mergedByType.set(doc.docType, doc);
+      });
+      incomingDocs.forEach((doc: any) => {
+        if (!doc?.docType) return;
+        const existing = mergedByType.get(doc.docType) || {};
+        const merged = { ...existing, ...doc };
+        if (!doc.fileUrl && existing.fileUrl) merged.fileUrl = existing.fileUrl;
+        if (!doc.referenceId && existing.referenceId)
+          merged.referenceId = existing.referenceId;
+        if (!doc.issuedOn && existing.issuedOn)
+          merged.issuedOn = existing.issuedOn;
+        if (!doc.number && existing.number) merged.number = existing.number;
+        if (!doc.password && existing.password)
+          merged.password = existing.password;
+        mergedByType.set(doc.docType, merged);
+      });
+
+      const mergedDocs: any[] = [];
+      for (const [docType, doc] of mergedByType.entries()) {
+        const incoming = incomingDocs.find(
+          (item) => item?.docType && item.docType === docType
+        );
+        const existing = currentVaultDocs.find(
+          (item: any) => item?.docType === docType
+        );
+        if (incoming?.fileUrl && existing?.fileUrl) {
+          const nextUrl = await extractImageUrl(
+            [{ url: incoming.fileUrl }],
+            existing.fileUrl
+          );
+          mergedDocs.push({ ...doc, fileUrl: nextUrl });
+        } else {
+          mergedDocs.push(doc);
+        }
+      }
 
       const existingKyc: IKycProfile =
         JSON.parse(JSON.stringify(user.kycProfile || {})) || {};
@@ -406,15 +577,31 @@ export class UserController {
         { new: true, populate: false }
       );
 
-      return res
-        .status(200)
-        .json(
-          new ApiResponse(
-            200,
-            updatedUser.digiLockerVault,
-            "DigiLocker vault synced successfully"
-          )
-        );
+      const sanitizedDocs = (updatedUser.digiLockerVault?.documents || []).map(
+        (doc: any) => {
+          const { password, ...rest } = doc?.toObject ? doc.toObject() : doc;
+          return rest;
+        }
+      );
+
+      await safeNotify({
+        type: "digilocker-synced",
+        toUserId: updatedUser._id.toString(),
+        toRole: UserType.USER,
+        fromUser: { _id: updatedUser._id.toString(), role: UserType.USER },
+      });
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            ...(((updatedUser as any).digiLockerVault?.toObject
+              ? (updatedUser as any).digiLockerVault.toObject()
+              : updatedUser.digiLockerVault) || {}),
+            documents: sanitizedDocs,
+          },
+          "DigiLocker vault synced successfully"
+        )
+      );
     } catch (error) {
       next(error);
     }
@@ -428,15 +615,24 @@ export class UserController {
     try {
       const { _id } = req.user;
       const user = await userService.getById(_id, false);
-      return res
-        .status(200)
-        .json(
-          new ApiResponse(
-            200,
-            user?.digiLockerVault || {},
-            "DigiLocker vault fetched successfully"
-          )
-        );
+      const sanitizedDocs = (user?.digiLockerVault?.documents || []).map(
+        (doc: any) => {
+          const { password, ...rest } = doc?.toObject ? doc.toObject() : doc;
+          return rest;
+        }
+      );
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            ...(((user as any)?.digiLockerVault?.toObject
+              ? (user as any).digiLockerVault.toObject()
+              : user?.digiLockerVault) || {}),
+            documents: sanitizedDocs,
+          },
+          "DigiLocker vault fetched successfully"
+        )
+      );
     } catch (error) {
       next(error);
     }
@@ -464,6 +660,13 @@ export class UserController {
         email: userData.email,
       };
       const token = jwt.sign(payload, config.jwt.secret, { expiresIn: "7d" });
+      await safeNotify({
+        type: "login-success",
+        toUserId: userData._id.toString(),
+        toRole: UserType.USER,
+        fromUser: { _id: userData._id.toString(), role: UserType.USER },
+        context: { loginTime: new Date().toLocaleString() },
+      });
       res.status(200).json({
         user,
         token,
@@ -507,7 +710,7 @@ export class UserController {
         });
       }
 
-      const otpCode = Math.floor(1000 + Math.random() * 900000).toString();
+      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins expiry
 
       // Save or update OTP
@@ -589,9 +792,22 @@ export class UserController {
           req.body.avatar,
           existingUser?.avatar as string
         );
+      if (!avatar && profilePicture) {
+        avatar = await extractImageUrl(
+          req.body.profilePicture,
+          existingUser?.avatar as string
+        );
+      }
 
       const data: any = { ...req.body, avatar: avatar || profilePicture };
       const result = await userService.updateById(id || _id, data);
+      await safeNotify({
+        type: "profile-updated",
+        toUserId: result._id.toString(),
+        toRole: UserType.USER,
+        fromUser: { _id: result._id.toString(), role: UserType.USER },
+        context: { source: "profile" },
+      });
       return res
         .status(200)
         .json(new ApiResponse(200, result, `User updated successfully`));
@@ -684,8 +900,8 @@ export class UserController {
       ) as Record<string, any>;
       const addressDetails = parseJSONSafely(
         req.body.addressDetails,
-        {}
-      ) as Record<string, any>;
+        null
+      ) as Record<string, any> | null;
       const employmentDetails = parseJSONSafely(req.body.employmentDetails, {});
       const financialDetails = parseJSONSafely(
         req.body.financialDetails,
@@ -712,6 +928,17 @@ export class UserController {
 
       const normalizeAddress = (addr: any) => {
         if (!addr || typeof addr !== "object") return undefined;
+        const hasValue = [
+          "street",
+          "address",
+          "city",
+          "state",
+          "country",
+          "postalCode",
+          "pinCode",
+          "pincode",
+        ].some((key) => Boolean(addr[key]));
+        if (!hasValue) return undefined;
         return {
           street: addr.street || addr.address,
           city: addr.city,
@@ -723,14 +950,16 @@ export class UserController {
         };
       };
 
-      const currentAddress =
-        normalizeAddress(
-          addressDetails.currentAddress ||
-            addressDetails.address ||
-            addressDetails
-        ) || undefined;
-      const permanentAddress =
-        normalizeAddress(addressDetails.permanentAddress) || currentAddress;
+      const currentAddress = addressDetails
+        ? normalizeAddress(
+            addressDetails.currentAddress ||
+              addressDetails.address ||
+              addressDetails
+          )
+        : undefined;
+      const permanentAddress = addressDetails
+        ? normalizeAddress(addressDetails.permanentAddress) || currentAddress
+        : undefined;
 
       const kycUpdate: IKycProfile = {
         reusableAcrossApplications:
@@ -743,7 +972,7 @@ export class UserController {
         },
         addressDetails: {
           ...(serializedKyc.addressDetails || {}),
-          ...addressDetails,
+          ...(addressDetails || {}),
           ...(currentAddress
             ? {
                 currentAddress: {
@@ -874,6 +1103,22 @@ export class UserController {
         new: true,
       });
 
+      if (verification?.status === KycVerificationStatus.VERIFIED) {
+        await rewardReferralIfEligible(_id);
+        await safeNotify({
+          type: "kyc-verified",
+          toUserId: updatedUser._id.toString(),
+          toRole: UserType.USER,
+          fromUser: { _id: updatedUser._id.toString(), role: UserType.USER },
+        });
+      }
+      await safeNotify({
+        type: "kyc-profile-updated",
+        toUserId: updatedUser._id.toString(),
+        toRole: UserType.USER,
+        fromUser: { _id: updatedUser._id.toString(), role: UserType.USER },
+      });
+
       return res
         .status(200)
         .json(
@@ -891,7 +1136,11 @@ export class UserController {
   ): Promise<any> {
     try {
       const { _id: userId } = (req as any).user;
-      const result = await userService.getById(userId);
+      let result: any = await userService.getById(userId);
+      if (!result?.referralCode) {
+        const referralCode = await generateReferralCode();
+        result = await userService.updateById(userId, { referralCode });
+      }
       return res
         .status(200)
         .json(new ApiResponse(200, result, `User fetched successfully`));

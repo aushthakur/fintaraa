@@ -83,9 +83,11 @@ export const NotificationService = {
       if (!recipient) throw new Error(`Recipient not found: ${toUserId}`);
       if (!senderUser) throw new Error(`Sender not found: ${sender._id}`);
 
-      const isUserRole = ["worker", "contractor", "employer"].includes(toRole);
+      const isUserRole = ["user", "worker", "contractor", "employer"].includes(
+        toRole
+      );
       const preferences = isUserRole
-        ? recipient?.preferences?.notifications || {}
+        ? recipient?.preferences?.notifications || recipient?.notification || {}
         : {};
       const smsAllowed = preferences.sms !== false;
       const pushAllowed = preferences.push !== false;
@@ -95,7 +97,7 @@ export const NotificationService = {
       const { fcmToken, mobile, email }: any = recipient;
 
       // --- Push Notification ---
-      if (pushAllowed && fcmToken && admin) {
+      if (pushAllowed && fcmToken && admin && config?.notification?.enabled) {
         tasks.push(
           admin
             .messaging()
@@ -121,33 +123,10 @@ export const NotificationService = {
       }
 
       // --- Email Notification ---
-      // if (emailAllowed && email && config?.email?.enabled) {
-      //   tasks.push(
-      //     sendEmail({
-      //       to: email,
-      //       subject: title,
-      //       text: message,
-      //       html: `<p>${message}</p>`,
-      //       from: {
-      //         name: senderUser?.fullName || senderUser?.name || "Notification Service",
-      //         email: senderUser?.email || config?.email?.from,
-      //       },
-      //     })
-      //       .then(() => {
-      //         if (config.env === "development") {
-      //           console.log(`[Notification] Email sent to ${email}`);
-      //         }
-      //       })
-      //       .catch((err) => {
-      //         console.log(
-      //           `[Notification Error] Email failed for ${email}: ${err.message}`
-      //         );
-      //       })
-      //   );
-      // }
+      // Email notifications are OTP-only in the current email service.
 
       // --- SMS Notification ---
-      // if (smsAllowed && mobile && config.sms.enabled) {
+      // if (smsAllowed && mobile && config?.sms?.enabled) {
       //   tasks.push(
       //     sendSMS({ to: mobile, message })
       //       .then(() => {

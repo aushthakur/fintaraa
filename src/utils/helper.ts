@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { toBoolean } from "validator";
 import { deleteFromS3 } from "../config/s3Uploader";
+import { config } from "../config/config";
 
 const { ObjectId } = mongoose.Types;
 
@@ -525,8 +526,25 @@ export const extractImageUrl = async (input: any, existing: string) => {
   if (Array.isArray(input) && input.length > 0) {
     const newUrl = input[0]?.url;
     if (existing && existing !== newUrl) {
-      const s3Key = existing.split(".com/")[1];
-      await deleteFromS3(s3Key);
+      const s3Key = (() => {
+        try {
+          const parsed = new URL(existing);
+          const path = parsed.pathname.replace(/^\/+/, "");
+          if (config.s3?.bucket && path.startsWith(`${config.s3.bucket}/`)) {
+            return path.slice(config.s3.bucket.length + 1);
+          }
+          if (config.s3?.bucket && parsed.hostname.startsWith(`${config.s3.bucket}.`)) {
+            return path;
+          }
+          return path;
+        } catch {
+          const bucketMatch = config.s3?.bucket
+            ? existing.split(`/${config.s3.bucket}/`)[1]
+            : undefined;
+          return existing.split(".com/")[1] || bucketMatch;
+        }
+      })();
+      if (s3Key) await deleteFromS3(s3Key);
     }
     return newUrl || "";
   }

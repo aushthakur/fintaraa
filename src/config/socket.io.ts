@@ -27,6 +27,13 @@ interface MessageData {
   chatFile?: string;
   receiverId: string;
   messageId?: string;
+  attachments?: Array<{
+    url: string;
+    type?: string;
+    name?: string;
+    size?: number;
+    mimetype?: string;
+  }>;
 }
 
 interface TypingData {
@@ -364,7 +371,11 @@ class SocketValidator {
       return { valid: false, error: "Invalid receiverId" };
     }
 
-    if (!data.text && !data.chatFile) {
+    if (
+      !data.text &&
+      !data.chatFile &&
+      (!data.attachments || data.attachments.length === 0)
+    ) {
       return { valid: false, error: "Message must have text or file" };
     }
 

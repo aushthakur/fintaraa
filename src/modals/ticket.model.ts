@@ -191,6 +191,14 @@ type Tag =
   | (typeof CHAT_SOCIAL_TAGS)[number];
 
 /** Interfaces */
+interface IAttachment {
+  url: string;
+  type?: string;
+  name?: string;
+  size?: number;
+  mimetype?: string;
+}
+
 interface IInteraction {
   content?: string;
   timestamp?: Date;
@@ -199,6 +207,7 @@ interface IInteraction {
   initiatorType: UserType;
   receiver: Types.ObjectId;
   initiator: Types.ObjectId;
+  attachments?: IAttachment[];
 }
 
 export interface ITicket extends Document {
@@ -251,9 +260,21 @@ const InteractionSchema = new Schema<IInteraction>(
     content: {
       type: String,
       required: function (this: IInteraction) {
-        return this.action === "commented";
+        return (
+          this.action === "commented" &&
+          (!this.attachments || this.attachments.length === 0)
+        );
       },
     },
+    attachments: [
+      {
+        url: { type: String },
+        type: { type: String },
+        name: { type: String },
+        size: { type: Number },
+        mimetype: { type: String },
+      },
+    ],
     timestamp: {
       type: Date,
       default: Date.now,

@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
 
 export enum UserType {
+  USER = "user",
   ADMIN = "admin",
   AGENT = "agent",
   WORKER = "worker",

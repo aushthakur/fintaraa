@@ -106,6 +106,17 @@ const processFileUploads = (req: Request) => {
   });
 };
 
+const normalizeAccountType = (value?: string) => {
+  if (!value) return value;
+  const normalized = value.toString().trim().toLowerCase();
+  const compact = normalized.replace(/[\s_-]+/g, "");
+  if (["saving", "savings", "savingaccount", "savingsaccount"].includes(compact))
+    return "savings";
+  if (["current", "currentaccount"].includes(compact)) return "current";
+  if (["salary", "salaryaccount"].includes(compact)) return "salary";
+  return normalized;
+};
+
 export class LoanQueryController {
   static async createQuery(req: Request, res: Response, next: NextFunction) {
     try {
@@ -122,6 +133,9 @@ export class LoanQueryController {
 
       // Automatically set customerId from token
       req.body.customerId = customerId;
+      if (req.body.accountType) {
+        req.body.accountType = normalizeAccountType(req.body.accountType);
+      }
 
       // Validate policyDetails against loanType if both are provided (skip for draft)
       // This must run AFTER processFileUploads since files are moved to policyDetails
@@ -419,6 +433,9 @@ export class LoanQueryController {
 
       // Prevent changing customerId
       delete req.body.customerId;
+      if (req.body.accountType) {
+        req.body.accountType = normalizeAccountType(req.body.accountType);
+      }
 
       // Merge with existing policyDetails if updating
       if (req.body.policyDetails && existingResult.policyDetails) {

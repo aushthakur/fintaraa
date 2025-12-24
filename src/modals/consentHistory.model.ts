@@ -9,8 +9,8 @@ export interface IConsentEvent extends Document {
   channel?: "app" | "web" | "agent" | "api";
   referenceId?: string;
   status?: "granted" | "revoked" | "expired" | "denied";
-  collectedAt: Date;
   expiresAt?: Date;
+  collectedAt: Date;
   ipAddress?: string;
   userAgent?: string;
   metadata?: Record<string, any>;
@@ -20,7 +20,12 @@ export interface IConsentEvent extends Document {
 
 const ConsentHistorySchema = new Schema<IConsentEvent>(
   {
-    user: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    user: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
     type: {
       type: String,
       enum: ["cibil", "kyc", "bank_statement", "identity", "other"],
@@ -29,8 +34,12 @@ const ConsentHistorySchema = new Schema<IConsentEvent>(
     partner: { type: String, trim: true },
     purpose: { type: String, trim: true },
     scope: { type: [String], default: [] },
-    channel: { type: String, enum: ["app", "web", "agent", "api"], default: "app" },
     referenceId: { type: String, trim: true },
+    channel: {
+      type: String,
+      enum: ["app", "web", "agent", "api"],
+      default: "app",
+    },
     status: {
       type: String,
       enum: ["granted", "revoked", "expired", "denied"],

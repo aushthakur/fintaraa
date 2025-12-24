@@ -15,6 +15,8 @@ import { LoanQuery } from "../../modals/loanquery.model";
 import { Request, Response, NextFunction } from "express";
 import { emitSupportMessage } from "../../config/socket.io";
 import { CommonService } from "../../services/common.services";
+import { sendSingleNotification } from "../../services/notification.service";
+import { UserType } from "../../modals/notification.model";
 
 const agentService = new CommonService(Agent);
 const ticketService = new CommonService(Ticket);
@@ -231,6 +233,19 @@ export const createTicket = async (
     const assignment = await assignTicketToAgent(
       (ticket as any)._id.toString()
     );
+    try {
+      await sendSingleNotification({
+        type: "ticket-created",
+        toUserId: id.toString(),
+        toRole: UserType.USER,
+        fromUser: { _id: id.toString(), role: UserType.USER },
+        context: { ticketId: ticket._id.toString() },
+      });
+    } catch (error: any) {
+      console.log(
+        `[Notification] Failed to send ticket-created: ${error?.message || error}`
+      );
+    }
 
     return res.status(201).json({
       data: ticket,
@@ -591,6 +606,7 @@ const createInteractionObject = ({
   receiverType,
   action,
   content,
+  attachments,
 }: any): Promise<any> => {
   const interaction: any = {
     initiator,
@@ -602,11 +618,38 @@ const createInteractionObject = ({
   };
 
   if (action === "commented") {
-    if (!content)
-      throw new ApiError(400, "Content is required for 'commented' action");
-    interaction.content = content;
+    const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    if (!content && !hasAttachments) {
+      throw new ApiError(
+        400,
+        "Content or attachment is required for 'commented' action"
+      );
+    }
+    if (content) {
+      interaction.content = content;
+    }
+    if (hasAttachments) {
+      interaction.attachments = attachments;
+    }
   }
   return interaction;
+};
+
+const getFileType = (
+  mimetype: string
+): "image" | "video" | "audio" | "document" | "other" => {
+  if (!mimetype) return "other";
+  if (mimetype.startsWith("image/")) return "image";
+  if (mimetype.startsWith("video/")) return "video";
+  if (mimetype.startsWith("audio/")) return "audio";
+  if (
+    mimetype.includes("pdf") ||
+    mimetype.includes("document") ||
+    mimetype.includes("text")
+  ) {
+    return "document";
+  }
+  return "other";
 };
 
 export const addInteraction = async (
@@ -650,6 +693,17 @@ export const addInteraction = async (
     if (!agentExist)
       return res.status(404).json(new ApiError(404, "Agent not found"));
 
+    let attachments: any[] = [];
+    if (req.body.media && Array.isArray(req.body.media)) {
+      attachments = req.body.media.map((file: any) => ({
+        url: file.url,
+        type: getFileType(file.mimetype),
+        name: file.name || file.originalname,
+        size: file.size,
+        mimetype: file.mimetype,
+      }));
+    }
+
     const interaction = createInteractionObject({
       action,
       content,
@@ -657,6 +711,7 @@ export const addInteraction = async (
       initiator,
       receiverType: isUserRole ? "Agent" : "User",
       initiatorType: isUserRole ? "User" : "Agent",
+      attachments,
     });
 
     ticket.interactions.push(interaction);
@@ -664,12 +719,13 @@ export const addInteraction = async (
 
     const senderId = initiator?.toString?.() ?? initiator;
     const receiverId = receiver?.toString?.() ?? receiver;
-    if (content && senderId && receiverId) {
+    if ((content || attachments.length > 0) && senderId && receiverId) {
       emitSupportMessage({
         text: content,
         senderId,
         receiverId,
         ticketId: ticketId?.toString?.() ?? ticketId,
+        attachments,
       });
     }
 
@@ -775,6 +831,19 @@ export const updateTicketStatus = async (
 
     if (status === "closed" || status === "resolved") {
       await autoAllocateQueuedTickets();
+    }
+    try {
+      await sendSingleNotification({
+        type: "ticket-status-updated",
+        toUserId: ticket.requester.toString(),
+        toRole: UserType.USER,
+        fromUser: { _id: ticket.requester.toString(), role: UserType.USER },
+        context: { ticketId: ticket._id.toString(), status },
+      });
+    } catch (error: any) {
+      console.log(
+        `[Notification] Failed to send ticket-status-updated: ${error?.message || error}`
+      );
     }
 
     return res.status(200).json({

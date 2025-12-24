@@ -168,4 +168,124 @@ export const NotificationMessages: Record<
       message: ctx?.message || "You have a new important alert.",
     }),
   },
+  "account-created": {
+    sender: () => ({
+      title: "Account Created",
+      message: "A new account has been created.",
+    }),
+    receiver: (ctx) => ({
+      title: "Welcome to Fintara",
+      message: `Hi ${ctx?.userName || "there"}, your account is ready.`,
+    }),
+  },
+  "login-success": {
+    sender: () => ({
+      title: "Login Recorded",
+      message: "User login recorded.",
+    }),
+    receiver: (ctx) => ({
+      title: "Login Successful",
+      message: `You signed in successfully on ${ctx?.loginTime || "your device"}.`,
+    }),
+  },
+  "profile-updated": {
+    sender: () => ({
+      title: "Profile Updated",
+      message: "User profile was updated.",
+    }),
+    receiver: (ctx) => ({
+      title: "Profile Updated",
+      message: `Your profile details were updated${ctx?.source ? ` via ${ctx?.source}` : ""}.`,
+    }),
+  },
+  "kyc-profile-updated": {
+    sender: () => ({
+      title: "KYC Updated",
+      message: "KYC information updated.",
+    }),
+    receiver: () => ({
+      title: "KYC Details Updated",
+      message: "Your KYC details have been saved for review.",
+    }),
+  },
+  "kyc-verified": {
+    sender: () => ({
+      title: "KYC Verified",
+      message: "KYC status updated to verified.",
+    }),
+    receiver: () => ({
+      title: "KYC Verified",
+      message: "Your KYC has been verified successfully.",
+    }),
+  },
+  "cibil-fetched": {
+    sender: () => ({
+      title: "CIBIL Report Fetch",
+      message: "CIBIL report fetched.",
+    }),
+    receiver: (ctx) => ({
+      title: "CIBIL Report Ready",
+      message: `Your CIBIL report is ready${ctx?.score ? ` (Score: ${ctx?.score})` : ""}.`,
+    }),
+  },
+  "digilocker-synced": {
+    sender: () => ({
+      title: "DigiLocker Synced",
+      message: "DigiLocker documents synced.",
+    }),
+    receiver: () => ({
+      title: "Documents Synced",
+      message: "Your DigiLocker documents are now synced.",
+    }),
+  },
+  "offer-applied": {
+    sender: () => ({
+      title: "Offer Applied",
+      message: "Offer application submitted.",
+    }),
+    receiver: (ctx) => ({
+      title: "Application Submitted",
+      message: `We received your application for ${ctx?.offerTitle || "the offer"}.`,
+    }),
+  },
+  "ticket-created": {
+    sender: () => ({
+      title: "Support Ticket Created",
+      message: "Support ticket created.",
+    }),
+    receiver: (ctx) => ({
+      title: "Ticket Raised",
+      message: `Your support ticket ${ctx?.ticketId ? `#${ctx.ticketId}` : ""} has been created.`,
+    }),
+  },
+  "ticket-status-updated": {
+    sender: () => ({
+      title: "Ticket Updated",
+      message: "Support ticket status updated.",
+    }),
+    receiver: (ctx) => ({
+      title: "Ticket Status Updated",
+      message: `Your ticket ${ctx?.ticketId ? `#${ctx.ticketId}` : ""} is now ${ctx?.status || "updated"}.`,
+    }),
+  },
+  "referral-rewarded": {
+    sender: () => ({
+      title: "Referral Rewarded",
+      message: "Referral reward credited.",
+    }),
+    receiver: (ctx) => ({
+      title: "Referral Reward",
+      message: `You earned ${ctx?.points || 100} points for a successful referral.`,
+    }),
+  },
+  "preferences-updated": {
+    sender: () => ({
+      title: "Preferences Updated",
+      message: "Notification preferences updated.",
+    }),
+    receiver: () => ({
+      title: "Preferences Updated",
+      message: "Your notification preferences were updated.",
+    }),
+  },
 };

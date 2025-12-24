@@ -37,7 +37,10 @@ router.use(authenticateToken);
 router
   .route("/")
   .put(
-    dynamicUpload([{ name: "profilePicture", maxCount: 1 }]),
+    dynamicUpload([
+      { name: "profilePicture", maxCount: 1 },
+      { name: "avatar", maxCount: 1 },
+    ]),
     s3UploaderMiddleware("profile"),
     asyncHandler(UserController.updateUser)
   )

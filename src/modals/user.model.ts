@@ -48,6 +48,8 @@ export enum EmploymentType {
   BUSINESS_OWNER = "business_owner",
   STUDENT = "student",
   RETIRED = "retired",
+  SELF_EMPLOYED_PROFESSIONAL = "selfEmployedProfessional",
+  SELF_EMPLOYED_NON_PROFESSIONAL = "selfEmployedNonProfessional",
 }
 
 export enum KycVerificationStatus {
@@ -70,6 +72,7 @@ const BankDetailsSchema = new Schema(
     ifscCode: String,
     bankName: String,
     branchName: String,
+    accountType: String,
     accountNumber: String,
     accountHolderName: String,
     verified: { type: Boolean, default: false },
@@ -105,6 +108,7 @@ const EmergencyContactSchema = new Schema(
 export interface IDocumentRecord {
   docType: string;
   number?: string;
+  password?: string;
   issuer?: string;
   fileUrl?: string;
   issuedOn?: Date;
@@ -116,6 +120,7 @@ const DocumentSchema = new Schema(
   {
     docType: { type: String, required: true, trim: true },
     number: { type: String, trim: true },
+    password: { type: String, trim: true },
     issuer: { type: String, trim: true },
     fileUrl: { type: String, trim: true },
     issuedOn: { type: Date },
@@ -207,6 +212,15 @@ export interface IEmploymentDetails {
   taxId?: string;
   startDate?: Date;
   organizationId?: string;
+  tenure?: string;
+  companyType?: string;
+  gstTurnover?: string;
+  businessType?: string;
+  companyAddress?: string;
+  totalExperience?: string;
+  businessVintage?: string;
+  professionOrJobTitle?: string;
+  experienceInCurrentCompany?: string;
 }
 
 const EmploymentDetailsSchema = new Schema(
@@ -215,16 +229,25 @@ const EmploymentDetailsSchema = new Schema(
       type: String,
       enum: Object.values(EmploymentType),
     },
-    employerName: { type: String, trim: true },
-    employerType: { type: String, trim: true },
-    industry: { type: String, trim: true },
+    startDate: { type: Date },
     monthlyIncome: { type: Number },
     businessIncome: { type: Number },
+    taxId: { type: String, trim: true },
+    tenure: { type: String, trim: true },
+    industry: { type: String, trim: true },
     workEmail: { type: String, trim: true },
     workPhone: { type: String, trim: true },
-    taxId: { type: String, trim: true },
-    startDate: { type: Date },
+    companyType: { type: String, trim: true },
+    gstTurnover: { type: String, trim: true },
+    employerName: { type: String, trim: true },
+    employerType: { type: String, trim: true },
+    businessType: { type: String, trim: true },
     organizationId: { type: String, trim: true },
+    companyAddress: { type: String, trim: true },
+    totalExperience: { type: String, trim: true },
+    businessVintage: { type: String, trim: true },
+    professionOrJobTitle: { type: String, trim: true },
+    experienceInCurrentCompany: { type: String, trim: true },
   },
   { _id: false }
 );
@@ -415,6 +438,9 @@ export interface IUser extends Document {
   mobile: string;
   gender?: Gender;
   avatar?: string;
+  referralCode?: string;
+  referralPoints?: number;
+  referredBy?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
   password: string;
@@ -462,6 +488,9 @@ export interface IUser extends Document {
 const UserSchema = new Schema<IUser>(
   {
     avatar: { type: String },
+    referralCode: { type: String, unique: true, sparse: true, trim: true },
+    referredBy: { type: Schema.Types.ObjectId, ref: "User" },
+    referralPoints: { type: Number, default: 0 },
     password: { type: String },
     lastLoginAt: { type: Date },
     lastActiveAt: { type: Date },

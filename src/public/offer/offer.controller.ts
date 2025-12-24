@@ -10,6 +10,8 @@ import {
   EmploymentType,
   LoanProductType,
 } from "../../modals/user.model";
+import { sendSingleNotification } from "../../services/notification.service";
+import { UserType } from "../../modals/notification.model";
 
 const OfferService = new CommonService(Offer);
 
@@ -293,6 +295,19 @@ export class OfferController {
       }
 
       await offer.save();
+      try {
+        await sendSingleNotification({
+          type: "offer-applied",
+          toUserId: userId.toString(),
+          toRole: UserType.USER,
+          fromUser: { _id: userId.toString(), role: UserType.USER },
+          context: { offerTitle: offer.title || "offer" },
+        });
+      } catch (error: any) {
+        console.log(
+          `[Notification] Failed to send offer-applied: ${error?.message || error}`
+        );
+      }
 
       return res
         .status(200)

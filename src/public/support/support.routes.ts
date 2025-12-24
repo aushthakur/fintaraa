@@ -82,6 +82,8 @@ router.delete("/tickets/:id", authenticateToken, asyncHandler(deleteTicket));
 router.post(
   "/tickets/interactions",
   authenticateToken,
+  dynamicUpload([{ name: "media", maxCount: 5 }]),
+  s3UploaderMiddleware("support-chat"),
   asyncHandler(addInteraction)
 );
 router.get(

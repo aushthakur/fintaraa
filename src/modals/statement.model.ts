@@ -1,6 +1,14 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
 
-export type StatementDocType = "bank_letter" | "sanction_document";
+export type StatementDocType =
+  | "bank_letter"
+  | "sanction_document"
+  | "repayment_schedule"
+  | "welcome_kit"
+  | "account_statement"
+  | "foreclosure_letter"
+  | "noc_letter"
+  | "disbursement_letter";
 
 export interface IStatementDocument extends Document {
   user: Types.ObjectId;

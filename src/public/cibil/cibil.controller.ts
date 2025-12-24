@@ -5,8 +5,12 @@ import {
   fetchSurepassCibilReport,
   prepareSurepassCibilPayload,
 } from "../../services/surepass.service";
-import { User } from "../../modals/user.model";
+import { ConsentHistory } from "../../modals/consentHistory.model";
+import { KycVerificationStatus, User } from "../../modals/user.model";
+import { rewardReferralIfEligible } from "../../services/referral.service";
 import { fetchEncryptedCibilReport } from "../../services/surepassEncrypted.service";
+import { sendSingleNotification } from "../../services/notification.service";
+import { UserType } from "../../modals/notification.model";
 
 export const fetchCibilReport = async (
   req: Request,
@@ -118,6 +122,12 @@ export const fetchUserCibilReport = async (
 
     const user = await User.findById(userId);
     if (!user) return next(new ApiError(404, "User not found"));
+    const lastConsent = await ConsentHistory.findOne({
+      user: userId,
+      type: "cibil",
+    })
+      .sort({ collectedAt: -1 })
+      .lean();
 
     const now = new Date();
     const lastFetched = user.cibilLastFetchedAt
@@ -145,6 +155,7 @@ export const fetchUserCibilReport = async (
           cibilScore: user.cibilScore,
           refreshAvailableInDays: daysRemaining,
           lastFetchedAt: user.cibilLastFetchedAt,
+          lastConsentAt: lastConsent?.collectedAt,
           message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
         })
       );
@@ -155,11 +166,12 @@ export const fetchUserCibilReport = async (
       return res.status(200).json(
         new ApiResponse(200, {
           cached: true,
-          cibilScore: user.cibilScore || null,
-          lastFetchedAt: user.cibilLastFetchedAt,
           report: cachedReport,
           payload: cachedPayload,
+          cibilScore: user.cibilScore || null,
           refreshAvailableInDays: daysRemaining,
+          lastFetchedAt: user.cibilLastFetchedAt,
+          lastConsentAt: lastConsent?.collectedAt,
           message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
         })
       );
@@ -177,18 +189,64 @@ export const fetchUserCibilReport = async (
     });
 
     const report = await fetchSurepassCibilReport(payload);
-    const score =
-      report.data?.score ||
-      report.data?.cibil_score ||
-      report.data?.data?.score ||
-      null;
+    const score = report.data?.data?.credit_score || 0;
 
     user.cibilScore = score || user.cibilScore;
     user.cibilLastFetchedAt = now;
     (user as any).cibilReport = report.data;
     (user as any).cibilRequestPayload = payload;
+    if (score) {
+      user.kycProfile = user.kycProfile || { reusableAcrossApplications: true };
+      user.kycProfile.verification = {
+        ...(user.kycProfile.verification || {}),
+        status: KycVerificationStatus.VERIFIED,
+        verifiedAt: new Date(),
+      };
+    }
     await user.save();
-
+    if (score) {
+      await ConsentHistory.create({
+        user: userId,
+        type: "cibil",
+        channel: "app",
+        status: "granted",
+        partner: "surepass",
+        purpose: "credit_report",
+        scope: ["cibil_score", "credit_report"],
+        collectedAt: now,
+        metadata: {
+          score,
+          environment: report.environment,
+        },
+      });
+      await rewardReferralIfEligible(userId);
+      try {
+        await sendSingleNotification({
+          type: "kyc-verified",
+          toUserId: userId,
+          toRole: UserType.USER,
+          fromUser: { _id: userId, role: UserType.USER },
+          context: {},
+        });
+      } catch (error: any) {
+        console.log(
+          `[Notification] Failed to send kyc-verified: ${error?.message || error}`
+        );
+      }
+    }
+    try {
+      await sendSingleNotification({
+        type: "cibil-fetched",
+        toUserId: userId,
+        toRole: UserType.USER,
+        fromUser: { _id: userId, role: UserType.USER },
+        context: { score: score || "" },
+      });
+    } catch (error: any) {
+      console.log(
+        `[Notification] Failed to send cibil-fetched: ${error?.message || error}`
+      );
+    }
     return res.status(200).json(
       new ApiResponse(200, {
         cached: false,
@@ -197,6 +255,7 @@ export const fetchUserCibilReport = async (
         environment: report.environment,
         refreshAvailableInDays: daysRemaining,
         lastFetchedAt: user.cibilLastFetchedAt,
+        lastConsentAt: now,
         message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
         ...(score ? { cibilScore: score } : {}),
       })

@@ -133,6 +133,9 @@ export const config = {
     accessKeyId: process.env.S3_ACCESS_KEY_ID!,
     secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!,
   },
+  documents: {
+    passwordEncryptionKey: process.env.DOC_PASSWORD_KEY || "",
+  },
 
   security: {
     ips: process.env.BLOCKED_IPS?.split(",") || [],

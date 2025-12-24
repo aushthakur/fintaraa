@@ -17,6 +17,12 @@ router.post(
   dynamicUpload([
     { name: "bank_letter", maxCount: 5 },
     { name: "sanction_document", maxCount: 5 },
+    { name: "repayment_schedule", maxCount: 5 },
+    { name: "welcome_kit", maxCount: 5 },
+    { name: "account_statement", maxCount: 5 },
+    { name: "foreclosure_letter", maxCount: 5 },
+    { name: "noc_letter", maxCount: 5 },
+    { name: "disbursement_letter", maxCount: 5 },
   ]),
   s3UploaderMiddleware("statements"),
   asyncHandler(uploadStatements)
