@@ -444,7 +444,11 @@ export const getTickets = async (
     const { assignee } = req.query;
     const query: any = { ...req.query };
 
-    if (role === "agent") query.assignee = assignee || userId;
+    if (role === "agent") {
+      query.assignee = assignee || userId;
+    } else if (role === "user") {
+      query.requester = userId;
+    }
     const pipeline = [
       {
         $lookup: {

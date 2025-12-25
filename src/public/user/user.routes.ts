@@ -69,6 +69,15 @@ router.post(
 );
 router.get("/digilocker", asyncHandler(UserController.getDigiLockerDocuments));
 
+router.get(
+  "/notification-preferences",
+  asyncHandler(UserController.getNotificationPreferences)
+);
+router.put(
+  "/notification-preferences",
+  asyncHandler(UserController.updateNotificationPreferences)
+);
+
 /* ----------- NOTIFICATIONS ----------- */
 router.get("/notifications", asyncHandler(getAllNotifications));
 router.get("/notifications-stats", asyncHandler(getNotificationStats));

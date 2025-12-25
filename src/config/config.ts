@@ -68,10 +68,32 @@ export const config = {
   sms: {
     enabled: toBool(process.env.SMS_ENABLED),
     provider: process.env.SMS_PROVIDER!,
-    twilio: {
-      sid: process.env.TWILIO_ACCOUNT_SID!,
-      authToken: process.env.TWILIO_AUTH_TOKEN!,
-      phoneNumber: process.env.TWILIO_PHONE_NUMBER!,
+    airtelIq: {
+      // Endpoint
+      baseUrl: process.env.AIRTEL_IQ_SMS_BASE_URL || "https://iqsms.airtel.in",
+      sendPath: process.env.AIRTEL_IQ_SMS_SEND_PATH || "/api/v1/send-sms",
+
+      // Required identifiers
+      customerId: process.env.AIRTEL_IQ_SMS_CUSTOMER_ID || "",
+      senderId: process.env.AIRTEL_IQ_SMS_SENDER_ID || "",
+      entityId: process.env.AIRTEL_IQ_SMS_ENTITY_ID || "",
+      templateId: process.env.AIRTEL_IQ_SMS_TEMPLATE_ID || "",
+
+      // Airtel fixed keys
+      toKey: "destinationAddress",
+      messageKey: "message",
+      senderKey: "sourceAddress",
+      entityIdKey: "entityId",
+      templateIdKey: "dltTemplateId",
+
+      // Fixed values
+      messageType: "TRANSACTIONAL",
+
+      // Optional flags
+      extraFields: JSON.stringify({
+        filterBlacklistNumbers: false,
+        priority: false,
+      }),
     },
   },
 

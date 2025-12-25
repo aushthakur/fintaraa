@@ -725,7 +725,7 @@ export class UserController {
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
 
-      // TODO: Integrate real SMS service like Twilio or Fast2SMS
+      // TODO: Integrate real SMS service like Airtel IQ
       console.log(`OTP sent to ${mobile}: ${otpCode}`);
       // await sendEmail({
       //   otp: otpCode,
@@ -768,6 +768,79 @@ export class UserController {
       return res
         .status(200)
         .json(new ApiResponse(200, result, "Users fetched successfully"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getNotificationPreferences(
+    req: Request | any,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { _id } = req.user;
+      const user = await userService.getById(_id);
+      if (!user) {
+        return res.status(404).json(new ApiError(404, "user not found"));
+      }
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          user.notification || { sms: true, push: true, email: true },
+          "Notification preferences fetched successfully"
+        )
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async updateNotificationPreferences(
+    req: Request | any,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { _id } = req.user;
+      const user = await userService.getById(_id);
+      if (!user) {
+        return res.status(404).json(new ApiError(404, "user not found"));
+      }
+
+      const nextPrefs = {
+        sms:
+          typeof req.body.sms === "boolean"
+            ? req.body.sms
+            : user.notification?.sms ?? true,
+        push:
+          typeof req.body.push === "boolean"
+            ? req.body.push
+            : user.notification?.push ?? true,
+        email:
+          typeof req.body.email === "boolean"
+            ? req.body.email
+            : user.notification?.email ?? true,
+      };
+
+      const result = await userService.updateById(_id, {
+        notification: nextPrefs,
+      });
+
+      await safeNotify({
+        type: "preferences-updated",
+        toUserId: result._id.toString(),
+        toRole: UserType.USER,
+        fromUser: { _id: result._id.toString(), role: UserType.USER },
+      });
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          result.notification,
+          "Notification preferences updated successfully"
+        )
+      );
     } catch (error) {
       next(error);
     }
