@@ -28,6 +28,7 @@ export interface IOffer extends Document {
   title: string;
   lenderName: string;
   productType?: LoanProductType | "insurance" | "card" | "other";
+  productCategory?: "loan" | "insurance" | "card";
   rateLabel?: string;
   tenureLabel?: string;
   amountLabel?: string;
@@ -97,6 +98,11 @@ const OfferSchema = new Schema<IOffer>(
       type: String,
       enum: [...Object.values(LoanProductType), "insurance", "card", "other"],
       default: LoanProductType.PERSONAL_LOAN,
+    },
+    productCategory: {
+      type: String,
+      enum: ["loan", "insurance", "card"],
+      index: true,
     },
     rateLabel: { type: String, trim: true },
     tenureLabel: { type: String, trim: true },

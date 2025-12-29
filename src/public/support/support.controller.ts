@@ -9,17 +9,28 @@ import Agent from "../../modals/agent.model";
 import { User } from "../../modals/user.model";
 import Ticket from "../../modals/ticket.model";
 import ApiResponse from "../../utils/ApiResponse";
-import { extractImageUrl } from "../../utils/helper";
+import { Agency } from "../../modals/agency.model";
 import { deleteFromS3 } from "../../config/s3Uploader";
 import { LoanQuery } from "../../modals/loanquery.model";
 import { Request, Response, NextFunction } from "express";
+import { UserType } from "../../modals/notification.model";
 import { emitSupportMessage } from "../../config/socket.io";
 import { CommonService } from "../../services/common.services";
+import { convertToObjectId, extractImageUrl } from "../../utils/helper";
 import { sendSingleNotification } from "../../services/notification.service";
-import { UserType } from "../../modals/notification.model";
 
 const agentService = new CommonService(Agent);
 const ticketService = new CommonService(Ticket);
+
+const resolveRequesterModel = (role?: string) => {
+  if (role === "agency" || role === "agency_member") return "Agency";
+  return "User";
+};
+
+const resolveNotificationRole = (role?: string) => {
+  if (role === "agency" || role === "agency_member") return UserType.AGENCY;
+  return UserType.USER;
+};
 
 const ensureTagArray = (tags: unknown): string[] => {
   if (Array.isArray(tags)) {
@@ -156,7 +167,7 @@ export const createTicket = async (
   next: NextFunction
 ): Promise<any> => {
   try {
-    const { _id: id } = req.user;
+    const { _id: id, role } = req.user;
     const { tags, title, description } = req.body;
 
     if (!title || !description) {
@@ -168,8 +179,10 @@ export const createTicket = async (
       return next(new ApiError(400, "At least one valid tag is required"));
     }
 
+    const requesterRole = resolveRequesterModel(role);
     const duplicate = await Ticket.findOne({
       requester: id,
+      requesterRole,
       $or: [{ tags: { $all: tagList } }, { title }, { description }],
       status: { $nin: ["closed", "resolved"] },
     });
@@ -195,6 +208,7 @@ export const createTicket = async (
       {
         $match: {
           requester: id,
+          requesterRole,
           createdAt: {
             $gte: todayStart,
             $lte: todayEnd,
@@ -223,6 +237,7 @@ export const createTicket = async (
       title,
       description,
       requester: id,
+      requesterRole,
       status: "open",
       dueDate: dueDatePlus24,
       priority: await checkPriority(tags),
@@ -237,13 +252,15 @@ export const createTicket = async (
       await sendSingleNotification({
         type: "ticket-created",
         toUserId: id.toString(),
-        toRole: UserType.USER,
-        fromUser: { _id: id.toString(), role: UserType.USER },
+        toRole: resolveNotificationRole(role),
+        fromUser: { _id: id.toString(), role: resolveNotificationRole(role) },
         context: { ticketId: ticket._id.toString() },
       });
     } catch (error: any) {
       console.log(
-        `[Notification] Failed to send ticket-created: ${error?.message || error}`
+        `[Notification] Failed to send ticket-created: ${
+          error?.message || error
+        }`
       );
     }
 
@@ -359,7 +376,45 @@ export const getTicket = async (
   next: NextFunction
 ): Promise<any> => {
   try {
+    const { role, _id: userId } = req.user;
     const result = await ticketService.getById(req.params.id, true);
+    const requesterId =
+      (result as any)?.requester?._id?.toString?.() ||
+      result?.requester?.toString?.();
+    const assigneeId =
+      (result as any)?.assignee?._id?.toString?.() ||
+      result?.assignee?.toString?.();
+
+    if (role === "agent") {
+      if (assigneeId !== userId.toString()) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Unauthorized to access this ticket"));
+      }
+    } else if (role === "agency") {
+      const agencyId = convertToObjectId(userId) || userId;
+      const memberIds = await Agency.find({ parentAgency: agencyId }).distinct(
+        "_id"
+      );
+      const allowed = [agencyId.toString(), ...memberIds.map(String)];
+      if (!allowed.includes(requesterId)) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Unauthorized to access this ticket"));
+      }
+    } else if (role === "agency_member") {
+      if (requesterId !== userId.toString()) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Unauthorized to access this ticket"));
+      }
+    } else if (role === "user") {
+      if (requesterId !== userId.toString()) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Unauthorized to access this ticket"));
+      }
+    }
     if (!result)
       return res.status(404).json(new ApiError(404, "Ticket not found"));
     return res
@@ -443,11 +498,39 @@ export const getTickets = async (
     const { _id: userId, role } = req.user;
     const { assignee } = req.query;
     const query: any = { ...req.query };
+    let roleMatchStage: any = null;
 
     if (role === "agent") {
       query.assignee = assignee || userId;
     } else if (role === "user") {
       query.requester = userId;
+      query.requesterRole = "User";
+    } else if (role === "agency") {
+      const agencyId = convertToObjectId(userId) || userId;
+      const memberIds = await Agency.find({ parentAgency: agencyId }).distinct(
+        "_id"
+      );
+      query.requester = { $in: [agencyId, ...memberIds] };
+      roleMatchStage = {
+        $match: {
+          $or: [
+            { requesterRole: "Agency" },
+            { requesterRole: { $exists: false } },
+            { requesterRole: null },
+          ],
+        },
+      };
+    } else if (role === "agency_member") {
+      query.requester = userId;
+      roleMatchStage = {
+        $match: {
+          $or: [
+            { requesterRole: "Agency" },
+            { requesterRole: { $exists: false } },
+            { requesterRole: null },
+          ],
+        },
+      };
     }
     const pipeline = [
       {
@@ -459,9 +542,11 @@ export const getTickets = async (
         },
       },
       {
-        $unwind: {
-          path: "$requesterInfo",
-          preserveNullAndEmptyArrays: true,
+        $lookup: {
+          from: "agencies",
+          localField: "requester",
+          foreignField: "_id",
+          as: "requesterAgency",
         },
       },
       {
@@ -473,9 +558,14 @@ export const getTickets = async (
         },
       },
       {
-        $unwind: {
-          path: "$assigneeInfo",
-          preserveNullAndEmptyArrays: true,
+        $addFields: {
+          requesterInfo: {
+            $ifNull: [
+              { $arrayElemAt: ["$requesterInfo", 0] },
+              { $arrayElemAt: ["$requesterAgency", 0] },
+            ],
+          },
+          assigneeInfo: { $arrayElemAt: ["$assigneeInfo", 0] },
         },
       },
       {
@@ -501,7 +591,9 @@ export const getTickets = async (
         },
       },
     ];
-    const result = await ticketService.getAll(query, pipeline);
+    const result = await ticketService.getAll(query, pipeline, {
+      prependStages: roleMatchStage ? [roleMatchStage] : [],
+    });
     return res
       .status(200)
       .json(new ApiResponse(200, result, "Data fetched successfully"));
@@ -669,7 +761,22 @@ export const addInteraction = async (
       return res.status(404).json(new ApiError(404, "Ticket not found"));
 
     // Only initiator or assignee can interact
-    if (
+    if (role === "agency") {
+      const memberIds = await Agency.find({ parentAgency: _id }).distinct(
+        "_id"
+      );
+      const allowed = [_id.toString(), ...memberIds.map(String)];
+      if (
+        !allowed.includes(ticket.requester?.toString()) &&
+        ticket.assignee?.toString() !== _id.toString()
+      ) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(403, "You are not authorized to access this ticket")
+          );
+      }
+    } else if (
       ticket.requester?.toString() !== _id &&
       ticket.assignee?.toString() !== _id
     ) {
@@ -680,19 +787,39 @@ export const addInteraction = async (
         );
     }
 
+    const isRequesterRole = ["user", "agency", "agency_member"].includes(role);
+    if (isRequesterRole && initiator?.toString() !== _id.toString()) {
+      return res
+        .status(403)
+        .json(new ApiError(403, "Invalid initiator for this token"));
+    }
+    if (!isRequesterRole && initiator?.toString() !== _id.toString()) {
+      return res
+        .status(403)
+        .json(new ApiError(403, "Invalid initiator for this token"));
+    }
+
     if (ticket.status === "closed")
       return res.status(400).json(new ApiError(400, "Ticket has been closed"));
 
-    const isUserRole = role === "user";
-
-    const userExist = await User.findById({
-      _id: isUserRole ? initiator : receiver,
-    });
-    if (!userExist)
-      return res.status(404).json(new ApiError(404, "User not found"));
+    const requesterModel =
+      ticket.requesterRole === "Agency"
+        ? "Agency"
+        : ticket.requesterRole === "User"
+        ? "User"
+        : (await Agency.exists({ _id: ticket.requester }))
+        ? "Agency"
+        : "User";
+    const requesterId = isRequesterRole ? initiator : receiver;
+    const requesterExist =
+      requesterModel === "Agency"
+        ? await Agency.findById({ _id: requesterId })
+        : await User.findById({ _id: requesterId });
+    if (!requesterExist)
+      return res.status(404).json(new ApiError(404, "Requester not found"));
 
     const agentExist = await Agent.findById({
-      _id: isUserRole ? receiver : initiator,
+      _id: isRequesterRole ? receiver : initiator,
     });
     if (!agentExist)
       return res.status(404).json(new ApiError(404, "Agent not found"));
@@ -713,8 +840,8 @@ export const addInteraction = async (
       content,
       receiver,
       initiator,
-      receiverType: isUserRole ? "Agent" : "User",
-      initiatorType: isUserRole ? "User" : "Agent",
+      receiverType: isRequesterRole ? "Agent" : requesterModel,
+      initiatorType: isRequesterRole ? requesterModel : "Agent",
       attachments,
     });
 
@@ -771,7 +898,7 @@ export const manualAssignTicketToAgent = async (
 
 const getData = async (id: any, role: any): Promise<any> => {
   let ticketData: any = await Ticket.findById({ _id: id })
-    .populate("requester", "fullName email mobile")
+    .populate("requester", "fullName name email mobile")
     .populate("assignee", "name email mobile")
     .populate("relatedTickets", "title status");
 
@@ -782,10 +909,12 @@ const getData = async (id: any, role: any): Promise<any> => {
   const interaction: any = [];
   if (ticketData?.interactions?.length > 0) {
     ticketData.interactions.forEach((action: any) => {
-      const isUser = role === "user";
+      const isRequester = ["user", "agency", "agency_member"].includes(role);
+      const initiatorType = action?.initiatorType;
       const isSender =
-        (isUser && action?.initiatorType === "user") ||
-        (!isUser && action?.initiatorType === "Agent");
+        (isRequester &&
+          (initiatorType === "User" || initiatorType === "Agency")) ||
+        (!isRequester && initiatorType === "Agent");
       interaction.push({ ...action, isSender });
     });
   }
@@ -840,13 +969,20 @@ export const updateTicketStatus = async (
       await sendSingleNotification({
         type: "ticket-status-updated",
         toUserId: ticket.requester.toString(),
-        toRole: UserType.USER,
-        fromUser: { _id: ticket.requester.toString(), role: UserType.USER },
+        toRole:
+          ticket.requesterRole === "Agency" ? UserType.AGENCY : UserType.USER,
+        fromUser: {
+          _id: ticket.requester.toString(),
+          role:
+            ticket.requesterRole === "Agency" ? UserType.AGENCY : UserType.USER,
+        },
         context: { ticketId: ticket._id.toString(), status },
       });
     } catch (error: any) {
       console.log(
-        `[Notification] Failed to send ticket-status-updated: ${error?.message || error}`
+        `[Notification] Failed to send ticket-status-updated: ${
+          error?.message || error
+        }`
       );
     }
 

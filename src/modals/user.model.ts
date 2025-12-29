@@ -67,7 +67,7 @@ export enum LoanProductType {
   BNPL = "bnpl",
 }
 
-const BankDetailsSchema = new Schema(
+export const BankDetailsSchema = new Schema(
   {
     ifscCode: String,
     bankName: String,
@@ -80,7 +80,7 @@ const BankDetailsSchema = new Schema(
   { _id: false }
 );
 
-const AddressSchema = new Schema(
+export const AddressSchema = new Schema(
   {
     city: { type: String },
     state: { type: String },
@@ -116,7 +116,7 @@ export interface IDocumentRecord {
   referenceId?: string;
 }
 
-const DocumentSchema = new Schema(
+export const DocumentSchema = new Schema(
   {
     docType: { type: String, required: true, trim: true },
     number: { type: String, trim: true },
@@ -138,7 +138,7 @@ export interface ILoginMethod {
   deviceLimit?: number;
 }
 
-const LoginMethodSchema = new Schema(
+export const LoginMethodSchema = new Schema(
   {
     type: {
       type: String,
@@ -183,7 +183,7 @@ export interface ISecurityPreferences {
   lastMfaChallengeAt?: Date;
 }
 
-const SecurityPreferencesSchema = new Schema(
+export const SecurityPreferencesSchema = new Schema(
   {
     mfaEnabled: { type: Boolean, default: false },
     preferredMfaMethods: [
@@ -221,6 +221,8 @@ export interface IEmploymentDetails {
   businessVintage?: string;
   professionOrJobTitle?: string;
   experienceInCurrentCompany?: string;
+  propertyType?: string;
+  emiPaid?: string;
 }
 
 const EmploymentDetailsSchema = new Schema(
@@ -248,6 +250,8 @@ const EmploymentDetailsSchema = new Schema(
     businessVintage: { type: String, trim: true },
     professionOrJobTitle: { type: String, trim: true },
     experienceInCurrentCompany: { type: String, trim: true },
+    propertyType: { type: String, trim: true },
+    emiPaid: { type: String, trim: true },
   },
   { _id: false }
 );
@@ -319,7 +323,7 @@ export interface IKycProfile {
   };
 }
 
-const KycProfileSchema = new Schema(
+export const KycProfileSchema = new Schema(
   {
     reusableAcrossApplications: { type: Boolean, default: true },
     personalDetails: {
@@ -365,7 +369,7 @@ export interface IDigiLockerVault {
   >;
 }
 
-const DigiLockerVaultSchema = new Schema(
+export const DigiLockerVaultSchema = new Schema(
   {
     syncedAt: { type: Date },
     storageProvider: { type: String, default: "internal" },
@@ -458,6 +462,7 @@ export interface IUser extends Document {
     sms: boolean;
     push: boolean;
     email: boolean;
+    whatsapp: boolean;
   };
   profile: {};
   customerId?: string;
@@ -508,6 +513,7 @@ const UserSchema = new Schema<IUser>(
       sms: { type: Boolean, default: true },
       push: { type: Boolean, default: true },
       email: { type: Boolean, default: true },
+      whatsapp: { type: Boolean, default: true },
     },
     customerId: { type: String, unique: true, sparse: true, index: true },
     profile: {},

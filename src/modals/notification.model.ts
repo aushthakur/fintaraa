@@ -4,6 +4,8 @@ export enum UserType {
   USER = "user",
   ADMIN = "admin",
   AGENT = "agent",
+  AGENCY = "agency",
+  AGENCY_MEMBER = "agency_member",
   WORKER = "worker",
   EMPLOYER = "employer",
   CONTRACTOR = "contractor",

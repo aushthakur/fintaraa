@@ -2,6 +2,7 @@ import { Router } from "express";
 
 import faqRoutes from "../admin/faq/faq.routes";
 import blogRoutes from "../admin/blog/blog.routes";
+import knowledgeRoutes from "../public/knowledge/knowledge.routes";
 import leadRoutes from "../admin/lead/lead.routes";
 import roleRoutes from "../admin/role/role.routes";
 import landerRoutes from "../lander/lander.routes";
@@ -11,6 +12,8 @@ import termsRoutes from "../admin/terms/terms.routes";
 import cibilRoutes from "../public/cibil/cibil.routes";
 import offerRoutes from "../public/offer/offer.routes";
 import bannerRoutes from "../admin/banner/banner.routes";
+import bankerRoutes from "../admin/banker/banker.routes";
+import contestRoutes from "../admin/contest/contest.routes";
 import refundRoutes from "../admin/refund/refund.routes";
 import privacyRoutes from "../admin/privacy/privacy.routes";
 import paymentRoutes from "../admin/payments/payment.routes";
@@ -28,11 +31,14 @@ import testimonialRoutes from "../admin/testimonial/testimonial.routes";
 import abusereportRoutes from "../public/abusereport/abusereport.routes";
 import blogcategoryRoutes from "../admin/blogcategory/blogcategory.routes";
 import insuranceQueryRoutes from "../public/insurancequery/insurancequery.routes";
+import agentRoutes from "../public/agent/agent.routes";
+import agencyRoutes from "../public/agency/agency.routes";
 
 const router = Router();
 
 router.use("/faq", faqRoutes);
 router.use("/blog", blogRoutes);
+router.use("/knowledge", knowledgeRoutes);
 router.use("/user", userRoutes);
 router.use("/role", roleRoutes);
 router.use("/leads", leadRoutes);
@@ -40,6 +46,8 @@ router.use("/admin", adminRoutes);
 router.use("/terms", termsRoutes);
 router.use("/cibil", cibilRoutes);
 router.use("/banner", bannerRoutes);
+router.use("/bankers", bankerRoutes);
+router.use("/contests", contestRoutes);
 router.use("/offers", offerRoutes);
 router.use("/lander", landerRoutes);
 router.use("/support", supportRoutes);
@@ -59,5 +67,7 @@ router.use("/consent-history", consentRoutes);
 router.use("/bank-products", bankProductRoutes);
 router.use("/blogcategory", blogcategoryRoutes);
 router.use("/insurancequery", insuranceQueryRoutes);
+router.use("/agent", agentRoutes);
+router.use("/agency", agencyRoutes);
 
 export default router;

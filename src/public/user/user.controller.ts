@@ -787,7 +787,7 @@ export class UserController {
       return res.status(200).json(
         new ApiResponse(
           200,
-          user.notification || { sms: true, push: true, email: true },
+          user.notification || { sms: true, push: true, email: true, whatsapp: true },
           "Notification preferences fetched successfully"
         )
       );
@@ -821,6 +821,10 @@ export class UserController {
           typeof req.body.email === "boolean"
             ? req.body.email
             : user.notification?.email ?? true,
+        whatsapp:
+          typeof req.body.whatsapp === "boolean"
+            ? req.body.whatsapp
+            : user.notification?.whatsapp ?? true,
       };
 
       const result = await userService.updateById(_id, {

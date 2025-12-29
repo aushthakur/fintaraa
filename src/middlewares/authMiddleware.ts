@@ -2,11 +2,20 @@ import Admin from "../modals/admin.model";
 import { config } from "../config/config";
 import { User } from "../modals/user.model";
 import Lander from "../modals/lander.model";
+import Agent from "../modals/agent.model";
+import { Agency } from "../modals/agency.model";
 import { generateAccessToken } from "../utils/token";
 import jwt, { TokenExpiredError } from "jsonwebtoken";
 import { Request, Response, NextFunction, RequestHandler } from "express";
 
-export type Role = "admin" | "guest" | "property" | "lander";
+export type Role =
+  | "admin"
+  | "guest"
+  | "property"
+  | "lander"
+  | "agent"
+  | "agency"
+  | "agency_member";
 
 interface AuthenticatedRequest extends Request {
   user?: {
@@ -122,6 +131,9 @@ const getUserByRole = async (role: Role, id: string) => {
     guest: User,
     property: User,
     lander: Lander,
+    agent: Agent,
+    agency: Agency,
+    agency_member: Agency,
   };
   const Model = modelMap[role];
   return Model?.findById(id);

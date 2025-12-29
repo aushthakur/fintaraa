@@ -101,47 +101,79 @@ const matchesEligibility = (offer: IOffer, user: IUser) => {
   const eligibility = offer?.eligibility || {};
   const snapshot = getUserSnapshot(user);
 
-  if (eligibility.minIncome && snapshot.monthlyIncome < eligibility.minIncome)
+  const toNumber = (value: any) => {
+    if (value === null || value === undefined || value === "") return undefined;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : undefined;
+  };
+
+  const normalizeToken = (value?: string) =>
+    value
+      ? value
+          .toString()
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, "")
+      : "";
+
+  const minIncome = toNumber(eligibility.minIncome);
+  const maxIncome = toNumber(eligibility.maxIncome);
+  const maxEmiPerIncome = toNumber(eligibility.maxEmiPerIncome);
+  const minCreditScore = toNumber(eligibility.minCreditScore);
+  const maxActiveObligations = toNumber(eligibility.maxActiveObligations);
+  const minAge = toNumber(eligibility.minAge);
+  const maxAge = toNumber(eligibility.maxAge);
+
+  if (minIncome !== undefined && snapshot.monthlyIncome < minIncome)
     return false;
-  if (eligibility.maxIncome && snapshot.monthlyIncome > eligibility.maxIncome)
+  if (maxIncome !== undefined && snapshot.monthlyIncome > maxIncome)
     return false;
-  if (eligibility.maxEmiPerIncome) {
+  if (maxEmiPerIncome !== undefined) {
     if (snapshot.emiToIncomeRatio === null) return false;
-    if (snapshot.emiToIncomeRatio > eligibility.maxEmiPerIncome) return false;
+    if (snapshot.emiToIncomeRatio > maxEmiPerIncome) return false;
+  }
+  if (minCreditScore !== undefined) {
+    if (!snapshot.creditScore) return false;
+    if (snapshot.creditScore < minCreditScore) return false;
   }
   if (
-    eligibility.minCreditScore &&
-    (!snapshot.creditScore || snapshot.creditScore < eligibility.minCreditScore)
-  )
-    return false;
-  if (
-    eligibility.maxActiveObligations &&
-    snapshot.activeObligations > eligibility.maxActiveObligations
+    maxActiveObligations !== undefined &&
+    snapshot.activeObligations > maxActiveObligations
   )
     return false;
   if (eligibility.employmentTypes?.length) {
     if (!snapshot.employmentType) return false;
-    if (!eligibility.employmentTypes.includes(snapshot.employmentType)) {
+    const normalizedEmployment = normalizeToken(snapshot.employmentType);
+    const matchesEmployment = eligibility.employmentTypes.some(
+      (type) => normalizeToken(type) === normalizedEmployment
+    );
+    if (!matchesEmployment) {
       return false;
     }
   }
-  if (
-    eligibility.minAge &&
-    (snapshot.age === undefined || snapshot.age < eligibility.minAge)
-  )
-    return false;
-  if (
-    eligibility.maxAge &&
-    (snapshot.age === undefined || snapshot.age > eligibility.maxAge)
-  )
-    return false;
+  if (minAge !== undefined) {
+    if (snapshot.age === undefined) return false;
+    if (snapshot.age < minAge) return false;
+  }
+  if (maxAge !== undefined) {
+    if (snapshot.age === undefined) return false;
+    if (snapshot.age > maxAge) return false;
+  }
   if (eligibility.allowedStates?.length) {
     if (!snapshot.state) return false;
-    if (!eligibility.allowedStates.includes(snapshot.state)) return false;
+    const stateValue = normalizeToken(snapshot.state);
+    const matchesState = eligibility.allowedStates.some(
+      (state) => normalizeToken(state) === stateValue
+    );
+    if (!matchesState) return false;
   }
   if (eligibility.allowedCities?.length) {
     if (!snapshot.city) return false;
-    if (!eligibility.allowedCities.includes(snapshot.city)) return false;
+    const cityValue = normalizeToken(snapshot.city);
+    const matchesCity = eligibility.allowedCities.some(
+      (city) => normalizeToken(city) === cityValue
+    );
+    if (!matchesCity) return false;
   }
   if (eligibility.allowedProductTypes?.length) {
     if (!offer.productType) return false;
@@ -156,12 +188,21 @@ const matchesEligibility = (offer: IOffer, user: IUser) => {
   return true;
 };
 
+const deriveOfferCategory = (payload: Partial<IOffer>) => {
+  if (payload.productCategory) return payload.productCategory;
+  if (payload.productType === "credit_card" || payload.productType === "card")
+    return "card";
+  if (payload.productType === "insurance") return "insurance";
+  return "loan";
+};
+
 export class OfferController {
   static async createOffer(req: Request, res: Response, next: NextFunction) {
     try {
       const adminId = (req as any)?.user?._id;
       const payload = {
         ...req.body,
+        productCategory: deriveOfferCategory(req.body),
         createdBy: adminId,
         updatedBy: adminId,
       };
@@ -201,6 +242,7 @@ export class OfferController {
       const adminId = (req as any)?.user?._id;
       const result = await OfferService.updateById(req.params.id, {
         ...req.body,
+        productCategory: deriveOfferCategory(req.body),
         updatedBy: adminId,
       });
       if (!result)
@@ -245,9 +287,10 @@ export class OfferController {
         return res.status(404).json(new ApiError(404, "User not found"));
 
       const offers = await Offer.find({ status: "active" }).lean();
-      const eligibleOffers = offers
-        .filter((offer: any) => isOfferActive(offer))
-        .filter((offer: any) => matchesEligibility(offer, user as any));
+      const eligibleOffers = offers.filter((offer: any) =>
+        isOfferActive(offer)
+      );
+      // .filter((offer: any) => matchesEligibility(offer, user as any));
 
       const snapshot = getUserSnapshot(user as any);
       return res.status(200).json(
@@ -305,7 +348,9 @@ export class OfferController {
         });
       } catch (error: any) {
         console.log(
-          `[Notification] Failed to send offer-applied: ${error?.message || error}`
+          `[Notification] Failed to send offer-applied: ${
+            error?.message || error
+          }`
         );
       }
 

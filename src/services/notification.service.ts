@@ -3,6 +3,7 @@ import { config } from "../config/config";
 import Admin from "../modals/admin.model";
 import mongoose, { Types } from "mongoose";
 import { User } from "../modals/user.model";
+import { Agency } from "../modals/agency.model";
 import { sendSMS } from "../utils/smsService";
 import ApiResponse from "../utils/ApiResponse";
 import { sendEmail } from "../utils/emailService";
@@ -64,6 +65,9 @@ export const NotificationService = {
         switch (role) {
           case "admin":
             return Admin.findById(id).lean();
+          case "agency":
+          case "agency_member":
+            return Agency.findById(id).lean();
           // case "agent":
           //   return Agent.findById(id).lean();
           case "worker":
@@ -83,9 +87,14 @@ export const NotificationService = {
       if (!recipient) throw new Error(`Recipient not found: ${toUserId}`);
       if (!senderUser) throw new Error(`Sender not found: ${sender._id}`);
 
-      const isUserRole = ["user", "worker", "contractor", "employer"].includes(
-        toRole
-      );
+      const isUserRole = [
+        "user",
+        "worker",
+        "contractor",
+        "employer",
+        "agency",
+        "agency_member",
+      ].includes(toRole);
       const preferences = isUserRole
         ? recipient?.preferences?.notifications || recipient?.notification || {}
         : {};
@@ -285,6 +294,14 @@ export const getAllNotifications = async (
       },
       {
         $lookup: {
+          from: "agencies",
+          localField: "to.user",
+          foreignField: "_id",
+          as: "toAgency",
+        },
+      },
+      {
+        $lookup: {
           from: "users",
           localField: "from.user",
           foreignField: "_id",
@@ -305,6 +322,14 @@ export const getAllNotifications = async (
           localField: "from.user",
           foreignField: "_id",
           as: "fromAgent",
+        },
+      },
+      {
+        $lookup: {
+          from: "agencies",
+          localField: "from.user",
+          foreignField: "_id",
+          as: "fromAgency",
         },
       },
       {
@@ -356,7 +381,12 @@ export const getAllNotifications = async (
               { role: "$to.role" },
               {
                 $first: {
-                  $concatArrays: ["$toUser", "$toAdmin", "$toAgent"],
+                  $concatArrays: [
+                    "$toUser",
+                    "$toAdmin",
+                    "$toAgent",
+                    "$toAgency",
+                  ],
                 },
               },
               { profilePic: { $arrayElemAt: ["$toProfilePic.url", 0] } },
@@ -367,7 +397,12 @@ export const getAllNotifications = async (
               { role: "$from.role" },
               {
                 $first: {
-                  $concatArrays: ["$fromUser", "$fromAdmin", "$fromAgent"],
+                  $concatArrays: [
+                    "$fromUser",
+                    "$fromAdmin",
+                    "$fromAgent",
+                    "$fromAgency",
+                  ],
                 },
               },
               { profilePic: { $arrayElemAt: ["$fromProfilePic.url", 0] } },

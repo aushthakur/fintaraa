@@ -179,7 +179,7 @@ type Status =
   | "in_progress"
   | "re_assigned";
 type ActionType = "commented" | "status_changed" | "resolved";
-type UserType = "User" | "Agent";
+type UserType = "User" | "Agent" | "Agency";
 type Tag =
   | (typeof HIGH_PRIORITY_TAGS)[number]
   | (typeof MEDIUM_PRIORITY_TAGS)[number]
@@ -222,6 +222,7 @@ export interface ITicket extends Document {
   description: string;
   resolutionDate?: Date;
   requester: Types.ObjectId;
+  requesterRole: UserType;
   assignee?: Types.ObjectId;
   timeToResolve?: number | null;
   relatedTickets?: Types.ObjectId[];
@@ -244,12 +245,12 @@ const InteractionSchema = new Schema<IInteraction>(
     },
     initiatorType: {
       type: String,
-      enum: ["User", "Agent"],
+      enum: ["User", "Agent", "Agency"],
       required: true,
     },
     receiverType: {
       type: String,
-      enum: ["User", "Agent"],
+      enum: ["User", "Agent", "Agency"],
       required: true,
     },
     action: {
@@ -290,7 +291,13 @@ const TicketSchema = new Schema<ITicket>(
     description: { type: String, required: true },
     requester: {
       type: Schema.Types.ObjectId,
-      ref: "User",
+      refPath: "requesterRole",
+      required: true,
+    },
+    requesterRole: {
+      type: String,
+      enum: ["User", "Agency"],
+      default: "User",
       required: true,
     },
     assignee: { type: Schema.Types.ObjectId, ref: "Agent" },
