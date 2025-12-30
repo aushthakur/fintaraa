@@ -503,7 +503,7 @@ export class AgencyController {
         privacyPolicyAccepted: true,
         status: UserStatus.PENDING_VERIFICATION,
         password: crypto.randomBytes(10).toString("hex"),
-        notification: { sms: true, push: true, email: true },
+        notification: { sms: true, push: true, email: true, whatsapp: true },
         avatar: avatar || profilePicture,
         kycProfile: {
           reusableAcrossApplications: normalizeBoolean(

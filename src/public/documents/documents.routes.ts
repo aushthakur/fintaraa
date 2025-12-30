@@ -2,7 +2,20 @@ import express from "express";
 
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticateToken } from "../../middlewares/authMiddleware";
-import { getStatements, uploadStatements } from "./documents.controller";
+import {
+  createStatementFolder,
+  deleteStatementFolder,
+  deleteStatementFolderDocument,
+  deleteStatementFolderDocuments,
+  getStatementFolderDocuments,
+  getStatementFolders,
+  getStatements,
+  updateStatementFolder,
+  updateStatementFolderDocument,
+  uploadStatementFolderDocuments,
+  uploadStatements,
+} from "./documents.controller";
+import { getDocumentCatalog } from "./documentCatalog.controller";
 import {
   dynamicUpload,
   s3UploaderMiddleware,
@@ -11,6 +24,11 @@ import {
 const router = express.Router();
 
 router.get("/statements", authenticateToken, asyncHandler(getStatements));
+router.get(
+  "/document-catalog",
+  authenticateToken,
+  asyncHandler(getDocumentCatalog)
+);
 router.post(
   "/statements",
   authenticateToken,
@@ -26,6 +44,54 @@ router.post(
   ]),
   s3UploaderMiddleware("statements"),
   asyncHandler(uploadStatements)
+);
+
+router.get(
+  "/statement-folders",
+  authenticateToken,
+  asyncHandler(getStatementFolders)
+);
+router.post(
+  "/statement-folders",
+  authenticateToken,
+  asyncHandler(createStatementFolder)
+);
+router.put(
+  "/statement-folders/:id",
+  authenticateToken,
+  asyncHandler(updateStatementFolder)
+);
+router.delete(
+  "/statement-folders/:id",
+  authenticateToken,
+  asyncHandler(deleteStatementFolder)
+);
+router.get(
+  "/statement-folders/:id/documents",
+  authenticateToken,
+  asyncHandler(getStatementFolderDocuments)
+);
+router.post(
+  "/statement-folders/:id/documents",
+  authenticateToken,
+  dynamicUpload([{ name: "files", maxCount: 20 }]),
+  s3UploaderMiddleware("statement-folder-documents"),
+  asyncHandler(uploadStatementFolderDocuments)
+);
+router.put(
+  "/statement-folders/:id/documents/:docId",
+  authenticateToken,
+  asyncHandler(updateStatementFolderDocument)
+);
+router.delete(
+  "/statement-folders/:id/documents/:docId",
+  authenticateToken,
+  asyncHandler(deleteStatementFolderDocument)
+);
+router.delete(
+  "/statement-folders/:id/documents",
+  authenticateToken,
+  asyncHandler(deleteStatementFolderDocuments)
 );
 
 export default router;

@@ -68,6 +68,10 @@ router.post(
   asyncHandler(UserController.syncDigiLocker)
 );
 router.get("/digilocker", asyncHandler(UserController.getDigiLockerDocuments));
+router.delete(
+  "/digilocker/:docType",
+  asyncHandler(UserController.deleteDigiLockerDocument)
+);
 
 router.get(
   "/notification-preferences",

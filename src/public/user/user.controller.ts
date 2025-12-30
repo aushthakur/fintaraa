@@ -638,6 +638,74 @@ export class UserController {
     }
   }
 
+  static async deleteDigiLockerDocument(
+    req: Request | any,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { _id } = req.user;
+      const docType = String(req.params?.docType || "").trim();
+      if (!docType) {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, [], "Document type is required"));
+      }
+
+      const user: any = await userService.getById(_id, false);
+      if (!user) return next(new ApiError(404, "User not found"));
+
+      const currentVaultDocs =
+        JSON.parse(JSON.stringify(user.digiLockerVault?.documents || [])) || [];
+      const nextVaultDocs = currentVaultDocs.filter(
+        (doc: any) => doc?.docType !== docType
+      );
+      const currentKyc: IKycProfile =
+        JSON.parse(JSON.stringify(user.kycProfile || {})) || {};
+      const nextKycDocs = (currentKyc.documents || []).filter(
+        (doc: any) => doc?.docType !== docType
+      );
+
+      const updatedUser = await userService.updateById(
+        _id,
+        {
+          digiLockerVault: {
+            ...(user.digiLockerVault || {}),
+            documents: nextVaultDocs,
+            syncedAt: new Date(),
+          },
+          kycProfile: {
+            ...currentKyc,
+            documents: nextKycDocs,
+          },
+        },
+        { new: true, populate: false }
+      );
+
+      const sanitizedDocs = (updatedUser.digiLockerVault?.documents || []).map(
+        (doc: any) => {
+          const { password, ...rest } = doc?.toObject ? doc.toObject() : doc;
+          return rest;
+        }
+      );
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            ...(((updatedUser as any).digiLockerVault?.toObject
+              ? (updatedUser as any).digiLockerVault.toObject()
+              : updatedUser.digiLockerVault) || {}),
+            documents: sanitizedDocs,
+          },
+          "Document removed successfully"
+        )
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async loginUser(req: Request, res: Response) {
     try {
       const { email, password } = req.body;
