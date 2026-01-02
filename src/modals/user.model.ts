@@ -206,9 +206,24 @@ export interface IEmploymentDetails {
   employerType?: string;
   industry?: string;
   monthlyIncome?: number;
+  annualIncome?: number;
+  annualTurnover?: number;
   businessIncome?: number;
   workEmail?: string;
   workPhone?: string;
+  businessEmail?: string;
+  businessPhone?: string;
+  businessAddress?: string;
+  officeCity?: string;
+  officeState?: string;
+  officePinCode?: string;
+  salaryAccountBank?: string;
+  employmentStatus?: string;
+  businessRegistrationType?: string;
+  gstNumber?: string;
+  numberOfEmployees?: number;
+  licenseNumber?: string;
+  website?: string;
   taxId?: string;
   startDate?: Date;
   organizationId?: string;
@@ -232,16 +247,31 @@ const EmploymentDetailsSchema = new Schema(
       enum: Object.values(EmploymentType),
     },
     startDate: { type: Date },
-    monthlyIncome: { type: Number },
-    businessIncome: { type: Number },
-    taxId: { type: String, trim: true },
-    tenure: { type: String, trim: true },
-    industry: { type: String, trim: true },
-    workEmail: { type: String, trim: true },
-    workPhone: { type: String, trim: true },
-    companyType: { type: String, trim: true },
-    gstTurnover: { type: String, trim: true },
-    employerName: { type: String, trim: true },
+  monthlyIncome: { type: Number },
+  annualIncome: { type: Number },
+  annualTurnover: { type: Number },
+  businessIncome: { type: Number },
+  taxId: { type: String, trim: true },
+  tenure: { type: String, trim: true },
+  industry: { type: String, trim: true },
+  workEmail: { type: String, trim: true },
+  workPhone: { type: String, trim: true },
+  businessEmail: { type: String, trim: true },
+  businessPhone: { type: String, trim: true },
+  businessAddress: { type: String, trim: true },
+  officeCity: { type: String, trim: true },
+  officeState: { type: String, trim: true },
+  officePinCode: { type: String, trim: true },
+  salaryAccountBank: { type: String, trim: true },
+  employmentStatus: { type: String, trim: true },
+  businessRegistrationType: { type: String, trim: true },
+  gstNumber: { type: String, trim: true },
+  numberOfEmployees: { type: Number },
+  licenseNumber: { type: String, trim: true },
+  website: { type: String, trim: true },
+  companyType: { type: String, trim: true },
+  gstTurnover: { type: String, trim: true },
+  employerName: { type: String, trim: true },
     employerType: { type: String, trim: true },
     businessType: { type: String, trim: true },
     organizationId: { type: String, trim: true },
