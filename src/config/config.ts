@@ -28,6 +28,7 @@ export const config = {
     },
     endpoints: {
       cibil: "/api/v1/credit-report-experian/fetch-report",
+      rcV2: "/api/v1/rc/rc-v2",
     },
   },
 

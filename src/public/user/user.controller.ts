@@ -1177,6 +1177,12 @@ export class UserController {
         kycProfile: kycUpdate,
       };
 
+      if (personalDetails?.fullName) {
+        updatePayload.name = personalDetails.fullName;
+      } else if (req.body?.name) {
+        updatePayload.name = req.body.name;
+      }
+
       if (currentAddress) {
         const existingAddresses = (user.addresses || []).map((addr: any) =>
           addr?.toObject ? addr.toObject() : addr

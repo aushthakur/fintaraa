@@ -13,6 +13,11 @@ const router = Router();
 // All routes require authentication
 router.use(authenticateToken);
 
+router.post(
+  "/rc-lookup",
+  asyncHandler(LoanQueryController.fetchRcDetails)
+);
+
 // CRUD routes for loan queries
 router.post(
   "/",

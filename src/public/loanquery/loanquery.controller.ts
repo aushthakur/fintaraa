@@ -11,6 +11,10 @@ import { ApplicationStatus } from "../../modals/insurancequery.model";
 import LanderAssignmentEngine from "../../services/landerAssignment.service";
 import { Types } from "mongoose";
 import Lander from "../../modals/lander.model";
+import {
+  fetchSurepassRcDetails,
+  prepareSurepassRcPayload,
+} from "../../services/surepass.service";
 
 const loanQueryService = new CommonService(LoanQuery);
 
@@ -118,6 +122,18 @@ const normalizeAccountType = (value?: string) => {
 };
 
 export class LoanQueryController {
+  static async fetchRcDetails(req: Request, res: Response, next: NextFunction) {
+    try {
+      const payload = prepareSurepassRcPayload(req.body || {});
+      const result = await fetchSurepassRcDetails(payload);
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "RC details fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
   static async createQuery(req: Request, res: Response, next: NextFunction) {
     try {
       // Get customer ID from authenticated user token

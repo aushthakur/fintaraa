@@ -27,9 +27,24 @@ export interface SurepassCibilInput
   pancard?: string;
 }
 
+export interface SurepassRcRequestPayload {
+  id_number: string;
+  enrich: boolean;
+}
+
+export interface SurepassRcInput {
+  id_number?: string;
+  idNumber?: string;
+  carNumber?: string;
+  vehicleNumber?: string;
+  enrich?: boolean;
+}
+
 const sanitizeNumber = (value: string) => value.replace(/\D/g, "");
 
 const sanitizePan = (value: string) =>
+  value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+const sanitizeRcNumber = (value: string) =>
   value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 
 const normalizeGender = (value: string) => value.trim().toLowerCase();
@@ -156,6 +171,63 @@ export const fetchSurepassCibilReport = async (
       (err.response?.data as any)?.error ||
       err.message ||
       "Failed to fetch CIBIL report";
+    throw new ApiError(status, message, err.response?.data);
+  }
+};
+
+export const prepareSurepassRcPayload = (
+  input: SurepassRcInput
+): SurepassRcRequestPayload => {
+  const candidate =
+    input.id_number || input.idNumber || input.carNumber || input.vehicleNumber;
+
+  if (!candidate) {
+    throw new ApiError(400, "Car registration number is required");
+  }
+
+  const id_number = sanitizeRcNumber(String(candidate));
+  if (id_number.length < 6) {
+    throw new ApiError(400, "Car registration number appears to be invalid");
+  }
+
+  return {
+    id_number,
+    enrich: input.enrich !== false,
+  };
+};
+
+export const fetchSurepassRcDetails = async (
+  payload: SurepassRcRequestPayload,
+  options?: { environment?: SurepassEnvironment }
+) => {
+  const environment =
+    options?.environment ||
+    (config.surepass.environment === "production" ? "production" : "sandbox");
+
+  const envConfig = ensureEnvConfig(environment);
+
+  try {
+    const url = `${envConfig.baseUrl}${config.surepass.endpoints.rcV2}`;
+    const { data } = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${envConfig.token}`,
+        "Content-Type": "application/json",
+      },
+      timeout: config.surepass.timeoutMs,
+    });
+
+    return {
+      environment: envConfig.environment,
+      data,
+    };
+  } catch (error) {
+    const err = error as AxiosError<any>;
+    const status = err.response?.status || 500;
+    const message =
+      (err.response?.data as any)?.message ||
+      (err.response?.data as any)?.error ||
+      err.message ||
+      "Failed to fetch RC details";
     throw new ApiError(status, message, err.response?.data);
   }
 };
