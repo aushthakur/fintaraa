@@ -13,6 +13,4 @@ const CounterSchema = new Schema<ICounter>(
   { timestamps: true }
 );
 
-CounterSchema.index({ key: 1 }, { unique: true });
-
 export const Counter = mongoose.model<ICounter>("Counter", CounterSchema);

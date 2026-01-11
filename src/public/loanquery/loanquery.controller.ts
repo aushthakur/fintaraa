@@ -152,6 +152,14 @@ export class LoanQueryController {
       if (req.body.accountType) {
         req.body.accountType = normalizeAccountType(req.body.accountType);
       }
+      if (req.body.policyDetails?.coApplicants) {
+        const list = Array.isArray(req.body.policyDetails.coApplicants)
+          ? req.body.policyDetails.coApplicants
+          : [req.body.policyDetails.coApplicants];
+        req.body.policyDetails.coApplicants = list
+          .map((item: any) => String(item || "").trim())
+          .filter(Boolean);
+      }
 
       // Validate policyDetails against loanType if both are provided (skip for draft)
       // This must run AFTER processFileUploads since files are moved to policyDetails

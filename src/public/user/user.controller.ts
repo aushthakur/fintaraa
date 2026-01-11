@@ -321,11 +321,65 @@ export class UserController {
 
       if (digiLockerVault) userData.digiLockerVault = digiLockerVault;
 
-      const eixsts = await User.findOne({ mobile, email });
-      if (eixsts) {
-        return res
-          .status(400)
-          .json(new ApiError(400, "Phone Number & Email ID Already Exist!"));
+      // Upsert-on-mobile: if a user with this mobile already exists, update provided fields and return
+      const existingByMobile = await User.findOne({ mobile });
+      if (existingByMobile) {
+        // Ensure provided email (if any) is unique across other users
+        if (email && email !== existingByMobile.email) {
+          const emailTaken = await User.findOne({ email, _id: { $ne: existingByMobile._id } }).select('_id');
+          if (emailTaken) {
+            return res.status(400).json(new ApiError(400, 'Email already in use'));
+          }
+        }
+        const updatePayload: any = {};
+        if (name) updatePayload.name = name;
+        if (email) updatePayload.email = email.toLowerCase();
+        if (panCard) updatePayload.panCard = panCard;
+        if (aadhaarCard) updatePayload.aadhaarCard = aadhaarCard;
+        if (typeof agreedToTerms === 'boolean') updatePayload.agreedToTerms = agreedToTerms;
+        if (typeof privacyPolicyAccepted === 'boolean') updatePayload.privacyPolicyAccepted = privacyPolicyAccepted;
+        if (avatar) updatePayload.avatar = avatar;
+        if (panCardUrl) updatePayload.panCardUrl = panCardUrl;
+        if (aadhaarCardUrl) updatePayload.aadhaarCardUrl = aadhaarCardUrl;
+        if (cancelledChequeOrPassbook) updatePayload.cancelledChequeOrPassbook = cancelledChequeOrPassbook;
+        if (kycProfile) {
+          updatePayload.kycProfile = {
+            ...(existingByMobile.kycProfile as any) || {},
+            ...kycProfile,
+          };
+        }
+        if (digiLockerVault) {
+          updatePayload.digiLockerVault = {
+            ...(existingByMobile.digiLockerVault as any) || {},
+            ...digiLockerVault,
+          };
+        }
+        let referrer: any = null;
+        if (referralInput) {
+          referrer = await User.findOne({ referralCode: referralInput });
+          if (!referrer) {
+            return res.status(400).json(new ApiError(400, 'Invalid referral code'));
+          }
+          updatePayload.referredBy = referrer._id;
+        }
+        const updated = await userService.updateById(existingByMobile._id.toString(), updatePayload, { new: true, populate: false });
+        if (referrer) {
+          await ReferralEvent.create({
+            referrer: referrer._id,
+            referredUser: updated._id,
+            referralCode: referrer.referralCode,
+            status: 'pending',
+            points: 100,
+          });
+        }
+        await safeNotify({
+          type: 'account-created',
+          toUserId: updated._id.toString(),
+          toRole: UserType.USER,
+          fromUser: { _id: updated._id.toString(), role: UserType.USER },
+          context: { userName: updated?.name || 'User' },
+        });
+        return res.status(200).json(new ApiResponse(200, updated, 'Account updated successfully'));
       }
 
       const referralCode = await generateReferralCode();
@@ -763,6 +817,7 @@ export class UserController {
       }
 
       let user = await User.findOne({ mobile });
+      const existed = Boolean(user);
       if (!user) {
         // Auto-provision lightweight user so OTP flow works for new signups
         const placeholderEmail = `${mobile}@signup.fintara`;
@@ -805,6 +860,7 @@ export class UserController {
         success: true,
         message: "OTP has been sent successfully",
         otp: otpCode, // Exposed for QA/demo; hide in production SMS-only flows
+        existed,
       });
     } catch (error) {
       next(error);

@@ -4,18 +4,20 @@ import {
   fetchCibilReportWithMiddleware,
   fetchEncryptedCibilReportController,
   fetchUserCibilReport,
+  fetchUserCibilPdfReport,
 } from "./cibil.controller";
 import { asyncHandler } from "../../utils/asyncHandler";
-import { cibilScoreMiddleware } from "../../middlewares/cibil.middleware";
 import { authenticateToken } from "../../middlewares/authMiddleware";
+import { cibilScoreMiddleware } from "../../middlewares/cibil.middleware";
 
 const router = Router();
 
 router.post("/fetch", asyncHandler(fetchCibilReport));
+router.post("/user", authenticateToken, asyncHandler(fetchUserCibilReport));
 router.post(
-  "/user",
+  "/user/pdf",
   authenticateToken,
-  asyncHandler(fetchUserCibilReport)
+  asyncHandler(fetchUserCibilPdfReport)
 );
 router.post(
   "/fetch-with-middleware",

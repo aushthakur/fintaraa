@@ -3,6 +3,7 @@ import ApiResponse from "../../utils/ApiResponse";
 import { NextFunction, Request, Response } from "express";
 import {
   fetchSurepassCibilReport,
+  fetchSurepassCibilPdfReport,
   prepareSurepassCibilPayload,
 } from "../../services/surepass.service";
 import { ConsentHistory } from "../../modals/consentHistory.model";
@@ -230,7 +231,9 @@ export const fetchUserCibilReport = async (
         });
       } catch (error: any) {
         console.log(
-          `[Notification] Failed to send kyc-verified: ${error?.message || error}`
+          `[Notification] Failed to send kyc-verified: ${
+            error?.message || error
+          }`
         );
       }
     }
@@ -244,7 +247,9 @@ export const fetchUserCibilReport = async (
       });
     } catch (error: any) {
       console.log(
-        `[Notification] Failed to send cibil-fetched: ${error?.message || error}`
+        `[Notification] Failed to send cibil-fetched: ${
+          error?.message || error
+        }`
       );
     }
     return res.status(200).json(
@@ -258,6 +263,82 @@ export const fetchUserCibilReport = async (
         lastConsentAt: now,
         message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
         ...(score ? { cibilScore: score } : {}),
+      })
+    );
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const fetchUserCibilPdfReport = async (
+  req: Request | any,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) return next(new ApiError(401, "Unauthorized"));
+
+    const user = await User.findById(userId);
+    if (!user) return next(new ApiError(404, "User not found"));
+
+    const now = new Date();
+    const lastFetched = user.cibilPdfLastFetchedAt
+      ? new Date(user.cibilPdfLastFetchedAt)
+      : null;
+    const msDiff = lastFetched ? now.getTime() - lastFetched.getTime() : null;
+    const daysSinceFetch = msDiff ? msDiff / (1000 * 60 * 60 * 24) : null;
+    const refreshLocked = daysSinceFetch !== null && daysSinceFetch < 30;
+    const daysRemaining = Math.max(0, Math.ceil(30 - (daysSinceFetch || 0)));
+    const cachedReport = (user as any)?.cibilPdfReport || null;
+    const cachedLink =
+      cachedReport?.data?.credit_report_link ||
+      cachedReport?.data?.creditReportLink ||
+      cachedReport?.credit_report_link ||
+      cachedReport?.creditReportLink ||
+      null;
+
+    if (refreshLocked && cachedLink) {
+      return res.status(200).json(
+        new ApiResponse(200, {
+          cached: true,
+          report: cachedReport,
+          refreshAvailableInDays: daysRemaining,
+          lastFetchedAt: user.cibilPdfLastFetchedAt,
+          message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
+        })
+      );
+    }
+
+    const payload = prepareSurepassCibilPayload({
+      name: user.name,
+      mobile: user.mobile,
+      panCard: user.panCard,
+      consent: "Y",
+      gender:
+        String(user.gender || "male").toLowerCase() === "female"
+          ? "female"
+          : "male",
+    });
+
+    const normalizedEnv = "production";
+    const report = await fetchSurepassCibilPdfReport(payload, {
+      environment: normalizedEnv,
+    });
+
+    user.cibilPdfLastFetchedAt = now;
+    (user as any).cibilPdfReport = report.data;
+    await user.save();
+
+    return res.status(200).json(
+      new ApiResponse(200, {
+        payload,
+        cached: false,
+        report: report.data,
+        environment: report.environment,
+        refreshAvailableInDays: daysRemaining,
+        lastFetchedAt: user.cibilPdfLastFetchedAt,
+        message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
       })
     );
   } catch (error) {

@@ -518,6 +518,8 @@ export interface IUser extends Document {
   cibilLastFetchedAt?: Date;
   cibilReport?: Record<string, any>;
   cibilRequestPayload?: Record<string, any>;
+  cibilPdfLastFetchedAt?: Date;
+  cibilPdfReport?: Record<string, any>;
 }
 
 const UserSchema = new Schema<IUser>(
@@ -578,6 +580,8 @@ const UserSchema = new Schema<IUser>(
     cibilLastFetchedAt: { type: Date },
     cibilReport: { type: Object },
     cibilRequestPayload: { type: Object },
+    cibilPdfLastFetchedAt: { type: Date },
+    cibilPdfReport: { type: Object },
     loginMethods: {
       type: [LoginMethodSchema],
       default: [

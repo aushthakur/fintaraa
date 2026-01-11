@@ -289,7 +289,7 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
       trim: true,
       enum: ["self_employed", "self_employed_professional", "self_employed_non_professional", "salaried"],
     },
-    industry: { type: String, required: true, trim: true },
+    industry: { type: String, trim: true },
     companyName: { type: String, required: true, trim: true },
     monthlyIncome: { type: Number, required: true },
     workExperience: { type: Number, required: true }, // in years

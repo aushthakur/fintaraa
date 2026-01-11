@@ -5,6 +5,15 @@ export enum BankProductStatus {
   INACTIVE = "inactive",
 }
 
+export enum CardNetwork {
+  VISA = "Visa",
+  AMEX = "Amex",
+  RUPAY = "RuPay",
+  OTHER = "Other",
+  DINERS = "Diners",
+  MASTERCARD = "Masstercard",
+}
+
 export interface IBankProduct extends Document {
   name: string;
   type: string;
@@ -16,6 +25,7 @@ export interface IBankProduct extends Document {
   shortDescription?: string;
   termsAndConditions: string[];
   eligibilityTermsAndConditions: string[];
+  cardNetwork?: CardNetwork;
   status: BankProductStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -33,6 +43,12 @@ const bankProductSchema = new Schema<IBankProduct>(
     eligibilityTermsAndConditions: { type: [String], default: [] },
     type: { type: String, required: true, trim: true, index: true },
     bankName: { type: String, required: true, trim: true, index: true },
+    cardNetwork: {
+      type: String,
+      trim: true,
+      enum: Object.values(CardNetwork),
+      default: CardNetwork.OTHER,
+    },
     status: {
       index: true,
       type: String,

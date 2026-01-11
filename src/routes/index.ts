@@ -13,8 +13,9 @@ import cibilRoutes from "../public/cibil/cibil.routes";
 import offerRoutes from "../public/offer/offer.routes";
 import bannerRoutes from "../admin/banner/banner.routes";
 import bankerRoutes from "../admin/banker/banker.routes";
-import contestRoutes from "../admin/contest/contest.routes";
+import appBannerAdminRoutes from "../admin/appBanner/appBanner.routes";
 import refundRoutes from "../admin/refund/refund.routes";
+import contestRoutes from "../admin/contest/contest.routes";
 import privacyRoutes from "../admin/privacy/privacy.routes";
 import paymentRoutes from "../admin/payments/payment.routes";
 import consentRoutes from "../public/consent/consent.routes";
@@ -35,6 +36,9 @@ import blogcategoryRoutes from "../admin/blogcategory/blogcategory.routes";
 import insuranceQueryRoutes from "../public/insurancequery/insurancequery.routes";
 import agentRoutes from "../public/agent/agent.routes";
 import agencyRoutes from "../public/agency/agency.routes";
+import panRoutes from "../public/pan/pan.routes";
+import publicAppBannerRoutes from "../public/appBanner/appBanner.routes";
+import interaktRoutes from "../public/interakt/interakt.routes";
 
 const router = Router();
 
@@ -48,6 +52,7 @@ router.use("/admin", adminRoutes);
 router.use("/terms", termsRoutes);
 router.use("/cibil", cibilRoutes);
 router.use("/banner", bannerRoutes);
+router.use("/app-banners", appBannerAdminRoutes);
 router.use("/bankers", bankerRoutes);
 router.use("/contests", contestRoutes);
 router.use("/offers", offerRoutes);
@@ -73,5 +78,8 @@ router.use("/blogcategory", blogcategoryRoutes);
 router.use("/insurancequery", insuranceQueryRoutes);
 router.use("/agent", agentRoutes);
 router.use("/agency", agencyRoutes);
+router.use("/v1/pan", panRoutes);
+router.use("/public", publicAppBannerRoutes);
+router.use("/interakt", interaktRoutes);
 
 export default router;

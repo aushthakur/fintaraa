@@ -28,7 +28,9 @@ export const config = {
     },
     endpoints: {
       cibil: "/api/v1/credit-report-experian/fetch-report",
+      cibilPdf: "/api/v1/credit-report-cibil/fetch-report-pdf",
       rcV2: "/api/v1/rc/rc-v2",
+      mobileToPan: "/api/v1/pan/mobile-to-pan",
     },
   },
 
@@ -51,12 +53,15 @@ export const config = {
   },
 
   email: {
-    host: process.env.EMAIL_HOST,
-    port: process.env.EMAIL_PORT,
+    host: process.env.EMAIL_HOST || "smtp.gmail.com",
+    port: process.env.EMAIL_PORT || "587",
     user: process.env.EMAIL_USER,
     from: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASSWORD,
-    secure: toBool(process.env.EMAIL_SECURE),
+    secure:
+      process.env.EMAIL_SECURE === undefined
+        ? false
+        : toBool(process.env.EMAIL_SECURE),
   },
 
   initAdmin: {
@@ -68,33 +73,24 @@ export const config = {
 
   sms: {
     enabled: toBool(process.env.SMS_ENABLED),
-    provider: process.env.SMS_PROVIDER!,
+    provider: process.env.SMS_PROVIDER || "airtel_iq",
     airtelIq: {
-      // Endpoint
-      baseUrl: process.env.AIRTEL_IQ_SMS_BASE_URL || "https://iqsms.airtel.in",
-      sendPath: process.env.AIRTEL_IQ_SMS_SEND_PATH || "/api/v1/send-sms",
+      // Airtel IQ API endpoint
+      baseUrl:
+        process.env.AIRTEL_IQ_SMS_BASE_URL ||
+        "http://iqsms.airtel.in/api/v1/send-sms",
 
-      // Required identifiers
+      // Required identifiers from Airtel IQ dashboard
       customerId: process.env.AIRTEL_IQ_SMS_CUSTOMER_ID || "",
       senderId: process.env.AIRTEL_IQ_SMS_SENDER_ID || "",
       entityId: process.env.AIRTEL_IQ_SMS_ENTITY_ID || "",
       templateId: process.env.AIRTEL_IQ_SMS_TEMPLATE_ID || "",
 
-      // Airtel fixed keys
-      toKey: "destinationAddress",
-      messageKey: "message",
-      senderKey: "sourceAddress",
-      entityIdKey: "entityId",
-      templateIdKey: "dltTemplateId",
+      // Message type: PROMOTIONAL or TRANSACTIONAL
+      messageType: process.env.AIRTEL_IQ_SMS_MESSAGE_TYPE || "PROMOTIONAL",
 
-      // Fixed values
-      messageType: "TRANSACTIONAL",
-
-      // Optional flags
-      extraFields: JSON.stringify({
-        filterBlacklistNumbers: false,
-        priority: false,
-      }),
+      // Optional metadata
+      extraFields: process.env.AIRTEL_IQ_SMS_EXTRA_FIELDS || "{}",
     },
   },
 
@@ -138,6 +134,15 @@ export const config = {
       "zapier",
       "manual",
     ],
+    interakt: {
+      enabled: toBool(process.env.INTERAKT_ENABLED),
+      baseUrl:
+        process.env.INTERAKT_BASE_URL ||
+        "https://api.interakt.ai/v1/public/message/",
+      authToken: process.env.INTERAKT_AUTH_TOKEN || "",
+      defaultCountryCode: process.env.INTERAKT_DEFAULT_COUNTRY_CODE || "+91",
+      timeoutMs: Number(process.env.INTERAKT_TIMEOUT_MS || 10000),
+    },
     zapier: {
       signingSecret: process.env.ZAPIER_SIGNING_SECRET || "",
       webhookKey: process.env.ZAPIER_WEBHOOK_KEY || "",

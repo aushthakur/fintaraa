@@ -175,6 +175,42 @@ export const fetchSurepassCibilReport = async (
   }
 };
 
+export const fetchSurepassCibilPdfReport = async (
+  payload: SurepassCibilRequestPayload,
+  options?: { environment?: SurepassEnvironment }
+) => {
+  const environment =
+    options?.environment ||
+    (config.surepass.environment === "production" ? "production" : "sandbox");
+
+  const envConfig = ensureEnvConfig(environment);
+
+  try {
+    const url = `${envConfig.baseUrl}${config.surepass.endpoints.cibilPdf}`;
+    payload = { ...payload, consent: "Y" };
+
+    const { data } = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${envConfig.token}`,
+        "Content-Type": "application/json",
+      },
+    });
+    return {
+      environment: envConfig.environment,
+      data,
+    };
+  } catch (error) {
+    const err = error as AxiosError<any>;
+    const status = err.response?.status || 500;
+    const message =
+      (err.response?.data as any)?.message ||
+      (err.response?.data as any)?.error ||
+      err.message ||
+      "Failed to fetch CIBIL PDF report";
+    throw new ApiError(status, message, err.response?.data);
+  }
+};
+
 export const prepareSurepassRcPayload = (
   input: SurepassRcInput
 ): SurepassRcRequestPayload => {
