@@ -21,6 +21,7 @@ import { generateAccessToken, generateRefreshToken } from "../../utils/token";
 import { rewardReferralIfEligible } from "../../services/referral.service";
 import { sendSingleNotification } from "../../services/notification.service";
 import { UserType } from "../../modals/notification.model";
+import { ContactSync } from "../../modals/contactSync.model";
 
 const otpService = new CommonService(Otp);
 const userService = new CommonService(User);
@@ -967,6 +968,154 @@ export class UserController {
           200,
           result.notification,
           "Notification preferences updated successfully"
+        )
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getContactPreferences(
+    req: Request | any,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { _id } = req.user;
+      const user = await userService.getById(_id);
+      if (!user) {
+        return res.status(404).json(new ApiError(404, "user not found"));
+      }
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          { enabled: user.contactsSyncEnabled === true },
+          "Contact sync preferences fetched successfully"
+        )
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async updateContactPreferences(
+    req: Request | any,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { _id } = req.user;
+      const user = await userService.getById(_id);
+      if (!user) {
+        return res.status(404).json(new ApiError(404, "user not found"));
+      }
+      const enabled =
+        typeof req.body.enabled === "boolean"
+          ? req.body.enabled
+          : user.contactsSyncEnabled === true;
+
+      const result = await userService.updateById(_id, {
+        contactsSyncEnabled: enabled,
+      });
+
+      if (!enabled) {
+        await ContactSync.deleteMany({ user: result._id });
+      }
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          { enabled: result.contactsSyncEnabled === true },
+          "Contact sync preferences updated successfully"
+        )
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async syncContacts(
+    req: Request | any,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { _id } = req.user;
+      const user = await userService.getById(_id);
+      if (!user) {
+        return res.status(404).json(new ApiError(404, "user not found"));
+      }
+      if (!user.contactsSyncEnabled) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Contact sync is disabled"));
+      }
+
+      const contacts = Array.isArray(req.body?.contacts)
+        ? req.body.contacts
+        : [];
+      const normalized = contacts
+        .map((contact: any) => {
+          const recordId =
+            contact?.id || contact?.recordID || contact?.recordId;
+          if (!recordId) return null;
+          const phones = Array.isArray(contact?.phones)
+            ? contact.phones.map((item: any) => String(item || "").trim())
+            : [];
+          return {
+            recordId: String(recordId),
+            name: String(contact?.name || contact?.displayName || "").trim(),
+            phones: phones.filter(Boolean),
+          };
+        })
+        .filter(Boolean) as {
+        recordId: string;
+        name: string;
+        phones: string[];
+      }[];
+
+      const now = new Date();
+      if (normalized.length === 0) {
+        await ContactSync.deleteMany({ user: user._id });
+        return res.status(200).json(
+          new ApiResponse(
+            200,
+            { count: 0 },
+            "Contacts synced successfully"
+          )
+        );
+      }
+
+      const ops = normalized.map((contact) => ({
+        updateOne: {
+          filter: { user: user._id, recordId: contact.recordId },
+          update: {
+            $set: {
+              name: contact.name,
+              phones: contact.phones,
+              syncedAt: now,
+            },
+            $setOnInsert: {
+              user: user._id,
+              recordId: contact.recordId,
+            },
+          },
+          upsert: true,
+        },
+      }));
+
+      await ContactSync.bulkWrite(ops, { ordered: false });
+      const recordIds = normalized.map((item) => item.recordId);
+      await ContactSync.deleteMany({
+        user: user._id,
+        recordId: { $nin: recordIds },
+      });
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          { count: normalized.length },
+          "Contacts synced successfully"
         )
       );
     } catch (error) {

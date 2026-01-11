@@ -520,6 +520,7 @@ export interface IUser extends Document {
   cibilRequestPayload?: Record<string, any>;
   cibilPdfLastFetchedAt?: Date;
   cibilPdfReport?: Record<string, any>;
+  contactsSyncEnabled?: boolean;
 }
 
 const UserSchema = new Schema<IUser>(
@@ -582,6 +583,7 @@ const UserSchema = new Schema<IUser>(
     cibilRequestPayload: { type: Object },
     cibilPdfLastFetchedAt: { type: Date },
     cibilPdfReport: { type: Object },
+    contactsSyncEnabled: { type: Boolean, default: false },
     loginMethods: {
       type: [LoginMethodSchema],
       default: [

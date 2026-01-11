@@ -81,6 +81,15 @@ router.put(
   "/notification-preferences",
   asyncHandler(UserController.updateNotificationPreferences)
 );
+router.get(
+  "/contacts/preferences",
+  asyncHandler(UserController.getContactPreferences)
+);
+router.put(
+  "/contacts/preferences",
+  asyncHandler(UserController.updateContactPreferences)
+);
+router.post("/contacts/sync", asyncHandler(UserController.syncContacts));
 
 /* ----------- NOTIFICATIONS ----------- */
 router.get("/notifications", asyncHandler(getAllNotifications));
