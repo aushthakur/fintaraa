@@ -7,6 +7,7 @@ export type InteraktTemplatePayload = {
   phoneNumber: string;
   campaignId?: string;
   callbackData?: string;
+  metadata?: Record<string, any>;
   type: "Template";
   template: {
     name: string;
@@ -20,7 +21,13 @@ const buildAuthHeader = (token: string) => {
   return token.startsWith("Basic ") ? token : `Basic ${token}`;
 };
 
-const normalizeBaseUrl = (url: string) => url.replace(/\/$/, "");
+const normalizeBaseUrl = (url: string) => {
+  const trimmed = url.replace(/\/+$/, "");
+  if (trimmed.endsWith("/public/message")) {
+    return `${trimmed}/`;
+  }
+  return `${trimmed}/public/message/`;
+};
 
 export const sendInteraktTemplateMessage = async (
   payload: InteraktTemplatePayload
@@ -44,7 +51,6 @@ export const sendInteraktTemplateMessage = async (
   }
 
   const url = normalizeBaseUrl(interaktConfig.baseUrl);
-  console.log(buildAuthHeader(interaktConfig.authToken));
   const response = await axios.post(url, payload, {
     headers: {
       Authorization: buildAuthHeader(interaktConfig.authToken),
@@ -52,6 +58,11 @@ export const sendInteraktTemplateMessage = async (
     },
     timeout: interaktConfig.timeoutMs,
   });
-
+  if (response?.data?.result === false) {
+    throw new ApiError(
+      400,
+      response.data?.message || "Interakt request failed."
+    );
+  }
   return response.data;
 };

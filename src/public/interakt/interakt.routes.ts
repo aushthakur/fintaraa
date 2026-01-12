@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { InteraktController } from "./interakt.controller";
-import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
+// import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
 
 const router = Router();
 

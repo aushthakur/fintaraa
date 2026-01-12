@@ -29,6 +29,11 @@ import {
   ApplicationStatus,
 } from "../modals/insurancequery.model";
 import LanderAssignmentEngine from "./landerAssignment.service";
+import { config } from "../config/config";
+import {
+  InteraktTemplatePayload,
+  sendInteraktTemplateMessage,
+} from "./interakt.service";
 
 type NormalizedLeadPayload = {
   email?: string;
@@ -83,6 +88,24 @@ const normalizePhone = (input?: string): string | undefined => {
     return `+91${digits.substring(1)}`;
   if (digits.startsWith("+")) return digits;
   return `+${digits}`;
+};
+
+const splitInteraktPhone = (input: string, defaultCountryCode: string) => {
+  const digits = input.replace(/\D/g, "");
+  const countryDigits = defaultCountryCode.replace(/\D/g, "");
+  if (
+    digits.startsWith(countryDigits) &&
+    digits.length > countryDigits.length
+  ) {
+    return {
+      countryCode: `+${countryDigits}`,
+      phoneNumber: digits.slice(countryDigits.length),
+    };
+  }
+  return {
+    countryCode: `+${countryDigits}`,
+    phoneNumber: digits,
+  };
 };
 
 const uniqueStrings = (items: (string | null | undefined)[]): string[] => {
@@ -324,7 +347,7 @@ export class LeadManagementService {
     });
 
     await lead.save({ session: options.session });
-
+    if (!existing) await this.notifyInteraktLeadCreated(lead, options);
     return {
       lead,
       created: !existing,
@@ -1017,6 +1040,120 @@ export class LeadManagementService {
     lead.borrowerProfile = borrower._id as Types.ObjectId;
     console.log(`  ✅ Borrower profile saved: ${borrower._id}`);
     return borrower;
+  }
+
+  private async notifyInteraktLeadCreated(
+    lead: ILead,
+    options: CaptureLeadOptions
+  ) {
+    if (!config.integrations.interakt.enabled) return;
+
+    const leadId = (lead as any)?._id?.slice(-8);
+    const productLabel = (
+      lead.productType ||
+      lead.loanPurpose ||
+      "Lead"
+    ).toString();
+    const { countryCode, phoneNumber } = splitInteraktPhone(
+      lead.mobile,
+      config.integrations.interakt.defaultCountryCode
+    );
+    const payload: InteraktTemplatePayload = {
+      countryCode,
+      phoneNumber,
+      callbackData: `lead_created|${productLabel}|lead_id_${leadId}`,
+      type: "Template",
+      template: {
+        languageCode: "en",
+        name: "lead_created",
+        bodyValues: [lead.fullName || "Lead", productLabel, leadId],
+      },
+      metadata: {
+        leadId,
+        leadSource: lead.capturedFrom?.platform,
+        campaign:
+          lead.capturedFrom?.campaignId ||
+          lead.utm?.campaign ||
+          lead.metadata?.campaignName,
+        createdBy: options.actorId || "system",
+        timestamp: new Date().toISOString(),
+        stats: {
+          status: lead.status,
+          priority: lead.priority,
+          loanAmount: lead.loanAmount,
+          productType: lead.productType,
+          intentScore: lead.intentScore,
+        },
+      },
+    };
+
+    try {
+      const response = await sendInteraktTemplateMessage(payload);
+      const eventTimestamp = new Date();
+      try {
+        await Lead.findByIdAndUpdate(
+          lead._id,
+          {
+            $push: {
+              activities: {
+                type: LeadActivityType.INTEGRATION_EVENT,
+                description: "Interakt lead_created message queued",
+                payload: {
+                  provider: "interakt",
+                  status: "processed",
+                  response,
+                },
+                createdAt: eventTimestamp,
+              },
+              integrationEvents: {
+                provider: "interakt",
+                status: "processed",
+                payload,
+                receivedAt: eventTimestamp,
+                processedAt: eventTimestamp,
+                message: response?.message || "Interakt message queued",
+              },
+            },
+          },
+          { session: options.session }
+        );
+      } catch (updateError) {
+        console.error("Interakt log update failed:", updateError);
+      }
+    } catch (error: any) {
+      const eventTimestamp = new Date();
+      const message = error?.message || "Interakt lead_created failed.";
+      try {
+        await Lead.findByIdAndUpdate(
+          lead._id,
+          {
+            $push: {
+              activities: {
+                type: LeadActivityType.INTEGRATION_EVENT,
+                description: "Interakt lead_created failed",
+                payload: {
+                  provider: "interakt",
+                  status: "failed",
+                  error: message,
+                },
+                createdAt: eventTimestamp,
+              },
+              integrationEvents: {
+                provider: "interakt",
+                status: "failed",
+                payload,
+                receivedAt: eventTimestamp,
+                processedAt: eventTimestamp,
+                message,
+              },
+            },
+          },
+          { session: options.session }
+        );
+      } catch (updateError) {
+        console.error("Interakt log update failed:", updateError);
+      }
+    }
   }
 }
 

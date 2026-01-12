@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import ApiError from "../../utils/ApiError";
-import ApiResponse from "../../utils/ApiResponse";
 import { config } from "../../config/config";
+import ApiResponse from "../../utils/ApiResponse";
 import {
   InteraktTemplatePayload,
   sendInteraktTemplateMessage,
@@ -9,6 +9,11 @@ import {
 
 const ensureString = (value: unknown) =>
   typeof value === "string" ? value.trim() : "";
+
+const isUuid = (value: string) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  );
 
 const ensureStringArray = (value: unknown) => {
   if (Array.isArray(value)) {
@@ -61,7 +66,12 @@ export const InteraktController = {
       },
     };
 
-    if (campaignId) payload.campaignId = campaignId;
+    if (campaignId) {
+      if (!isUuid(campaignId)) {
+        throw new ApiError(400, "Campaign ID must be a valid UUID.");
+      }
+      payload.campaignId = campaignId;
+    }
     if (callbackData) payload.callbackData = callbackData;
 
     const data = await sendInteraktTemplateMessage(payload);
@@ -73,9 +83,15 @@ export const InteraktController = {
       ensureString(body.countryCode) ||
       config.integrations.interakt.defaultCountryCode;
     const phoneNumber = ensureString(body.phoneNumber);
-    const templateName = ensureString(body.template?.name);
-    const languageCode = ensureString(body.template?.languageCode || "en");
-    const bodyValues = ensureStringArray(body.template?.bodyValues);
+    const templateName = "lead_created";
+    const languageCode = ensureString(
+      body.languageCode || body.template?.languageCode || "en"
+    );
+    const directBodyValues = ensureStringArray(body.bodyValues);
+    const templateBodyValues = ensureStringArray(body.template?.bodyValues);
+    const bodyValues = directBodyValues.length
+      ? directBodyValues
+      : templateBodyValues;
     const campaignId = ensureString(body.campaignId);
     const callbackData = ensureString(body.callbackData);
 
@@ -84,11 +100,11 @@ export const InteraktController = {
     }
 
     if (!templateName) {
-      throw new ApiError(400, "template.name is required.");
+      throw new ApiError(400, "templateName is required.");
     }
 
     if (!bodyValues.length) {
-      throw new ApiError(400, "template.bodyValues must be a non-empty array.");
+      throw new ApiError(400, "bodyValues must be a non-empty array.");
     }
 
     const payload: InteraktTemplatePayload = {
@@ -96,13 +112,18 @@ export const InteraktController = {
       phoneNumber,
       type: "Template",
       template: {
-        name: templateName,
-        languageCode,
         bodyValues,
+        languageCode,
+        name: templateName,
       },
     };
 
-    if (campaignId) payload.campaignId = campaignId;
+    if (campaignId) {
+      if (!isUuid(campaignId)) {
+        throw new ApiError(400, "Campaign ID must be a valid UUID.");
+      }
+      payload.campaignId = campaignId;
+    }
     if (callbackData) payload.callbackData = callbackData;
 
     const data = await sendInteraktTemplateMessage(payload);
