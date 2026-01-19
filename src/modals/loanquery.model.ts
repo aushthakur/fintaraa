@@ -209,10 +209,10 @@ export interface ILoanQuery extends Document {
   
   // Professional Details
   employmentType: string; // Self-employed, Self Employed Professional, Self Employed Non-Professional
-  industry: string;
+  industry?: string;
   companyName: string;
   monthlyIncome: number;
-  workExperience: number; // in years
+  workExperience?: number; // in years
   officeAddress: string;
   
   // Bank Details
@@ -292,7 +292,7 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     industry: { type: String, trim: true },
     companyName: { type: String, required: true, trim: true },
     monthlyIncome: { type: Number, required: true },
-    workExperience: { type: Number, required: true }, // in years
+    workExperience: { type: Number }, // in years
     officeAddress: { type: String, required: true, trim: true },
     
     // Bank Details
