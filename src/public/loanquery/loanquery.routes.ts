@@ -37,6 +37,7 @@ router.post(
     { name: "gstReturnsUrl", maxCount: 1 },
     { name: "dematStatementOrFdCopyUrl", maxCount: 1 },
     { name: "proformaInvoiceOrQuotationUrl", maxCount: 1 },
+    { name: "businessRegistrationCertificateUrl", maxCount: 1 },
     { name: "pan_card", maxCount: 1 },
     { name: "aadhaar_card", maxCount: 1 },
     { name: "photo", maxCount: 1 },
@@ -73,6 +74,7 @@ router.put(
     { name: "gstReturnsUrl", maxCount: 1 },
     { name: "dematStatementOrFdCopyUrl", maxCount: 1 },
     { name: "proformaInvoiceOrQuotationUrl", maxCount: 1 },
+    { name: "businessRegistrationCertificateUrl", maxCount: 1 },
     { name: "pan_card", maxCount: 1 },
     { name: "aadhaar_card", maxCount: 1 },
     { name: "photo", maxCount: 1 },
@@ -121,6 +123,29 @@ router.patch(
 router.patch(
   "/:id/policy-details",
   asyncHandler(LoanQueryController.updatePolicyDetails)
+);
+router.patch(
+  "/:id/policy-documents",
+  dynamicUpload([
+    { name: "bankStatementUrl", maxCount: 1 },
+    { name: "salarySlipUrl", maxCount: 1 },
+    { name: "admissionLetterUrl", maxCount: 1 },
+    { name: "feeStructureUrl", maxCount: 1 },
+    { name: "rcCopyUrl", maxCount: 1 },
+    { name: "goldPhotosUrl", maxCount: 10 },
+    { name: "carInsuranceUrl", maxCount: 1 },
+    { name: "lastMonthBankStatementUrl", maxCount: 1 },
+    { name: "propertyDocumentsUrl", maxCount: 10 },
+    { name: "propertyOwnershipProofUrl", maxCount: 1 },
+    { name: "renovationEstimateUrl", maxCount: 1 },
+    { name: "itrUrl", maxCount: 1 },
+    { name: "gstReturnsUrl", maxCount: 1 },
+    { name: "dematStatementOrFdCopyUrl", maxCount: 1 },
+    { name: "proformaInvoiceOrQuotationUrl", maxCount: 1 },
+    { name: "businessRegistrationCertificateUrl", maxCount: 1 },
+  ]),
+  s3UploaderMiddleware("loan-query-policy-documents"),
+  asyncHandler(LoanQueryController.updatePolicyDocuments)
 );
 router.post("/:id/reassign", asyncHandler(LoanQueryController.reassignLander));
 router.post("/:id/complete", asyncHandler(LoanQueryController.completeQuery));

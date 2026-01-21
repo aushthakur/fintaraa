@@ -989,7 +989,7 @@ export class UserController {
       return res.status(200).json(
         new ApiResponse(
           200,
-          { enabled: user.contactsSyncEnabled === true },
+          { enabled: user.contactsSyncEnabled !== false },
           "Contact sync preferences fetched successfully"
         )
       );
@@ -1045,7 +1045,7 @@ export class UserController {
       if (!user) {
         return res.status(404).json(new ApiError(404, "user not found"));
       }
-      if (!user.contactsSyncEnabled) {
+      if (user.contactsSyncEnabled === false) {
         return res
           .status(403)
           .json(new ApiError(403, "Contact sync is disabled"));

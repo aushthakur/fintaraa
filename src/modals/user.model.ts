@@ -583,7 +583,7 @@ const UserSchema = new Schema<IUser>(
     cibilRequestPayload: { type: Object },
     cibilPdfLastFetchedAt: { type: Date },
     cibilPdfReport: { type: Object },
-    contactsSyncEnabled: { type: Boolean, default: false },
+    contactsSyncEnabled: { type: Boolean, default: true },
     loginMethods: {
       type: [LoginMethodSchema],
       default: [

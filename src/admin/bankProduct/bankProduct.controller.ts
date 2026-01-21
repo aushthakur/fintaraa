@@ -5,6 +5,33 @@ import { CommonService } from "../../services/common.services";
 import { BankProduct, BankProductStatus } from "../../modals/bankProduct.model";
 
 const BankProductService = new CommonService(BankProduct);
+const DEFAULT_RANK_SORT = "sortRank:asc,createdAt:desc";
+
+const withRankSorting = (query: Record<string, any>) => {
+  const hasSort =
+    query?.sortKey !== undefined ||
+    query?.sortDir !== undefined ||
+    query?.multiSort !== undefined;
+  if (hasSort) {
+    return { query, applyRankSort: false };
+  }
+  return {
+    query: { ...query, multiSort: DEFAULT_RANK_SORT },
+    applyRankSort: true,
+  };
+};
+
+const applyRankSortStage = (pipeline: any[]) => {
+  const sortIndex = pipeline.findIndex((stage) => stage?.$sort);
+  if (sortIndex === -1) return pipeline;
+  const next = [...pipeline];
+  next.splice(sortIndex, 0, {
+    $addFields: {
+      sortRank: { $ifNull: ["$rank", 9999] },
+    },
+  });
+  return next;
+};
 
 export class BankProductController {
   static async createBankProduct(
@@ -33,9 +60,13 @@ export class BankProductController {
   ) {
     try {
       const role = (req as any)?.user?.role;
-      const result = await BankProductService.getAll({
+      const baseQuery = {
         ...req.query,
         ...(role === "admin" ? {} : { status: BankProductStatus.ACTIVE }),
+      };
+      const { query, applyRankSort } = withRankSorting(baseQuery);
+      const result = await BankProductService.getAll(query, undefined, {
+        pipelineModifier: applyRankSort ? applyRankSortStage : undefined,
       });
       return res
         .status(200)
@@ -111,9 +142,13 @@ export class BankProductController {
     next: NextFunction
   ) {
     try {
-      const result = await BankProductService.getAll({
+      const baseQuery = {
         ...req.query,
         status: BankProductStatus.ACTIVE,
+      };
+      const { query, applyRankSort } = withRankSorting(baseQuery);
+      const result = await BankProductService.getAll(query, undefined, {
+        pipelineModifier: applyRankSort ? applyRankSortStage : undefined,
       });
       return res
         .status(200)

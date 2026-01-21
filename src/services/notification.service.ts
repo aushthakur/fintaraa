@@ -1,6 +1,7 @@
 import admin from "../utils/firebase";
 import { config } from "../config/config";
 import Admin from "../modals/admin.model";
+import Agent from "../modals/agent.model";
 import mongoose, { Types } from "mongoose";
 import { User } from "../modals/user.model";
 import { Agency } from "../modals/agency.model";
@@ -65,6 +66,8 @@ export const NotificationService = {
         switch (role) {
           case "admin":
             return Admin.findById(id).lean();
+          case "agent":
+            return Agent.findById(id).lean();
           case "agency":
           case "agency_member":
             return Agency.findById(id).lean();

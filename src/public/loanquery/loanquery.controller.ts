@@ -28,6 +28,18 @@ const extractFileUrl = (file: any): string | undefined => {
   return file.url || file;
 };
 
+const extractFileUrls = (file: any): string[] => {
+  if (!file) return [];
+  if (typeof file === "string") return [file];
+  if (Array.isArray(file)) {
+    return file
+      .map((item) => item?.url || item)
+      .filter(Boolean);
+  }
+  if (file.url) return [file.url];
+  return [];
+};
+
 // Helper function to process uploaded files and map to request body
 const processFileUploads = (req: Request) => {
   // Initialize policyDetails if it doesn't exist
@@ -67,6 +79,7 @@ const processFileUploads = (req: Request) => {
     "gstReturnsUrl",
     "dematStatementOrFdCopyUrl",
     "proformaInvoiceOrQuotationUrl",
+    "businessRegistrationCertificateUrl",
   ];
 
   policyDetailsDocumentFields.forEach((field) => {
@@ -667,7 +680,10 @@ export class LoanQueryController {
       const { role } = (req as any).user || {};
 
       const query = await LoanQuery.findById(req.params.id)
-        .populate("customerId", "name email mobile profilePictureUrl")
+        .populate(
+          "customerId",
+          "name email mobile profilePictureUrl cibilScore cibilLastFetchedAt cibilReport cibilRequestPayload cibilPdfLastFetchedAt cibilPdfReport digiLockerVault"
+        )
         .populate("assignedAgent", "name email mobile profilePictureUrl")
         .populate("assignedLander", "name email mobile profilePictureUrl")
         .lean();
@@ -897,6 +913,117 @@ export class LoanQueryController {
       return res
         .status(200)
         .json(new ApiResponse(200, query, "Documents updated successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async updatePolicyDocuments(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const actorId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+
+      const query = await LoanQuery.findById(req.params.id);
+      if (!query) {
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
+      }
+
+      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(
+              403,
+              "You can only update policy documents of queries assigned to you"
+            )
+          );
+      }
+
+      const policyDocumentFields = [
+        "salarySlipUrl",
+        "admissionLetterUrl",
+        "feeStructureUrl",
+        "rcCopyUrl",
+        "goldPhotosUrl",
+        "carInsuranceUrl",
+        "lastMonthBankStatementUrl",
+        "propertyDocumentsUrl",
+        "propertyOwnershipProofUrl",
+        "renovationEstimateUrl",
+        "itrUrl",
+        "gstReturnsUrl",
+        "dematStatementOrFdCopyUrl",
+        "proformaInvoiceOrQuotationUrl",
+        "businessRegistrationCertificateUrl",
+      ];
+
+      const incoming: Record<string, any> = {};
+      policyDocumentFields.forEach((field) => {
+        const raw = req.body?.[field] || req.body?.policyDetails?.[field];
+        if (!raw) return;
+        const urls = extractFileUrls(raw);
+        if (urls.length === 0) return;
+        incoming[field] = urls.length === 1 ? urls[0] : urls;
+      });
+
+      const bankStatementUrl = extractFileUrl(req.body?.bankStatementUrl);
+
+      const allowed = allowedFieldsByFormType[query.loanType] || [];
+      const invalidFields = Object.keys(incoming).filter(
+        (field) => !allowed.includes(field)
+      );
+      if (invalidFields.length > 0) {
+        return res
+          .status(400)
+          .json(
+            new ApiError(
+              400,
+              `Field(s) "${invalidFields.join(
+                ", "
+              )}" is/are not allowed for ${query.loanType}`
+            )
+          );
+      }
+
+      if (!bankStatementUrl && Object.keys(incoming).length === 0) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "No policy documents provided"));
+      }
+
+      if (Object.keys(incoming).length > 0) {
+        query.policyDetails = { ...query.policyDetails, ...incoming };
+      }
+      if (bankStatementUrl) {
+        query.bankStatementUrl = bankStatementUrl;
+      }
+
+      const uploadedFields = [
+        ...Object.keys(incoming),
+        ...(bankStatementUrl ? ["bankStatementUrl"] : []),
+      ];
+
+      query.activities = query.activities || [];
+      query.activities.push({
+        type: LoanQueryActivityType.DOCUMENT_UPLOADED,
+        description: `Policy documents uploaded: ${uploadedFields.join(", ")}`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: role === "admin" ? "Admin" : "Lander",
+        payload: { uploadedDocuments: uploadedFields },
+        createdAt: new Date(),
+      });
+
+      await query.save();
+
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(200, query, "Policy documents updated successfully")
+        );
     } catch (err) {
       next(err);
     }

@@ -198,6 +198,16 @@ export const NotificationMessages: Record<
       message: `Your profile details were updated${ctx?.source ? ` via ${ctx?.source}` : ""}.`,
     }),
   },
+  "call-record-assigned": {
+    sender: (ctx) => ({
+      title: "Call Record Assigned",
+      message: `You assigned a call record for ${ctx?.name || ctx?.phone || "a lead"}.`,
+    }),
+    receiver: (ctx) => ({
+      title: "New Call Record Assigned",
+      message: `You have a new call record for ${ctx?.name || ctx?.phone || "a lead"}${ctx?.product ? ` (${ctx.product})` : ""}.`,
+    }),
+  },
   "kyc-profile-updated": {
     sender: () => ({
       title: "KYC Updated",

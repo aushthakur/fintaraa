@@ -21,6 +21,7 @@ export interface IBankProduct extends Document {
   title: string;
   image: string;
   bankName: string;
+  rank?: number;
   subtitle?: string;
   shortDescription?: string;
   termsAndConditions: string[];
@@ -43,6 +44,7 @@ const bankProductSchema = new Schema<IBankProduct>(
     eligibilityTermsAndConditions: { type: [String], default: [] },
     type: { type: String, required: true, trim: true, index: true },
     bankName: { type: String, required: true, trim: true, index: true },
+    rank: { type: Number, default: 9999, index: true },
     cardNetwork: {
       type: String,
       trim: true,

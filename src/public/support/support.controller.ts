@@ -818,11 +818,29 @@ export const addInteraction = async (
     if (!requesterExist)
       return res.status(404).json(new ApiError(404, "Requester not found"));
 
-    const agentExist = await Agent.findById({
-      _id: isRequesterRole ? receiver : initiator,
-    });
-    if (!agentExist)
-      return res.status(404).json(new ApiError(404, "Agent not found"));
+    let effectiveReceiver: any = receiver;
+    if (isRequesterRole) {
+      if (!ticket.assignee) {
+        const assignment = await assignTicketAutomatically(ticket);
+        if (
+          assignment.assigned &&
+          "agent" in assignment &&
+          assignment.agent?._id
+        ) {
+          effectiveReceiver = assignment.agent._id;
+        }
+      }
+      if (!effectiveReceiver && ticket.assignee) {
+        effectiveReceiver = ticket.assignee;
+      }
+    }
+
+    const agentIdToCheck = isRequesterRole ? effectiveReceiver : initiator;
+    if (agentIdToCheck) {
+      const agentExist = await Agent.findById({ _id: agentIdToCheck });
+      if (!agentExist)
+        return res.status(404).json(new ApiError(404, "Agent not found"));
+    }
 
     let attachments: any[] = [];
     if (req.body.media && Array.isArray(req.body.media)) {
@@ -838,7 +856,7 @@ export const addInteraction = async (
     const interaction = createInteractionObject({
       action,
       content,
-      receiver,
+      receiver: effectiveReceiver,
       initiator,
       receiverType: isRequesterRole ? "Agent" : requesterModel,
       initiatorType: isRequesterRole ? requesterModel : "Agent",
@@ -849,7 +867,7 @@ export const addInteraction = async (
     await ticket.save();
 
     const senderId = initiator?.toString?.() ?? initiator;
-    const receiverId = receiver?.toString?.() ?? receiver;
+    const receiverId = effectiveReceiver?.toString?.() ?? effectiveReceiver;
     if ((content || attachments.length > 0) && senderId && receiverId) {
       emitSupportMessage({
         text: content,

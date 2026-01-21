@@ -34,6 +34,8 @@ export interface IOffer extends Document {
   amountLabel?: string;
   badge?: string;
   description?: string;
+  eligibilityCriteria?: string[];
+  termsAndConditions?: string[];
   ctaText?: string;
   status: "draft" | "active" | "expired";
   tags: string[];
@@ -109,6 +111,8 @@ const OfferSchema = new Schema<IOffer>(
     amountLabel: { type: String, trim: true },
     badge: { type: String, trim: true },
     description: { type: String, trim: true },
+    eligibilityCriteria: { type: [String], default: [] },
+    termsAndConditions: { type: [String], default: [] },
     ctaText: { type: String, trim: true, default: "Apply now" },
     status: {
       type: String,
