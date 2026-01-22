@@ -13,8 +13,16 @@ import { Types } from "mongoose";
 import Lander from "../../modals/lander.model";
 import {
   fetchSurepassRcDetails,
+  fetchSurepassCibilReport,
+  prepareSurepassCibilPayload,
   prepareSurepassRcPayload,
 } from "../../services/surepass.service";
+import { VehicleRcLookup } from "../../modals/vehicleRcLookup.model";
+import { User } from "../../modals/user.model";
+
+const RC_CACHE_TTL_DAYS = 365;
+const normalizeRcNumber = (value: string) =>
+  value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 
 const loanQueryService = new CommonService(LoanQuery);
 
@@ -137,11 +145,186 @@ const normalizeAccountType = (value?: string) => {
 export class LoanQueryController {
   static async fetchRcDetails(req: Request, res: Response, next: NextFunction) {
     try {
+      const userId = (req as any).user?._id;
       const payload = prepareSurepassRcPayload(req.body || {});
+      const idNumber = normalizeRcNumber(payload.id_number);
+      const now = new Date();
+      const cached = await VehicleRcLookup.findOne({ idNumber }).lean();
+      if (cached?.fetchedAt) {
+        const ageMs = now.getTime() - new Date(cached.fetchedAt).getTime();
+        const maxAgeMs = RC_CACHE_TTL_DAYS * 24 * 60 * 60 * 1000;
+        if (ageMs < maxAgeMs) {
+          const accessUpdate: any = {
+            $set: { lastAccessedAt: now },
+            $inc: { accessCount: 1 },
+          };
+          if (userId) {
+            accessUpdate.$set.lastAccessedBy = userId;
+          }
+          await VehicleRcLookup.updateOne({ _id: cached._id }, accessUpdate);
+          return res.status(200).json(
+            new ApiResponse(
+              200,
+              {
+                environment: cached.environment,
+                data: cached.report,
+                cached: true,
+                lastFetchedAt: cached.fetchedAt,
+              },
+              "RC details fetched successfully"
+            )
+          );
+        }
+      }
+
       const result = await fetchSurepassRcDetails(payload);
+      const update: any = {
+        $set: {
+          idNumber,
+          report: result.data,
+          payload,
+          environment: result.environment,
+          fetchedAt: now,
+          lastAccessedAt: now,
+        },
+        $inc: { accessCount: 1, fetchCount: 1 },
+      };
+      if (userId) {
+        update.$set.lastFetchedBy = userId;
+        update.$set.lastAccessedBy = userId;
+      }
+      await VehicleRcLookup.findOneAndUpdate({ idNumber }, update, {
+        upsert: true,
+        new: true,
+        setDefaultsOnInsert: true,
+      });
       return res
         .status(200)
-        .json(new ApiResponse(200, result, "RC details fetched successfully"));
+        .json(
+          new ApiResponse(
+            200,
+            { ...result, cached: false, lastFetchedAt: now },
+            "RC details fetched successfully"
+          )
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async fetchCibilForQuery(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { role, _id } = (req as any).user || {};
+      if (!["admin", "agent", "lander"].includes(role)) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You are not allowed to fetch CIBIL here"));
+      }
+
+      const query = await LoanQuery.findById(req.params.id).lean();
+      if (!query) {
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
+      }
+
+      if (
+        role === "lander" &&
+        query.assignedLander?.toString() !== String(_id)
+      ) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(
+              403,
+              "You can only fetch CIBIL for queries assigned to you"
+            )
+          );
+      }
+
+      const user = await User.findById(query.customerId);
+      if (!user) {
+        return res.status(404).json(new ApiError(404, "User not found"));
+      }
+
+      const { forceRefresh = false, environment } = req.body || {};
+      const now = new Date();
+      const lastFetched = user.cibilLastFetchedAt
+        ? new Date(user.cibilLastFetchedAt)
+        : null;
+      const msDiff = lastFetched ? now.getTime() - lastFetched.getTime() : null;
+      const daysSinceFetch = msDiff ? msDiff / (1000 * 60 * 60 * 24) : null;
+      const refreshLocked = daysSinceFetch !== null && daysSinceFetch < 30;
+      const daysRemaining = Math.max(0, Math.ceil(30 - (daysSinceFetch || 0)));
+      const cachedReport = (user as any)?.cibilReport || null;
+      const cachedPayload = (user as any)?.cibilRequestPayload || null;
+
+      if (!forceRefresh && cachedReport && refreshLocked) {
+        return res.status(200).json(
+          new ApiResponse(200, {
+            cached: true,
+            report: cachedReport,
+            payload: cachedPayload,
+            cibilScore: user.cibilScore,
+            refreshAvailableInDays: daysRemaining,
+            lastFetchedAt: user.cibilLastFetchedAt,
+            message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
+          })
+        );
+      }
+
+      if (forceRefresh && refreshLocked) {
+        return res.status(200).json(
+          new ApiResponse(200, {
+            cached: true,
+            report: cachedReport,
+            payload: cachedPayload,
+            cibilScore: user.cibilScore || null,
+            refreshAvailableInDays: daysRemaining,
+            lastFetchedAt: user.cibilLastFetchedAt,
+            message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
+          })
+        );
+      }
+
+      const payload = prepareSurepassCibilPayload({
+        name: req.body?.name || req.body?.fullName || user.name,
+        panNumber: req.body?.panNumber || user.panCard,
+        mobile: req.body?.mobile || user.mobile,
+        gender: req.body?.gender || user.gender || "male",
+        consent: req.body?.consent || "Y",
+      });
+
+      const report = await fetchSurepassCibilReport(payload, {
+        environment:
+          environment === "production"
+            ? "production"
+            : environment === "sandbox"
+            ? "sandbox"
+            : undefined,
+      });
+      const score =
+        report.data?.score ||
+        report.data?.cibil_score ||
+        report.data?.data?.score ||
+        null;
+
+      user.cibilScore = score || user.cibilScore;
+      user.cibilLastFetchedAt = now;
+      (user as any).cibilReport = report.data;
+      (user as any).cibilRequestPayload = payload;
+      await user.save();
+
+      return res.status(200).json(
+        new ApiResponse(200, {
+          payload,
+          environment: report.environment,
+          report: report.data,
+          ...(score ? { cibilScore: score } : {}),
+        })
+      );
     } catch (err) {
       next(err);
     }
@@ -702,9 +885,22 @@ export class LoanQueryController {
           .json(new ApiError(403, "You can only view queries assigned to you"));
       }
 
+      const rcNumberCandidate =
+        (query as any)?.policyDetails?.carRegistrationNumber ||
+        (query as any)?.policyDetails?.carRegistrationNo ||
+        null;
+      const rcLookup =
+        rcNumberCandidate &&
+        normalizeRcNumber(String(rcNumberCandidate)).length >= 6
+          ? await VehicleRcLookup.findOne({
+              idNumber: normalizeRcNumber(String(rcNumberCandidate)),
+            }).lean()
+          : null;
+
       // Ensure commission fields are always present (for backward compatibility with old documents)
       const responseData = {
         ...query,
+        rcLookup,
         commissionRecorded: query.commissionRecorded ?? false,
         commissionRecordedAt: query.commissionRecordedAt ?? null,
         commissionTransactionId: query.commissionTransactionId ?? null,

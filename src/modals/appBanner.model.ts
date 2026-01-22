@@ -38,6 +38,8 @@ export interface IAppBanner extends Document {
 
   startAt?: Date;
   endAt?: Date;
+  clickCount?: number;
+  lastClickedAt?: Date;
 
   createdAt: Date;
   updatedAt: Date;
@@ -73,6 +75,8 @@ const appBannerSchema = new Schema<IAppBanner>(
 
     startAt: { type: Date },
     endAt: { type: Date },
+    clickCount: { type: Number, default: 0 },
+    lastClickedAt: { type: Date },
   },
   { timestamps: true }
 );

@@ -17,6 +17,10 @@ router.post(
   "/rc-lookup",
   asyncHandler(LoanQueryController.fetchRcDetails)
 );
+router.post(
+  "/:id/cibil",
+  asyncHandler(LoanQueryController.fetchCibilForQuery)
+);
 
 // CRUD routes for loan queries
 router.post(

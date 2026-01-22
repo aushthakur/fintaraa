@@ -39,6 +39,7 @@ import publicAppBannerRoutes from "../public/appBanner/appBanner.routes";
 import abusereportRoutes from "../public/abusereport/abusereport.routes";
 import blogcategoryRoutes from "../admin/blogcategory/blogcategory.routes";
 import insuranceQueryRoutes from "../public/insurancequery/insurancequery.routes";
+import vehicleRcLookupRoutes from "../admin/vehicleRcLookup/vehicleRcLookup.routes";
 import documentCatalogRoutes from "../admin/documentCatalog/documentCatalog.routes";
 import formSubmitClickRoutes from "../public/formSubmitClick/formSubmitClick.routes";
 
@@ -84,6 +85,7 @@ router.use("/bank-products", bankProductRoutes);
 router.use("/app-banners", appBannerAdminRoutes);
 router.use("/insurancequery", insuranceQueryRoutes);
 router.use("/document-catalog", documentCatalogRoutes);
+router.use("/vehicle-rc-lookups", vehicleRcLookupRoutes);
 router.use("/form-submit-clicks", formSubmitClickRoutes);
 
 export default router;

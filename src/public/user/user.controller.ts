@@ -1388,6 +1388,23 @@ export class UserController {
         updatePayload.name = req.body.name;
       }
 
+      if (personalDetails?.email) {
+        const normalizedEmail = String(personalDetails.email).trim().toLowerCase();
+        if (normalizedEmail && normalizedEmail !== user.email) {
+          const emailTaken = await User.findOne({
+            email: normalizedEmail,
+            _id: { $ne: user._id },
+          }).select("_id");
+          if (emailTaken) {
+            return res
+              .status(400)
+              .json(new ApiError(400, "Email already in use"));
+          }
+          updatePayload.email = normalizedEmail;
+          updatePayload.isEmailVerified = false;
+        }
+      }
+
       if (currentAddress) {
         const existingAddresses = (user.addresses || []).map((addr: any) =>
           addr?.toObject ? addr.toObject() : addr

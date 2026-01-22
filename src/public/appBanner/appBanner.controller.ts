@@ -72,4 +72,36 @@ export class PublicAppBannerController {
       next(new ApiError(500, err?.message || "Failed to fetch banners"));
     }
   }
+
+  /**
+   * POST /api/public/app-banners/:id/click
+   * Increments click count for a banner.
+   */
+  static async trackClick(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const updated = await AppBanner.findByIdAndUpdate(
+        id,
+        { $inc: { clickCount: 1 }, $set: { lastClickedAt: new Date() } },
+        { new: true }
+      ).lean();
+      if (!updated) {
+        return res.status(404).json(new ApiError(404, "Banner not found"));
+      }
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            {
+              clickCount: updated.clickCount || 0,
+              lastClickedAt: updated.lastClickedAt || null,
+            },
+            "Banner click tracked"
+          )
+        );
+    } catch (err: any) {
+      next(new ApiError(500, err?.message || "Failed to track banner click"));
+    }
+  }
 }
