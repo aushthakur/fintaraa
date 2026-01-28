@@ -1,8 +1,13 @@
 import { NextFunction, Request, Response } from "express";
 
-import ApiResponse from "../../utils/ApiResponse";
 import ApiError from "../../utils/ApiError";
-import { AppBanner, AppBannerAudience, AppBannerStatus } from "../../modals/appBanner.model";
+import ApiResponse from "../../utils/ApiResponse";
+import {
+  AppBanner,
+  AppBannerStatus,
+  AppBannerAudience,
+} from "../../modals/appBanner.model";
+import { BannerClick } from "../../modals/bannerClick.model";
 
 function parsePlacements(input?: string): string[] {
   if (!input) return [];
@@ -75,31 +80,61 @@ export class PublicAppBannerController {
 
   /**
    * POST /api/public/app-banners/:id/click
-   * Increments click count for a banner.
+   * Increments click count for a banner and logs detailed click data.
    */
-  static async trackClick(req: Request, res: Response, next: NextFunction) {
+  static async trackClick(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       const { id } = req.params;
-      const updated = await AppBanner.findByIdAndUpdate(
+      const {
+        placement,
+        actionType,
+        actionValue,
+        actionParams,
+        deviceInfo,
+        location,
+      } = req.body;
+
+      // First, increment the click count on the banner
+      const banner = await AppBanner.findByIdAndUpdate(
         id,
         { $inc: { clickCount: 1 }, $set: { lastClickedAt: new Date() } },
-        { new: true }
+        { new: true },
       ).lean();
-      if (!updated) {
+
+      if (!banner) {
         return res.status(404).json(new ApiError(404, "Banner not found"));
       }
-      return res
-        .status(200)
-        .json(
-          new ApiResponse(
-            200,
-            {
-              clickCount: updated.clickCount || 0,
-              lastClickedAt: updated.lastClickedAt || null,
-            },
-            "Banner click tracked"
-          )
-        );
+
+      // Create detailed click log entry
+      const bannerClick = new BannerClick({
+        bannerId: id,
+        userId: req.user?._id || null,
+        sessionId: req.user?.sessionId || req.headers["x-session-id"] || null,
+        placement: placement || banner.placement,
+        actionType: actionType || banner.actionType,
+        actionValue: actionValue || banner.actionValue,
+        actionParams: actionParams || banner.actionParams,
+        deviceInfo: deviceInfo || {},
+        location: location || {},
+      });
+
+      await bannerClick.save();
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            clickCount: banner.clickCount || 0,
+            lastClickedAt: banner.lastClickedAt,
+            clickId: bannerClick._id,
+          },
+          "Banner click tracked",
+        ),
+      );
     } catch (err: any) {
       next(new ApiError(500, err?.message || "Failed to track banner click"));
     }

@@ -179,7 +179,7 @@ type Status =
   | "in_progress"
   | "re_assigned";
 type ActionType = "commented" | "status_changed" | "resolved";
-type UserType = "User" | "Agent" | "Agency";
+type UserType = "User" | "Agent" | "Agency" | "Admin";
 type Tag =
   | (typeof HIGH_PRIORITY_TAGS)[number]
   | (typeof MEDIUM_PRIORITY_TAGS)[number]
@@ -245,12 +245,12 @@ const InteractionSchema = new Schema<IInteraction>(
     },
     initiatorType: {
       type: String,
-      enum: ["User", "Agent", "Agency"],
+      enum: ["User", "Agent", "Agency", "Admin"],
       required: true,
     },
     receiverType: {
       type: String,
-      enum: ["User", "Agent", "Agency"],
+      enum: ["User", "Agent", "Agency", "Admin"],
       required: true,
     },
     action: {
@@ -281,7 +281,7 @@ const InteractionSchema = new Schema<IInteraction>(
       default: Date.now,
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 /** Main Ticket Schema */
@@ -343,7 +343,7 @@ const TicketSchema = new Schema<ITicket>(
     listingId: { type: Schema.Types.ObjectId, ref: "Product" },
     transactionId: { type: Schema.Types.ObjectId, ref: "Transaction" },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 /** Virtual Field */

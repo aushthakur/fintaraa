@@ -63,7 +63,7 @@ const findEligibleAgentForTicket = async (tags: string[]) => {
 
 const assignTicketDocument = async (
   ticket: any,
-  agent: any
+  agent: any,
 ): Promise<{ assigned: boolean; ticket: any; agent: any }> => {
   ticket.assignee = agent._id;
   ticket.status =
@@ -99,7 +99,7 @@ const assignTicketAutomatically = async (ticket: any) => {
 
 const assignTicketToAgent = async (
   ticketId: string,
-  agentId?: string
+  agentId?: string,
 ): Promise<{
   assigned: boolean;
   ticket: any;
@@ -134,7 +134,7 @@ const assignTicketToAgent = async (
     ) {
       throw new ApiError(
         400,
-        "Selected agent does not have required skills for this ticket"
+        "Selected agent does not have required skills for this ticket",
       );
     }
 
@@ -164,7 +164,7 @@ const autoAllocateQueuedTickets = async (): Promise<number> => {
 export const createTicket = async (
   req: Request | any,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<any> => {
   try {
     const { _id: id, role } = req.user;
@@ -193,8 +193,8 @@ export const createTicket = async (
         .json(
           new ApiError(
             409,
-            "Ticket with same tags, title, or description already exists."
-          )
+            "Ticket with same tags, title, or description already exists.",
+          ),
         );
     }
 
@@ -223,13 +223,13 @@ export const createTicket = async (
         .json(
           new ApiError(
             429,
-            "Daily ticket limit reached. Please try again tomorrow."
-          )
+            "Daily ticket limit reached. Please try again tomorrow.",
+          ),
         );
 
     const parsedDueDate = new Date();
     const dueDatePlus24 = new Date(
-      parsedDueDate.getTime() + 48 * 60 * 60 * 1000
+      parsedDueDate.getTime() + 48 * 60 * 60 * 1000,
     );
 
     const obj = {
@@ -246,7 +246,7 @@ export const createTicket = async (
 
     const ticket = await Ticket.create(obj);
     const assignment = await assignTicketToAgent(
-      (ticket as any)._id.toString()
+      (ticket as any)._id.toString(),
     );
     try {
       await sendSingleNotification({
@@ -260,7 +260,7 @@ export const createTicket = async (
       console.log(
         `[Notification] Failed to send ticket-created: ${
           error?.message || error
-        }`
+        }`,
       );
     }
 
@@ -275,7 +275,7 @@ export const createTicket = async (
     next(
       error instanceof ApiError
         ? error
-        : new ApiError(500, "Failed to create ticket", error)
+        : new ApiError(500, "Failed to create ticket", error),
     );
   }
 };
@@ -283,7 +283,7 @@ export const createTicket = async (
 export const createAgent = async (
   req: Request | any,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<any> => {
   try {
     const profilePictureUrl = req?.body?.profilePictureUrl?.[0]?.url;
@@ -308,8 +308,8 @@ export const createAgent = async (
         .json(
           new ApiError(
             409,
-            "Agent with same name, email, or mobile already exists."
-          )
+            "Agent with same name, email, or mobile already exists.",
+          ),
         );
     }
     const result = await agentService.create({
@@ -373,7 +373,7 @@ const checkRelatedTickets = async (tags: any): Promise<any> => {
 export const getTicket = async (
   req: Request | any,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<any> => {
   try {
     const { role, _id: userId } = req.user;
@@ -394,7 +394,7 @@ export const getTicket = async (
     } else if (role === "agency") {
       const agencyId = convertToObjectId(userId) || userId;
       const memberIds = await Agency.find({ parentAgency: agencyId }).distinct(
-        "_id"
+        "_id",
       );
       const allowed = [agencyId.toString(), ...memberIds.map(String)];
       if (!allowed.includes(requesterId)) {
@@ -429,7 +429,7 @@ export const getTicket = async (
 export const deactivateAgent = async (
   req: Request | any,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<any> => {
   try {
     const { id } = req.params;
@@ -443,7 +443,7 @@ export const deactivateAgent = async (
         assignee: id,
         status: { $nin: ["closed", "resolved"] },
       },
-      { $unset: { assignee: "" }, $set: { status: "re_assigned" } }
+      { $unset: { assignee: "" }, $set: { status: "re_assigned" } },
     );
 
     const toggledAvailability = !agent.availability;
@@ -471,7 +471,7 @@ export const deactivateAgent = async (
 export const getAgentByID = async (
   req: Request | any,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<any> => {
   try {
     const { id } = req.params;
@@ -492,7 +492,7 @@ export const getAgentByID = async (
 export const getTickets = async (
   req: Request | any,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<any> => {
   try {
     const { _id: userId, role } = req.user;
@@ -508,7 +508,7 @@ export const getTickets = async (
     } else if (role === "agency") {
       const agencyId = convertToObjectId(userId) || userId;
       const memberIds = await Agency.find({ parentAgency: agencyId }).distinct(
-        "_id"
+        "_id",
       );
       query.requester = { $in: [agencyId, ...memberIds] };
       roleMatchStage = {
@@ -606,7 +606,7 @@ export const getTickets = async (
 export const getAgents = async (
   req: Request | any,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<any> => {
   try {
     const { _id: userId, role } = req.user || {};
@@ -635,7 +635,7 @@ export const getAgents = async (
 
 export const deleteTicket = async (
   req: Request | any,
-  res: Response
+  res: Response,
 ): Promise<any> => {
   try {
     const { id } = req.params;
@@ -647,7 +647,7 @@ export const deleteTicket = async (
       if (agentData) {
         agentData.activeTickets = Math.max(
           0,
-          (agentData.activeTickets || 0) - 1
+          (agentData.activeTickets || 0) - 1,
         );
         await agentData.save();
       }
@@ -666,7 +666,7 @@ export const deleteTicket = async (
 
 export const deleteAgent = async (
   req: Request | any,
-  res: Response
+  res: Response,
 ): Promise<any> => {
   try {
     const { id } = req.params;
@@ -680,7 +680,7 @@ export const deleteAgent = async (
         assignee: id,
         status: { $nin: ["closed", "resolved"] },
       },
-      { $unset: { assignee: "" }, $set: { status: "re_assigned" } }
+      { $unset: { assignee: "" }, $set: { status: "re_assigned" } },
     );
 
     await Agent.findByIdAndDelete(id);
@@ -718,7 +718,7 @@ const createInteractionObject = ({
     if (!content && !hasAttachments) {
       throw new ApiError(
         400,
-        "Content or attachment is required for 'commented' action"
+        "Content or attachment is required for 'commented' action",
       );
     }
     if (content) {
@@ -732,7 +732,7 @@ const createInteractionObject = ({
 };
 
 const getFileType = (
-  mimetype: string
+  mimetype: string,
 ): "image" | "video" | "audio" | "document" | "other" => {
   if (!mimetype) return "other";
   if (mimetype.startsWith("image/")) return "image";
@@ -750,7 +750,7 @@ const getFileType = (
 
 export const addInteraction = async (
   req: Request | any,
-  res: Response
+  res: Response,
 ): Promise<any> => {
   try {
     let { role, _id } = req.user;
@@ -760,10 +760,13 @@ export const addInteraction = async (
     if (!ticket)
       return res.status(404).json(new ApiError(404, "Ticket not found"));
 
+    // Admin can always interact with tickets
+    const isAdmin = role === "admin";
+
     // Only initiator or assignee can interact
     if (role === "agency") {
       const memberIds = await Agency.find({ parentAgency: _id }).distinct(
-        "_id"
+        "_id",
       );
       const allowed = [_id.toString(), ...memberIds.map(String)];
       if (
@@ -773,17 +776,18 @@ export const addInteraction = async (
         return res
           .status(403)
           .json(
-            new ApiError(403, "You are not authorized to access this ticket")
+            new ApiError(403, "You are not authorized to access this ticket"),
           );
       }
     } else if (
+      !isAdmin &&
       ticket.requester?.toString() !== _id &&
       ticket.assignee?.toString() !== _id
     ) {
       return res
         .status(403)
         .json(
-          new ApiError(403, "You are not authorized to access this ticket")
+          new ApiError(403, "You are not authorized to access this ticket"),
         );
     }
 
@@ -793,7 +797,11 @@ export const addInteraction = async (
         .status(403)
         .json(new ApiError(403, "Invalid initiator for this token"));
     }
-    if (!isRequesterRole && initiator?.toString() !== _id.toString()) {
+    if (
+      !isRequesterRole &&
+      !isAdmin &&
+      initiator?.toString() !== _id.toString()
+    ) {
       return res
         .status(403)
         .json(new ApiError(403, "Invalid initiator for this token"));
@@ -806,10 +814,10 @@ export const addInteraction = async (
       ticket.requesterRole === "Agency"
         ? "Agency"
         : ticket.requesterRole === "User"
-        ? "User"
-        : (await Agency.exists({ _id: ticket.requester }))
-        ? "Agency"
-        : "User";
+          ? "User"
+          : (await Agency.exists({ _id: ticket.requester }))
+            ? "Agency"
+            : "User";
     const requesterId = isRequesterRole ? initiator : receiver;
     const requesterExist =
       requesterModel === "Agency"
@@ -819,24 +827,35 @@ export const addInteraction = async (
       return res.status(404).json(new ApiError(404, "Requester not found"));
 
     let effectiveReceiver: any = receiver;
-    if (isRequesterRole) {
-      if (!ticket.assignee) {
-        const assignment = await assignTicketAutomatically(ticket);
-        if (
-          assignment.assigned &&
-          "agent" in assignment &&
-          assignment.agent?._id
-        ) {
-          effectiveReceiver = assignment.agent._id;
+
+    // For admin, use the provided receiver (should be requester for admin-to-user messaging)
+    // For non-admin users, use existing logic
+    if (!isAdmin) {
+      if (isRequesterRole) {
+        if (!ticket.assignee) {
+          const assignment = await assignTicketAutomatically(ticket);
+          if (
+            assignment.assigned &&
+            "agent" in assignment &&
+            assignment.agent?._id
+          ) {
+            effectiveReceiver = assignment.agent._id;
+          }
+        }
+        if (!effectiveReceiver && ticket.assignee) {
+          effectiveReceiver = ticket.assignee;
         }
       }
-      if (!effectiveReceiver && ticket.assignee) {
-        effectiveReceiver = ticket.assignee;
+    } else {
+      // Admin context: receiver should be the requester for admin-to-user messaging
+      // If receiver not provided, default to requester
+      if (!effectiveReceiver) {
+        effectiveReceiver = ticket.requester;
       }
     }
 
     const agentIdToCheck = isRequesterRole ? effectiveReceiver : initiator;
-    if (agentIdToCheck) {
+    if (agentIdToCheck && !isAdmin) {
       const agentExist = await Agent.findById({ _id: agentIdToCheck });
       if (!agentExist)
         return res.status(404).json(new ApiError(404, "Agent not found"));
@@ -853,13 +872,28 @@ export const addInteraction = async (
       }));
     }
 
+    // Determine initiator and receiver types
+    let initiatorType: string;
+    let receiverType: string;
+
+    if (isAdmin) {
+      initiatorType = "Admin";
+      receiverType = requesterModel;
+    } else if (isRequesterRole) {
+      initiatorType = requesterModel;
+      receiverType = "Agent";
+    } else {
+      initiatorType = "Agent";
+      receiverType = requesterModel;
+    }
+
     const interaction = createInteractionObject({
       action,
       content,
       receiver: effectiveReceiver,
       initiator,
-      receiverType: isRequesterRole ? "Agent" : requesterModel,
-      initiatorType: isRequesterRole ? requesterModel : "Agent",
+      receiverType,
+      initiatorType,
       attachments,
     });
 
@@ -887,7 +921,7 @@ export const addInteraction = async (
 
 export const manualAssignTicketToAgent = async (
   req: Request | any,
-  res: Response
+  res: Response,
 ): Promise<any> => {
   try {
     const { ticketId, agentId } = req.body;
@@ -903,7 +937,7 @@ export const manualAssignTicketToAgent = async (
     res
       .status(200)
       .json(
-        new ApiResponse(200, result.ticket, "Successfully assigned to agent")
+        new ApiResponse(200, result.ticket, "Successfully assigned to agent"),
       );
   } catch (error) {
     if (error instanceof ApiError) {
@@ -942,7 +976,7 @@ const getData = async (id: any, role: any): Promise<any> => {
 
 export const updateTicketStatus = async (
   req: Request | any,
-  res: Response
+  res: Response,
 ): Promise<any> => {
   const { role } = req.user;
   const { status, id } = req.params;
@@ -1000,7 +1034,7 @@ export const updateTicketStatus = async (
       console.log(
         `[Notification] Failed to send ticket-status-updated: ${
           error?.message || error
-        }`
+        }`,
       );
     }
 
@@ -1017,7 +1051,7 @@ export const updateTicketStatus = async (
 
 export const updateAgent = async (
   req: Request | any,
-  res: Response
+  res: Response,
 ): Promise<any> => {
   let { availability } = req.body;
   if (availability === "active" || availability === "inactive") {
@@ -1042,7 +1076,7 @@ export const updateAgent = async (
           assignee: userId,
           status: { $nin: ["closed", "resolved"] },
         },
-        { $unset: { assignee: "" }, $set: { status: "re_assigned" } }
+        { $unset: { assignee: "" }, $set: { status: "re_assigned" } },
       );
       agent.activeTickets = 0;
       req.body.activeTickets = 0;
@@ -1051,7 +1085,7 @@ export const updateAgent = async (
     if (req?.body?.profilePictureUrl && agent.profilePictureUrl) {
       document = await extractImageUrl(
         req?.body?.profilePictureUrl,
-        agent.profilePictureUrl as string
+        agent.profilePictureUrl as string,
       );
     }
     const updatePayload: any = {

@@ -1,11 +1,10 @@
-import jwt from "jsonwebtoken";
 import crypto from "crypto";
+import jwt from "jsonwebtoken";
 import Otp from "../../modals/otp.model";
 import ApiError from "../../utils/ApiError";
 import { config } from "../../config/config";
 import ApiResponse from "../../utils/ApiResponse";
 import { extractImageUrl } from "../../utils/helper";
-import { sendEmail } from "../../utils/emailService";
 import { Request, Response, NextFunction } from "express";
 import {
   User,
@@ -15,13 +14,13 @@ import {
   LoginMethodType,
   KycVerificationStatus,
 } from "../../modals/user.model";
-import { ReferralEvent } from "../../modals/referralEvent.model";
-import { CommonService } from "../../services/common.services";
-import { generateAccessToken, generateRefreshToken } from "../../utils/token";
-import { rewardReferralIfEligible } from "../../services/referral.service";
-import { sendSingleNotification } from "../../services/notification.service";
 import { UserType } from "../../modals/notification.model";
 import { ContactSync } from "../../modals/contactSync.model";
+import { CommonService } from "../../services/common.services";
+import { ReferralEvent } from "../../modals/referralEvent.model";
+import { rewardReferralIfEligible } from "../../services/referral.service";
+import { sendSingleNotification } from "../../services/notification.service";
+import { generateAccessToken, generateRefreshToken } from "../../utils/token";
 
 const otpService = new CommonService(Otp);
 const userService = new CommonService(User);
@@ -54,7 +53,7 @@ const toArrayPayload = (value: any): any[] => {
 
 const normalizeDocumentEntries = (
   docs: any,
-  fallbackType = "supporting_document"
+  fallbackType = "supporting_document",
 ) => {
   return toArrayPayload(docs)
     .map((doc: any) => {
@@ -83,7 +82,7 @@ const mapUploadsToDocuments = (
     docPasswords?: any[];
     docTypes?: any[];
     docNames?: any[];
-  }
+  },
 ) => {
   const docNumbers = meta?.docNumbers || [];
   const docPasswords = meta?.docPasswords || [];
@@ -128,7 +127,7 @@ const normalizePreferredProducts = (items: any) => {
       : undefined;
     const normalizedType = normalizedValue
       ? (Object.values(LoanProductType).find(
-          (type) => type === normalizedValue
+          (type) => type === normalizedValue,
         ) as LoanProductType | undefined)
       : undefined;
     if (!normalizedType) return acc;
@@ -150,7 +149,7 @@ const normalizeLoginMethodType = (method?: string): LoginMethodType | null => {
   if (!method) return null;
   const normalized = method.toString().toLowerCase();
   const match = Object.values(LoginMethodType).find(
-    (value) => value === normalized
+    (value) => value === normalized,
   );
   return (match as LoginMethodType) || null;
 };
@@ -185,7 +184,7 @@ const encryptDocumentPassword = (value?: string) => {
   if (!key) {
     throw new ApiError(
       500,
-      "Document password encryption key missing or invalid. Set DOC_PASSWORD_KEY (32 bytes)."
+      "Document password encryption key missing or invalid. Set DOC_PASSWORD_KEY (32 bytes).",
     );
   }
   const iv = crypto.randomBytes(12);
@@ -196,7 +195,7 @@ const encryptDocumentPassword = (value?: string) => {
   ]);
   const authTag = cipher.getAuthTag();
   return `${iv.toString("base64")}:${authTag.toString(
-    "base64"
+    "base64",
   )}:${encrypted.toString("base64")}`;
 };
 
@@ -217,7 +216,7 @@ const safeNotify = async (payload: {
     });
   } catch (error: any) {
     console.log(
-      `[Notification] Failed to send ${payload.type}: ${error?.message || error}`
+      `[Notification] Failed to send ${payload.type}: ${error?.message || error}`,
     );
   }
 };
@@ -327,9 +326,14 @@ export class UserController {
       if (existingByMobile) {
         // Ensure provided email (if any) is unique across other users
         if (email && email !== existingByMobile.email) {
-          const emailTaken = await User.findOne({ email, _id: { $ne: existingByMobile._id } }).select('_id');
+          const emailTaken = await User.findOne({
+            email,
+            _id: { $ne: existingByMobile._id },
+          }).select("_id");
           if (emailTaken) {
-            return res.status(400).json(new ApiError(400, 'Email already in use'));
+            return res
+              .status(400)
+              .json(new ApiError(400, "Email already in use"));
           }
         }
         const updatePayload: any = {};
@@ -337,21 +341,24 @@ export class UserController {
         if (email) updatePayload.email = email.toLowerCase();
         if (panCard) updatePayload.panCard = panCard;
         if (aadhaarCard) updatePayload.aadhaarCard = aadhaarCard;
-        if (typeof agreedToTerms === 'boolean') updatePayload.agreedToTerms = agreedToTerms;
-        if (typeof privacyPolicyAccepted === 'boolean') updatePayload.privacyPolicyAccepted = privacyPolicyAccepted;
+        if (typeof agreedToTerms === "boolean")
+          updatePayload.agreedToTerms = agreedToTerms;
+        if (typeof privacyPolicyAccepted === "boolean")
+          updatePayload.privacyPolicyAccepted = privacyPolicyAccepted;
         if (avatar) updatePayload.avatar = avatar;
         if (panCardUrl) updatePayload.panCardUrl = panCardUrl;
         if (aadhaarCardUrl) updatePayload.aadhaarCardUrl = aadhaarCardUrl;
-        if (cancelledChequeOrPassbook) updatePayload.cancelledChequeOrPassbook = cancelledChequeOrPassbook;
+        if (cancelledChequeOrPassbook)
+          updatePayload.cancelledChequeOrPassbook = cancelledChequeOrPassbook;
         if (kycProfile) {
           updatePayload.kycProfile = {
-            ...(existingByMobile.kycProfile as any) || {},
+            ...((existingByMobile.kycProfile as any) || {}),
             ...kycProfile,
           };
         }
         if (digiLockerVault) {
           updatePayload.digiLockerVault = {
-            ...(existingByMobile.digiLockerVault as any) || {},
+            ...((existingByMobile.digiLockerVault as any) || {}),
             ...digiLockerVault,
           };
         }
@@ -359,28 +366,36 @@ export class UserController {
         if (referralInput) {
           referrer = await User.findOne({ referralCode: referralInput });
           if (!referrer) {
-            return res.status(400).json(new ApiError(400, 'Invalid referral code'));
+            return res
+              .status(400)
+              .json(new ApiError(400, "Invalid referral code"));
           }
           updatePayload.referredBy = referrer._id;
         }
-        const updated = await userService.updateById(existingByMobile._id.toString(), updatePayload, { new: true, populate: false });
+        const updated = await userService.updateById(
+          existingByMobile._id.toString(),
+          updatePayload,
+          { new: true, populate: false },
+        );
         if (referrer) {
           await ReferralEvent.create({
             referrer: referrer._id,
             referredUser: updated._id,
             referralCode: referrer.referralCode,
-            status: 'pending',
+            status: "pending",
             points: 100,
           });
         }
         await safeNotify({
-          type: 'account-created',
+          type: "account-created",
           toUserId: updated._id.toString(),
           toRole: UserType.USER,
           fromUser: { _id: updated._id.toString(), role: UserType.USER },
-          context: { userName: updated?.name || 'User' },
+          context: { userName: updated?.name || "User" },
         });
-        return res.status(200).json(new ApiResponse(200, updated, 'Account updated successfully'));
+        return res
+          .status(200)
+          .json(new ApiResponse(200, updated, "Account updated successfully"));
       }
 
       const referralCode = await generateReferralCode();
@@ -421,8 +436,8 @@ export class UserController {
           new ApiResponse(
             201,
             response,
-            `Account created successfully! Please verify your account!`
-          )
+            `Account created successfully! Please verify your account!`,
+          ),
         );
     } catch (error) {
       console.log("Error: ", error);
@@ -433,7 +448,7 @@ export class UserController {
   static async updateSecurityPreferences(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -444,7 +459,7 @@ export class UserController {
       const loginMethodPayload = toArrayPayload(req.body.loginMethods);
       const trustedDevicePayload = parseJSONSafely(
         req.body.trustedDevice,
-        req.body.trustedDevice
+        req.body.trustedDevice,
       );
 
       const securityPreferences = {
@@ -465,7 +480,7 @@ export class UserController {
       if (trustedDevicePayload?.deviceId) {
         securityPreferences.trustedDevices = [
           ...securityPreferences.trustedDevices.filter(
-            (device: any) => device.deviceId !== trustedDevicePayload.deviceId
+            (device: any) => device.deviceId !== trustedDevicePayload.deviceId,
           ),
           {
             ...trustedDevicePayload,
@@ -476,11 +491,11 @@ export class UserController {
       }
 
       const existingMethods = (user.loginMethods || []).map((method: any) =>
-        method?.toObject ? method.toObject() : method
+        method?.toObject ? method.toObject() : method,
       );
       const methodMap = new Map<string, any>();
       existingMethods.forEach((method: any) =>
-        methodMap.set(method.type, { ...method })
+        methodMap.set(method.type, { ...method }),
       );
 
       loginMethodPayload.forEach((method: any) => {
@@ -494,11 +509,11 @@ export class UserController {
           enabled:
             typeof method?.enabled === "boolean"
               ? method.enabled
-              : methodMap.get(normalized)?.enabled ?? true,
+              : (methodMap.get(normalized)?.enabled ?? true),
           verified:
             typeof method?.verified === "boolean"
               ? method.verified
-              : methodMap.get(normalized)?.verified ?? false,
+              : (methodMap.get(normalized)?.verified ?? false),
           lastUsedAt:
             method?.lastUsedAt || methodMap.get(normalized)?.lastUsedAt,
         });
@@ -526,8 +541,8 @@ export class UserController {
           new ApiResponse(
             200,
             updatedUser.securityPreferences,
-            "Security preferences updated"
-          )
+            "Security preferences updated",
+          ),
         );
     } catch (error) {
       next(error);
@@ -537,7 +552,7 @@ export class UserController {
   static async syncDigiLocker(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -547,17 +562,17 @@ export class UserController {
       const storageProvider = req.body.storageProvider || "internal";
       const defaultDocType = req.body.defaultDocType || "digital_document";
       const docNumbers = toArrayPayload(
-        req.body.docNumber || req.body.documentNumber || req.body.number
+        req.body.docNumber || req.body.documentNumber || req.body.number,
       );
       const docPasswords = toArrayPayload(
-        req.body.docPassword || req.body.password
+        req.body.docPassword || req.body.password,
       );
       const docTypes = toArrayPayload(req.body.docType);
       const docNames = toArrayPayload(req.body.name);
 
       const providedDocs = normalizeDocumentEntries(
         req.body.documents,
-        defaultDocType
+        defaultDocType,
       );
       const uploadedDocs = mapUploadsToDocuments(
         req.body.digiLockerFiles || req.body.documentsUpload,
@@ -567,7 +582,7 @@ export class UserController {
           docPasswords,
           docTypes,
           docNames,
-        }
+        },
       );
 
       const currentVaultDocs =
@@ -596,15 +611,15 @@ export class UserController {
       const mergedDocs: any[] = [];
       for (const [docType, doc] of mergedByType.entries()) {
         const incoming = incomingDocs.find(
-          (item) => item?.docType && item.docType === docType
+          (item) => item?.docType && item.docType === docType,
         );
         const existing = currentVaultDocs.find(
-          (item: any) => item?.docType === docType
+          (item: any) => item?.docType === docType,
         );
         if (incoming?.fileUrl && existing?.fileUrl) {
           const nextUrl = await extractImageUrl(
             [{ url: incoming.fileUrl }],
-            existing.fileUrl
+            existing.fileUrl,
           );
           mergedDocs.push({ ...doc, fileUrl: nextUrl });
         } else {
@@ -629,14 +644,14 @@ export class UserController {
           },
           kycProfile: updatedKyc,
         },
-        { new: true, populate: false }
+        { new: true, populate: false },
       );
 
       const sanitizedDocs = (updatedUser.digiLockerVault?.documents || []).map(
         (doc: any) => {
           const { password, ...rest } = doc?.toObject ? doc.toObject() : doc;
           return rest;
-        }
+        },
       );
 
       await safeNotify({
@@ -654,8 +669,8 @@ export class UserController {
               : updatedUser.digiLockerVault) || {}),
             documents: sanitizedDocs,
           },
-          "DigiLocker vault synced successfully"
-        )
+          "DigiLocker vault synced successfully",
+        ),
       );
     } catch (error) {
       next(error);
@@ -665,7 +680,7 @@ export class UserController {
   static async getDigiLockerDocuments(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -674,7 +689,7 @@ export class UserController {
         (doc: any) => {
           const { password, ...rest } = doc?.toObject ? doc.toObject() : doc;
           return rest;
-        }
+        },
       );
       return res.status(200).json(
         new ApiResponse(
@@ -685,8 +700,8 @@ export class UserController {
               : user?.digiLockerVault) || {}),
             documents: sanitizedDocs,
           },
-          "DigiLocker vault fetched successfully"
-        )
+          "DigiLocker vault fetched successfully",
+        ),
       );
     } catch (error) {
       next(error);
@@ -696,7 +711,7 @@ export class UserController {
   static async deleteDigiLockerDocument(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -713,12 +728,12 @@ export class UserController {
       const currentVaultDocs =
         JSON.parse(JSON.stringify(user.digiLockerVault?.documents || [])) || [];
       const nextVaultDocs = currentVaultDocs.filter(
-        (doc: any) => doc?.docType !== docType
+        (doc: any) => doc?.docType !== docType,
       );
       const currentKyc: IKycProfile =
         JSON.parse(JSON.stringify(user.kycProfile || {})) || {};
       const nextKycDocs = (currentKyc.documents || []).filter(
-        (doc: any) => doc?.docType !== docType
+        (doc: any) => doc?.docType !== docType,
       );
 
       const updatedUser = await userService.updateById(
@@ -734,14 +749,14 @@ export class UserController {
             documents: nextKycDocs,
           },
         },
-        { new: true, populate: false }
+        { new: true, populate: false },
       );
 
       const sanitizedDocs = (updatedUser.digiLockerVault?.documents || []).map(
         (doc: any) => {
           const { password, ...rest } = doc?.toObject ? doc.toObject() : doc;
           return rest;
-        }
+        },
       );
 
       return res.status(200).json(
@@ -753,8 +768,8 @@ export class UserController {
               : updatedUser.digiLockerVault) || {}),
             documents: sanitizedDocs,
           },
-          "Document removed successfully"
-        )
+          "Document removed successfully",
+        ),
       );
     } catch (error) {
       next(error);
@@ -805,7 +820,7 @@ export class UserController {
   static async generateOtp(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ): Promise<any> {
     try {
       const { mobile } = req.body;
@@ -846,7 +861,7 @@ export class UserController {
           otp: otpCode,
           verified: false,
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, new: true, setDefaultsOnInsert: true },
       );
 
       // TODO: Integrate real SMS service like Airtel IQ
@@ -885,7 +900,7 @@ export class UserController {
   static async getAllUsers(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ): Promise<any> {
     try {
       const { userType } = req.params;
@@ -901,7 +916,7 @@ export class UserController {
   static async getNotificationPreferences(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -912,9 +927,14 @@ export class UserController {
       return res.status(200).json(
         new ApiResponse(
           200,
-          user.notification || { sms: true, push: true, email: true, whatsapp: true },
-          "Notification preferences fetched successfully"
-        )
+          user.notification || {
+            sms: true,
+            push: true,
+            email: true,
+            whatsapp: true,
+          },
+          "Notification preferences fetched successfully",
+        ),
       );
     } catch (error) {
       next(error);
@@ -924,7 +944,7 @@ export class UserController {
   static async updateNotificationPreferences(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -937,19 +957,19 @@ export class UserController {
         sms:
           typeof req.body.sms === "boolean"
             ? req.body.sms
-            : user.notification?.sms ?? true,
+            : (user.notification?.sms ?? true),
         push:
           typeof req.body.push === "boolean"
             ? req.body.push
-            : user.notification?.push ?? true,
+            : (user.notification?.push ?? true),
         email:
           typeof req.body.email === "boolean"
             ? req.body.email
-            : user.notification?.email ?? true,
+            : (user.notification?.email ?? true),
         whatsapp:
           typeof req.body.whatsapp === "boolean"
             ? req.body.whatsapp
-            : user.notification?.whatsapp ?? true,
+            : (user.notification?.whatsapp ?? true),
       };
 
       const result = await userService.updateById(_id, {
@@ -963,13 +983,15 @@ export class UserController {
         fromUser: { _id: result._id.toString(), role: UserType.USER },
       });
 
-      return res.status(200).json(
-        new ApiResponse(
-          200,
-          result.notification,
-          "Notification preferences updated successfully"
-        )
-      );
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            result.notification,
+            "Notification preferences updated successfully",
+          ),
+        );
     } catch (error) {
       next(error);
     }
@@ -978,7 +1000,7 @@ export class UserController {
   static async getContactPreferences(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -986,13 +1008,15 @@ export class UserController {
       if (!user) {
         return res.status(404).json(new ApiError(404, "user not found"));
       }
-      return res.status(200).json(
-        new ApiResponse(
-          200,
-          { enabled: user.contactsSyncEnabled !== false },
-          "Contact sync preferences fetched successfully"
-        )
-      );
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            { enabled: user.contactsSyncEnabled !== false },
+            "Contact sync preferences fetched successfully",
+          ),
+        );
     } catch (error) {
       next(error);
     }
@@ -1001,7 +1025,7 @@ export class UserController {
   static async updateContactPreferences(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -1019,16 +1043,22 @@ export class UserController {
       });
 
       if (!enabled) {
-        await ContactSync.deleteMany({ user: result._id });
+        // Instead of deleting, mark all contacts as unsynced
+        await ContactSync.updateMany(
+          { user: result._id },
+          { $set: { synced: false } },
+        );
       }
 
-      return res.status(200).json(
-        new ApiResponse(
-          200,
-          { enabled: result.contactsSyncEnabled === true },
-          "Contact sync preferences updated successfully"
-        )
-      );
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            { enabled: result.contactsSyncEnabled === true },
+            "Contact sync preferences updated successfully",
+          ),
+        );
     } catch (error) {
       next(error);
     }
@@ -1037,7 +1067,7 @@ export class UserController {
   static async syncContacts(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -1077,13 +1107,11 @@ export class UserController {
       const now = new Date();
       if (normalized.length === 0) {
         await ContactSync.deleteMany({ user: user._id });
-        return res.status(200).json(
-          new ApiResponse(
-            200,
-            { count: 0 },
-            "Contacts synced successfully"
-          )
-        );
+        return res
+          .status(200)
+          .json(
+            new ApiResponse(200, { count: 0 }, "Contacts synced successfully"),
+          );
       }
 
       const ops = normalized.map((contact) => ({
@@ -1094,6 +1122,7 @@ export class UserController {
               name: contact.name,
               phones: contact.phones,
               syncedAt: now,
+              synced: true,
             },
             $setOnInsert: {
               user: user._id,
@@ -1111,13 +1140,15 @@ export class UserController {
         recordId: { $nin: recordIds },
       });
 
-      return res.status(200).json(
-        new ApiResponse(
-          200,
-          { count: normalized.length },
-          "Contacts synced successfully"
-        )
-      );
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            { count: normalized.length },
+            "Contacts synced successfully",
+          ),
+        );
     } catch (error) {
       next(error);
     }
@@ -1126,7 +1157,7 @@ export class UserController {
   static async updateUser(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -1140,12 +1171,12 @@ export class UserController {
       if (req.body.avatar?.[0]?.url)
         avatar = await extractImageUrl(
           req.body.avatar,
-          existingUser?.avatar as string
+          existingUser?.avatar as string,
         );
       if (!avatar && profilePicture) {
         avatar = await extractImageUrl(
           req.body.profilePicture,
-          existingUser?.avatar as string
+          existingUser?.avatar as string,
         );
       }
 
@@ -1237,7 +1268,7 @@ export class UserController {
   static async completeKycProfile(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -1246,16 +1277,16 @@ export class UserController {
 
       const personalDetails = parseJSONSafely(
         req.body.personalDetails,
-        {}
+        {},
       ) as Record<string, any>;
       const addressDetails = parseJSONSafely(
         req.body.addressDetails,
-        null
+        null,
       ) as Record<string, any> | null;
       const employmentDetails = parseJSONSafely(req.body.employmentDetails, {});
       const financialDetails = parseJSONSafely(
         req.body.financialDetails,
-        {}
+        {},
       ) as Record<string, any>;
       const bankDetails = parseJSONSafely(req.body.bankDetails, {});
       const verification = parseJSONSafely(req.body.verification, {}) as Record<
@@ -1268,7 +1299,7 @@ export class UserController {
 
       const documentsPayload = normalizeDocumentEntries(
         req.body.documents,
-        "kyc_document"
+        "kyc_document",
       );
       const uploadedDocs = [
         ...mapUploadsToDocuments(req.body.kycDocuments, "kyc_document"),
@@ -1304,7 +1335,7 @@ export class UserController {
         ? normalizeAddress(
             addressDetails.currentAddress ||
               addressDetails.address ||
-              addressDetails
+              addressDetails,
           )
         : undefined;
       const permanentAddress = addressDetails
@@ -1361,10 +1392,10 @@ export class UserController {
       };
 
       const preferredProductsPrimary = normalizePreferredProducts(
-        financialDetails?.preferredProducts
+        financialDetails?.preferredProducts,
       );
       const preferredProductsFallback = normalizePreferredProducts(
-        req.body.preferredProducts
+        req.body.preferredProducts,
       );
       const preferredProducts =
         preferredProductsPrimary.length > 0
@@ -1389,7 +1420,9 @@ export class UserController {
       }
 
       if (personalDetails?.email) {
-        const normalizedEmail = String(personalDetails.email).trim().toLowerCase();
+        const normalizedEmail = String(personalDetails.email)
+          .trim()
+          .toLowerCase();
         if (normalizedEmail && normalizedEmail !== user.email) {
           const emailTaken = await User.findOne({
             email: normalizedEmail,
@@ -1407,7 +1440,7 @@ export class UserController {
 
       if (currentAddress) {
         const existingAddresses = (user.addresses || []).map((addr: any) =>
-          addr?.toObject ? addr.toObject() : addr
+          addr?.toObject ? addr.toObject() : addr,
         );
         const updatedAddresses = [...existingAddresses];
         if (updatedAddresses.length === 0) {
@@ -1495,7 +1528,7 @@ export class UserController {
       return res
         .status(200)
         .json(
-          new ApiResponse(200, updatedUser, "KYC profile updated successfully")
+          new ApiResponse(200, updatedUser, "KYC profile updated successfully"),
         );
     } catch (error) {
       next(error);
@@ -1505,7 +1538,7 @@ export class UserController {
   static async getCurrentUser(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ): Promise<any> {
     try {
       const { _id: userId } = (req as any).user;
@@ -1525,7 +1558,7 @@ export class UserController {
   static async getAllOTPLogs(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ): Promise<any> {
     try {
       const response = await otpService.getAll(req.query);
@@ -1540,7 +1573,7 @@ export class UserController {
   static async getUserById(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ): Promise<any> {
     try {
       const userId = req.params.id;
