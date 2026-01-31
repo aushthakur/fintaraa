@@ -5,6 +5,7 @@ import ApiError from "../../utils/ApiError";
 import { config } from "../../config/config";
 import ApiResponse from "../../utils/ApiResponse";
 import { extractImageUrl } from "../../utils/helper";
+import { sendSMS } from "../../utils/smsService";
 import { Request, Response, NextFunction } from "express";
 import {
   User,
@@ -864,13 +865,17 @@ export class UserController {
         { upsert: true, new: true, setDefaultsOnInsert: true },
       );
 
-      // TODO: Integrate real SMS service like Airtel IQ
-      console.log(`OTP sent to ${mobile}: ${otpCode}`);
-      // await sendEmail({
-      //   otp: otpCode,
-      //   to: user?.email,
-      //   userName: user?.name,
-      // });
+      // Send OTP via Airtel IQ SMS
+      try {
+        await sendSMS({
+          to: mobile,
+          otp: otpCode,
+        });
+        console.log(`OTP sent to ${mobile}: ${otpCode} (via Airtel IQ)`);
+      } catch (smsError: any) {
+        console.error(`Failed to send OTP SMS to ${mobile}:`, smsError.message);
+        // Don't fail the request, OTP is still valid for testing
+      }
 
       return res.status(200).json({
         success: true,

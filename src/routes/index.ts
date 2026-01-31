@@ -43,6 +43,7 @@ import insuranceQueryRoutes from "../public/insurancequery/insurancequery.routes
 import vehicleRcLookupRoutes from "../admin/vehicleRcLookup/vehicleRcLookup.routes";
 import documentCatalogRoutes from "../admin/documentCatalog/documentCatalog.routes";
 import formSubmitClickRoutes from "../public/formSubmitClick/formSubmitClick.routes";
+import eligibilityCriteriaRoutes from "../admin/eligibilityCriteria/eligibilityCriteria.routes";
 
 const router = Router();
 
@@ -89,5 +90,6 @@ router.use("/insurancequery", insuranceQueryRoutes);
 router.use("/document-catalog", documentCatalogRoutes);
 router.use("/vehicle-rc-lookups", vehicleRcLookupRoutes);
 router.use("/form-submit-clicks", formSubmitClickRoutes);
+router.use("/eligibility-criteria", eligibilityCriteriaRoutes);
 
 export default router;

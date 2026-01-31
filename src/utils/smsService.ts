@@ -2,128 +2,137 @@ import axios from "axios";
 import { config } from "../config/config";
 
 /**
- * Replaces variables in message template with actual values
- * Example: "Your OTP is {var}" with variables = {var: "123456"} => "Your OTP is 123456"
+ * Replace template variables like {otp} or {OTP}
  */
 const replaceVariables = (
   message: string,
-  variables?: Record<string, string | number>
+  variables?: Record<string, string | number>,
 ): string => {
-  if (!variables || Object.keys(variables).length === 0) {
-    return message;
-  }
+  if (!variables) return message;
 
-  let processedMessage = message;
+  let finalMessage = message;
+
   Object.entries(variables).forEach(([key, value]) => {
-    // Replace {var}, {{var}}, {VAR}, etc.
-    const regex = new RegExp(`\\{\\{?${key}\\}?\\}`, "gi");
-    processedMessage = processedMessage.replace(regex, String(value));
+    const regex = new RegExp(`\\{${key}\\}`, "gi");
+    finalMessage = finalMessage.replace(regex, String(value));
   });
 
-  return processedMessage;
+  return finalMessage;
 };
 
 /**
- * Builds Airtel IQ SMS payload according to official API structure
+ * Build Airtel IQ payload (DLT compliant)
  */
 const buildAirtelPayload = (
   to: string,
   message: string,
-  variables?: Record<string, string | number>
+  variables?: Record<string, string | number>,
 ) => {
-  const airtelConfig = config.sms?.airtelIq;
-  if (!airtelConfig) {
-    throw new Error("Airtel IQ configuration is missing.");
+  const airtel = config.sms?.airtelIq;
+
+  if (!airtel) {
+    throw new Error("Airtel IQ configuration missing");
   }
 
-  // Replace variables in message template
+  if (!airtel.customerId) {
+    throw new Error("Airtel IQ customerId missing");
+  }
+
+  if (!airtel.senderId) {
+    throw new Error("Airtel IQ senderId missing");
+  }
+
+  // if (!airtel.entityId) {
+  //   throw new Error("Airtel IQ entityId missing");
+  // }
+
+  if (!airtel.templateId) {
+    throw new Error("Airtel IQ templateId missing");
+  }
+
   const processedMessage = replaceVariables(message, variables);
 
-  // Clean phone number - remove + and country code if needed
-  const cleanedPhone = to.replace(/^\+?91/, "").replace(/\D/g, "");
+  // Clean Indian mobile number
+  const mobile = to.replace(/^\+?91/, "").replace(/\D/g, "");
 
-  // Build payload according to Airtel IQ API structure
-  const payload: any = {
-    customerId: airtelConfig.customerId,
-    destinationAddress: cleanedPhone,
-    message: processedMessage.trim().slice(0, 500),
-    messageType: airtelConfig.messageType || "PROMOTIONAL",
-    filterBlacklistNumbers: false,
+  let extraFields: Record<string, unknown> = {};
+  try {
+    extraFields = JSON.parse(airtel.extraFields || "{}");
+  } catch {
+    extraFields = {};
+  }
+
+  const metaData =
+    typeof extraFields.metaData === "object" && extraFields.metaData !== null
+      ? (extraFields.metaData as Record<string, unknown>)
+      : {};
+
+  const urlShortenerParams =
+    typeof extraFields.urlShortenerParams === "object" &&
+    extraFields.urlShortenerParams !== null
+      ? (extraFields.urlShortenerParams as Record<string, unknown>)
+      : undefined;
+
+  const messageType = airtel.messageType || "PROMOTIONAL";
+  const allowedMessageTypes = new Set([
+    "PROMOTIONAL",
+    "TRANSACTIONAL",
+    "SERVICE_IMPLICIT",
+    "SERVICE_EXPLICIT",
+  ]);
+
+  if (!allowedMessageTypes.has(messageType)) {
+    throw new Error(`Invalid Airtel IQ messageType: ${messageType}`);
+  }
+
+  const payload: Record<string, unknown> = {
+    metaData,
     priority: false,
+    destinationAddress: mobile,
+    customerId: airtel.customerId,
+    filterBlacklistNumbers: false,
+    message: processedMessage.trim(),
+    messageType,
+    entityId: airtel.entityId,
+    sourceAddress: airtel.senderId,
+    dltTemplateId: airtel.templateId,
   };
 
-  // Add optional fields if configured
-  if (airtelConfig.senderId) {
-    payload.sourceAddress = airtelConfig.senderId;
-  }
-
-  if (airtelConfig.entityId) {
-    payload.entityId = airtelConfig.entityId;
-  }
-
-  if (airtelConfig.templateId) {
-    payload.dltTemplateId = airtelConfig.templateId;
-  }
-
-  // Add metadata if needed
-  if (airtelConfig.extraFields) {
-    try {
-      const metadata = JSON.parse(airtelConfig.extraFields);
-      payload.metaData = metadata;
-    } catch {
-      payload.metaData = {};
-    }
-  } else {
-    payload.metaData = {};
+  if (urlShortenerParams) {
+    payload.urlShortenerParams = urlShortenerParams;
   }
 
   return payload;
 };
 
 /**
- * Sends SMS via Airtel IQ API
+ * Send SMS via Airtel IQ
  */
 const sendAirtelIqSMS = async (
   to: string,
   message: string,
-  variables?: Record<string, string | number>
+  variables?: Record<string, string | number>,
 ) => {
-  const airtelConfig = config.sms?.airtelIq;
+  const airtel = config.sms?.airtelIq;
 
-  // Validate configuration
-  if (!airtelConfig?.baseUrl) {
-    throw new Error("Airtel IQ base URL is not configured.");
+  if (!airtel?.baseUrl) {
+    throw new Error("Airtel IQ baseUrl missing");
   }
 
-  if (!airtelConfig.customerId) {
-    throw new Error("Airtel IQ customerId is not configured.");
-  }
-
-  if (!to || !message) {
-    throw new Error("Missing recipient phone number or message content.");
-  }
-
-  // Build payload
   const payload = buildAirtelPayload(to, message, variables);
+  console.log(airtel.baseUrl, payload);
 
-  // Construct full URL
-  const url = airtelConfig.baseUrl.replace(/\/$/, "");
-
-  // Send SMS
-  const response = await axios.post(url, payload, {
+  const response = await axios.post(airtel.baseUrl, payload, {
+    timeout: 30000,
     headers: {
       accept: "application/json",
       "content-type": "application/json",
     },
-    timeout: 10000,
   });
 
-  // Log in development
   if (config.env === "development") {
-    console.log("✅ Airtel IQ SMS sent:", {
+    console.log("✅ Airtel IQ SMS Sent", {
       to: payload.destinationAddress,
-      message: payload.message,
-      status: response.status,
       response: response.data,
     });
   }
@@ -132,56 +141,29 @@ const sendAirtelIqSMS = async (
 };
 
 /**
- * Sends an SMS using Airtel IQ with robust validation and error handling.
- * @param to - Recipient phone number (e.g., +91XXXXXXXXXX or 10-digit number)
- * @param message - Message content or template with {variables}
- * @param variables - Optional object with variable replacements {var: "value"}
- *
- * @example
- * // Simple message
- * await sendSMS({ to: "+919876543210", message: "Hello World" });
- *
- * // With variables
- * await sendSMS({
- *   to: "+919876543210",
- *   message: "Your OTP is {otp}. Valid for {minutes} minutes.",
- *   variables: { otp: "123456", minutes: "10" }
- * });
+ * Public SMS function
  */
-export async function sendSMS({
-  to,
-  message,
-  variables,
-}: {
-  to: string;
-  message: string;
-  variables?: Record<string, string | number>;
-}) {
+export async function sendSMS({ to, otp }: { to: string; otp: string }) {
   try {
-    if (!to || !message) {
-      throw new Error("Missing recipient phone number or message content.");
-    }
-
     if (!config.sms?.enabled) {
-      console.log("⚠️ SMS service is disabled in configuration");
-      return { success: false, message: "SMS service is disabled" };
+      return { success: false, message: "SMS service disabled" };
     }
 
-    if (config.sms?.provider !== "airtel_iq") {
-      throw new Error("Unsupported SMS provider configured.");
+    if (config.sms.provider !== "airtel_iq") {
+      throw new Error("Invalid SMS provider");
     }
 
-    return await sendAirtelIqSMS(to, message, variables);
+    // ⚠️ EXACT DLT TEMPLATE TEXT
+    const message =
+      "{otp} is your OTP to verify your mobile number for login on Fintaraa App/Website. Valid for 1 minute..";
+
+    return await sendAirtelIqSMS(to, message, { otp });
   } catch (err: any) {
-    const errorLog = {
-      code: err?.code || "UNKNOWN",
-      message: err?.message || "SMS Error",
-      response: err?.response?.data || "No response data",
-    };
-    console.log("❌ SMS Send Error:", errorLog);
-    throw new Error(
-      err?.message ||
-        "Something went wrong while sending SMS. Please try again later."
-    );
+    console.error("❌ SMS Error", {
+      message: err.message,
+      response: err?.response?.data,
+    });
+
+    throw new Error("Failed to send OTP SMS");
   }
 }

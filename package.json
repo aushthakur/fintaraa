@@ -6,7 +6,8 @@
     "build": "tsc",
     "start": "nodemon src/server.ts",
     "generate": "node src/generateModule.js",
-    "dev": "nodemon --watch .env --watch src --ext ts --exec ts-node src/server.ts"
+    "dev": "nodemon --watch .env --watch src --ext ts --exec ts-node src/server.ts",
+    "seed:eligibility": "ts-node src/scripts/seedEligibilityCriteria.ts"
   },
   "keywords": [],
   "author": "",

@@ -3,12 +3,13 @@ import { generateAccessToken, generateRefreshToken } from "../../utils/token";
 import Otp from "../../modals/otp.model";
 import Agent from "../../modals/agent.model";
 import { config } from "../../config/config";
+import { sendSMS } from "../../utils/smsService";
 
 export class AgentAuthController {
   static async sendOtp(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ): Promise<any> {
     try {
       const { mobile } = req.body;
@@ -37,10 +38,22 @@ export class AgentAuthController {
           otp: otpCode,
           verified: false,
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, new: true, setDefaultsOnInsert: true },
       );
 
-      console.log(`Agent OTP sent to ${mobile}: ${otpCode}`);
+      // Send OTP via Airtel IQ SMS
+      try {
+        await sendSMS({
+          to: mobile,
+          otp: otpCode,
+        });
+        console.log(`Agent OTP sent to ${mobile}: ${otpCode} (via Airtel IQ)`);
+      } catch (smsError: any) {
+        console.error(
+          `Failed to send Agent OTP SMS to ${mobile}:`,
+          smsError.message,
+        );
+      }
 
       return res.status(200).json({
         success: true,
@@ -55,7 +68,7 @@ export class AgentAuthController {
   static async verifyOtp(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ): Promise<any> {
     try {
       const { mobile, otp } = req.body;

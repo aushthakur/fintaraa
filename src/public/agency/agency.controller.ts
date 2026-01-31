@@ -1,16 +1,17 @@
 import crypto from "crypto";
-import { Request, Response, NextFunction } from "express";
-import ApiError from "../../utils/ApiError";
-import ApiResponse from "../../utils/ApiResponse";
-import { config } from "../../config/config";
 import Otp from "../../modals/otp.model";
-import { Agency, AgencyRole } from "../../modals/agency.model";
-import { generateAccessToken, generateRefreshToken } from "../../utils/token";
+import ApiError from "../../utils/ApiError";
+import { config } from "../../config/config";
+import { sendSMS } from "../../utils/smsService";
+import ApiResponse from "../../utils/ApiResponse";
 import { extractImageUrl } from "../../utils/helper";
+import { Request, Response, NextFunction } from "express";
+import { UserType } from "../../modals/notification.model";
+import { Agency, AgencyRole } from "../../modals/agency.model";
 import { CommonService } from "../../services/common.services";
 import { UserStatus, IKycProfile } from "../../modals/user.model";
 import { sendSingleNotification } from "../../services/notification.service";
-import { UserType } from "../../modals/notification.model";
+import { generateAccessToken, generateRefreshToken } from "../../utils/token";
 
 const agencyService = new CommonService(Agency);
 
@@ -65,7 +66,7 @@ const encryptDocumentPassword = (value?: string) => {
   if (!key) {
     throw new ApiError(
       500,
-      "Document password encryption key missing or invalid. Set DOC_PASSWORD_KEY (32 bytes)."
+      "Document password encryption key missing or invalid. Set DOC_PASSWORD_KEY (32 bytes).",
     );
   }
   const iv = crypto.randomBytes(12);
@@ -76,13 +77,13 @@ const encryptDocumentPassword = (value?: string) => {
   ]);
   const authTag = cipher.getAuthTag();
   return `${iv.toString("base64")}:${authTag.toString(
-    "base64"
+    "base64",
   )}:${encrypted.toString("base64")}`;
 };
 
 const normalizeDocumentEntries = (
   docs: any,
-  fallbackType = "supporting_document"
+  fallbackType = "supporting_document",
 ) => {
   return toArrayPayload(docs)
     .map((doc: any) => {
@@ -111,7 +112,7 @@ const mapUploadsToDocuments = (
     docPasswords?: any[];
     docTypes?: any[];
     docNames?: any[];
-  }
+  },
 ) => {
   const docNumbers = meta?.docNumbers || [];
   const docPasswords = meta?.docPasswords || [];
@@ -159,7 +160,7 @@ const safeNotify = async (payload: {
     });
   } catch (error: any) {
     console.log(
-      `[Notification] Failed to send ${payload.type}: ${error?.message || error}`
+      `[Notification] Failed to send ${payload.type}: ${error?.message || error}`,
     );
   }
 };
@@ -177,8 +178,7 @@ export class AgencyController {
 
       let agency: any = await Agency.findOne({ mobile });
       if (!agency) {
-        const placeholderEmail =
-          email || `${mobile}@agency.fintara`;
+        const placeholderEmail = email || `${mobile}@agency.fintara`;
         const role: AgencyRole = parentAgencyId ? "agency_member" : "agency";
         agency = await Agency.create({
           mobile,
@@ -199,10 +199,22 @@ export class AgencyController {
       await Otp.findOneAndUpdate(
         { mobile },
         { mobile, expiresAt, otp: otpCode, verified: false },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, new: true, setDefaultsOnInsert: true },
       );
 
-      console.log(`Agency OTP sent to ${mobile}: ${otpCode}`);
+      // Send OTP via Airtel IQ SMS
+      try {
+        await sendSMS({
+          to: mobile,
+          otp: otpCode,
+        });
+        console.log(`Agency OTP sent to ${mobile}: ${otpCode} (via Airtel IQ)`);
+      } catch (smsError: any) {
+        console.error(
+          `Failed to send Agency OTP SMS to ${mobile}:`,
+          smsError.message,
+        );
+      }
 
       return res.status(200).json({
         success: true,
@@ -247,9 +259,7 @@ export class AgencyController {
           .json({ success: false, message: "Agency not found" });
       }
 
-      if (
-        [UserStatus.SUSPENDED, UserStatus.INACTIVE].includes(agency.status)
-      ) {
+      if ([UserStatus.SUSPENDED, UserStatus.INACTIVE].includes(agency.status)) {
         return res
           .status(403)
           .json({ success: false, message: `Account ${agency.status}` });
@@ -297,16 +307,19 @@ export class AgencyController {
   static async getCurrentAgency(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
       const agency = await agencyService.getById(_id);
-      if (!agency) return res.status(404).json(new ApiError(404, "Agency not found"));
+      if (!agency)
+        return res.status(404).json(new ApiError(404, "Agency not found"));
 
-      return res.status(200).json(
-        new ApiResponse(200, agency, "Agency details fetched successfully")
-      );
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(200, agency, "Agency details fetched successfully"),
+        );
     } catch (error) {
       next(error);
     }
@@ -315,7 +328,7 @@ export class AgencyController {
   static async getNotificationPreferences(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -326,9 +339,14 @@ export class AgencyController {
       return res.status(200).json(
         new ApiResponse(
           200,
-          agency.notification || { sms: true, push: true, email: true, whatsapp: true },
-          "Notification preferences fetched successfully"
-        )
+          agency.notification || {
+            sms: true,
+            push: true,
+            email: true,
+            whatsapp: true,
+          },
+          "Notification preferences fetched successfully",
+        ),
       );
     } catch (error) {
       next(error);
@@ -338,7 +356,7 @@ export class AgencyController {
   static async updateNotificationPreferences(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -351,32 +369,34 @@ export class AgencyController {
         sms:
           typeof req.body.sms === "boolean"
             ? req.body.sms
-            : agency.notification?.sms ?? true,
+            : (agency.notification?.sms ?? true),
         push:
           typeof req.body.push === "boolean"
             ? req.body.push
-            : agency.notification?.push ?? true,
+            : (agency.notification?.push ?? true),
         email:
           typeof req.body.email === "boolean"
             ? req.body.email
-            : agency.notification?.email ?? true,
+            : (agency.notification?.email ?? true),
         whatsapp:
           typeof req.body.whatsapp === "boolean"
             ? req.body.whatsapp
-            : agency.notification?.whatsapp ?? true,
+            : (agency.notification?.whatsapp ?? true),
       };
 
       const result = await agencyService.updateById(_id, {
         notification: nextPrefs,
       });
 
-      return res.status(200).json(
-        new ApiResponse(
-          200,
-          result.notification,
-          "Notification preferences updated successfully"
-        )
-      );
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            result.notification,
+            "Notification preferences updated successfully",
+          ),
+        );
     } catch (error) {
       next(error);
     }
@@ -385,7 +405,7 @@ export class AgencyController {
   static async getTeamMembers(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -404,7 +424,7 @@ export class AgencyController {
       return res
         .status(200)
         .json(
-          new ApiResponse(200, members, "Team members fetched successfully")
+          new ApiResponse(200, members, "Team members fetched successfully"),
         );
     } catch (error) {
       next(error);
@@ -414,7 +434,7 @@ export class AgencyController {
   static async getTeamMember(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -433,9 +453,7 @@ export class AgencyController {
         parentAgency: _id,
       }).select("-password -refreshToken");
       if (!member) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Team member not found"));
+        return res.status(404).json(new ApiError(404, "Team member not found"));
       }
       return res
         .status(200)
@@ -448,7 +466,7 @@ export class AgencyController {
   static async createTeamMember(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -464,11 +482,11 @@ export class AgencyController {
 
       const personalDetails = parseJSONSafely(
         req.body.personalDetails,
-        {}
+        {},
       ) as Record<string, any>;
       const addressDetails = parseJSONSafely(
         req.body.addressDetails,
-        {}
+        {},
       ) as Record<string, any>;
       const employmentDetails = parseJSONSafely(req.body.employmentDetails, {});
       const financialDetails = parseJSONSafely(req.body.financialDetails, {});
@@ -508,7 +526,7 @@ export class AgencyController {
         kycProfile: {
           reusableAcrossApplications: normalizeBoolean(
             req.body.reusableAcrossApplications,
-            true
+            true,
           ),
           personalDetails,
           addressDetails,
@@ -532,7 +550,7 @@ export class AgencyController {
   static async updateTeamMember(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -552,18 +570,16 @@ export class AgencyController {
         parentAgency: _id,
       });
       if (!member) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Team member not found"));
+        return res.status(404).json(new ApiError(404, "Team member not found"));
       }
 
       const personalDetails = parseJSONSafely(
         req.body.personalDetails,
-        {}
+        {},
       ) as Record<string, any>;
       const addressDetails = parseJSONSafely(
         req.body.addressDetails,
-        {}
+        {},
       ) as Record<string, any>;
       const employmentDetails = parseJSONSafely(req.body.employmentDetails, {});
       const financialDetails = parseJSONSafely(req.body.financialDetails, {});
@@ -578,7 +594,7 @@ export class AgencyController {
         ...existingKyc,
         reusableAcrossApplications: normalizeBoolean(
           req.body.reusableAcrossApplications,
-          existingKyc.reusableAcrossApplications ?? true
+          existingKyc.reusableAcrossApplications ?? true,
         ),
         personalDetails: {
           ...(existingKyc.personalDetails || {}),
@@ -596,9 +612,7 @@ export class AgencyController {
           ...(existingKyc.financialDetails || {}),
           ...financialDetails,
         },
-        documents: Array.isArray(documents)
-          ? documents
-          : existingKyc.documents,
+        documents: Array.isArray(documents) ? documents : existingKyc.documents,
       };
 
       if (personalDetails?.fullName) member.name = personalDetails.fullName;
@@ -611,12 +625,15 @@ export class AgencyController {
       const profilePicture = req.body.profilePicture?.[0]?.url;
       let avatar;
       if (req.body.avatar?.[0]?.url) {
-        avatar = await extractImageUrl(req.body.avatar, member.avatar as string);
+        avatar = await extractImageUrl(
+          req.body.avatar,
+          member.avatar as string,
+        );
       }
       if (!avatar && profilePicture) {
         avatar = await extractImageUrl(
           req.body.profilePicture,
-          member.avatar as string
+          member.avatar as string,
         );
       }
       if (avatar || profilePicture) {
@@ -645,7 +662,7 @@ export class AgencyController {
   static async syncDigiLocker(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -655,17 +672,17 @@ export class AgencyController {
       const storageProvider = req.body.storageProvider || "internal";
       const defaultDocType = req.body.defaultDocType || "digital_document";
       const docNumbers = toArrayPayload(
-        req.body.docNumber || req.body.documentNumber || req.body.number
+        req.body.docNumber || req.body.documentNumber || req.body.number,
       );
       const docPasswords = toArrayPayload(
-        req.body.docPassword || req.body.password
+        req.body.docPassword || req.body.password,
       );
       const docTypes = toArrayPayload(req.body.docType);
       const docNames = toArrayPayload(req.body.name);
 
       const providedDocs = normalizeDocumentEntries(
         req.body.documents,
-        defaultDocType
+        defaultDocType,
       );
       const uploadedDocs = mapUploadsToDocuments(
         req.body.digiLockerFiles || req.body.documentsUpload,
@@ -675,7 +692,7 @@ export class AgencyController {
           docPasswords,
           docTypes,
           docNames,
-        }
+        },
       );
 
       const currentVaultDocs =
@@ -705,15 +722,15 @@ export class AgencyController {
       const mergedDocs: any[] = [];
       for (const [docType, doc] of mergedByType.entries()) {
         const incoming = incomingDocs.find(
-          (item) => item?.docType && item.docType === docType
+          (item) => item?.docType && item.docType === docType,
         );
         const existing = currentVaultDocs.find(
-          (item: any) => item?.docType === docType
+          (item: any) => item?.docType === docType,
         );
         if (incoming?.fileUrl && existing?.fileUrl) {
           const nextUrl = await extractImageUrl(
             [{ url: incoming.fileUrl }],
-            existing.fileUrl
+            existing.fileUrl,
           );
           mergedDocs.push({ ...doc, fileUrl: nextUrl });
         } else {
@@ -738,14 +755,15 @@ export class AgencyController {
           },
           kycProfile: updatedKyc,
         },
-        { new: true, populate: false }
+        { new: true, populate: false },
       );
 
-      const sanitizedDocs =
-        (updatedAgency.digiLockerVault?.documents || []).map((doc: any) => {
-          const { password, ...rest } = doc?.toObject ? doc.toObject() : doc;
-          return rest;
-        });
+      const sanitizedDocs = (
+        updatedAgency.digiLockerVault?.documents || []
+      ).map((doc: any) => {
+        const { password, ...rest } = doc?.toObject ? doc.toObject() : doc;
+        return rest;
+      });
 
       await safeNotify({
         type: "digilocker-synced",
@@ -763,8 +781,8 @@ export class AgencyController {
               : updatedAgency.digiLockerVault) || {}),
             documents: sanitizedDocs,
           },
-          "DigiLocker vault synced successfully"
-        )
+          "DigiLocker vault synced successfully",
+        ),
       );
     } catch (error) {
       next(error);
@@ -774,7 +792,7 @@ export class AgencyController {
   static async getDigiLockerDocuments(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
@@ -783,7 +801,7 @@ export class AgencyController {
         (doc: any) => {
           const { password, ...rest } = doc?.toObject ? doc.toObject() : doc;
           return rest;
-        }
+        },
       );
       return res.status(200).json(
         new ApiResponse(
@@ -794,8 +812,8 @@ export class AgencyController {
               : agency?.digiLockerVault) || {}),
             documents: sanitizedDocs,
           },
-          "DigiLocker vault fetched successfully"
-        )
+          "DigiLocker vault fetched successfully",
+        ),
       );
     } catch (error) {
       next(error);
@@ -805,26 +823,27 @@ export class AgencyController {
   static async updateAgency(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
       const { id } = req.params;
       const existing = await agencyService.getById(id || _id);
-      if (!existing) return res.status(404).json(new ApiError(404, "Agency not found"));
+      if (!existing)
+        return res.status(404).json(new ApiError(404, "Agency not found"));
 
       const profilePicture = req.body.profilePicture?.[0]?.url;
       let avatar;
       if (req.body.avatar?.[0]?.url) {
         avatar = await extractImageUrl(
           req.body.avatar,
-          existing?.avatar as string
+          existing?.avatar as string,
         );
       }
       if (!avatar && profilePicture) {
         avatar = await extractImageUrl(
           req.body.profilePicture,
-          existing?.avatar as string
+          existing?.avatar as string,
         );
       }
 
@@ -842,20 +861,21 @@ export class AgencyController {
   static async updateKycProfile(
     req: Request | any,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { _id } = req.user;
       const agency: any = await Agency.findById(_id);
-      if (!agency) return res.status(404).json(new ApiError(404, "Agency not found"));
+      if (!agency)
+        return res.status(404).json(new ApiError(404, "Agency not found"));
 
       const personalDetails = parseJSONSafely(
         req.body.personalDetails,
-        {}
+        {},
       ) as Record<string, any>;
       const addressDetails = parseJSONSafely(
         req.body.addressDetails,
-        {}
+        {},
       ) as Record<string, any>;
       const employmentDetails = parseJSONSafely(req.body.employmentDetails, {});
       const financialDetails = parseJSONSafely(req.body.financialDetails, {});
@@ -870,7 +890,7 @@ export class AgencyController {
         ...existingKyc,
         reusableAcrossApplications: normalizeBoolean(
           req.body.reusableAcrossApplications,
-          existingKyc.reusableAcrossApplications ?? true
+          existingKyc.reusableAcrossApplications ?? true,
         ),
         personalDetails: {
           ...(existingKyc.personalDetails || {}),
@@ -911,9 +931,9 @@ export class AgencyController {
       }
       await agency.save();
 
-      return res.status(200).json(
-        new ApiResponse(200, agency, "KYC profile updated successfully")
-      );
+      return res
+        .status(200)
+        .json(new ApiResponse(200, agency, "KYC profile updated successfully"));
     } catch (error) {
       next(error);
     }
