@@ -31,6 +31,7 @@ const createMailOptions = (
   receiverEmail: string,
   subject: string,
   htmlContent: string,
+  attachments?: SendMailOptions["attachments"],
 ): SendMailOptions => {
   return {
     from: {
@@ -40,6 +41,7 @@ const createMailOptions = (
     to: receiverEmail, // Recipient's email
     subject: subject, // Email subject
     html: htmlContent, // HTML content of the email body
+    attachments: attachments && attachments.length > 0 ? attachments : undefined,
   };
 };
 
@@ -54,8 +56,14 @@ const sendEmail = (
   receiverEmail: string,
   subject: string,
   htmlContent: string,
+  attachments?: SendMailOptions["attachments"],
 ): void => {
-  const mailOptions = createMailOptions(receiverEmail, subject, htmlContent);
+  const mailOptions = createMailOptions(
+    receiverEmail,
+    subject,
+    htmlContent,
+    attachments,
+  );
 
   transporter.sendMail(mailOptions, (error: any, info: SentMessageInfo) => {
     if (error) {

@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from "express";
+import axios from "axios";
 import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
 import { CommonService } from "../../services/common.services";
@@ -95,6 +96,54 @@ const buildApplicantRows = (loan: Record<string, any> | null) => {
     .join("");
 };
 
+type DocumentAttachmentInput = {
+  label?: string;
+  url?: string;
+  source?: string;
+};
+
+const sanitizeFilename = (value: string) => {
+  const cleaned = value.replace(/[^a-zA-Z0-9-_]+/g, "_").replace(/^_+|_+$/g, "");
+  return cleaned || "document";
+};
+
+const getExtensionFromContentType = (contentType?: string) => {
+  if (!contentType) return null;
+  if (contentType.includes("pdf")) return "pdf";
+  if (contentType.includes("jpeg")) return "jpg";
+  if (contentType.includes("jpg")) return "jpg";
+  if (contentType.includes("png")) return "png";
+  if (contentType.includes("webp")) return "webp";
+  return null;
+};
+
+const getExtensionFromUrl = (url: string) => {
+  const pathname = url.split("?")[0];
+  const ext = pathname.split(".").pop();
+  if (!ext || ext.length > 5) return null;
+  return ext.toLowerCase();
+};
+
+const fetchDocumentAttachment = async (
+  doc: DocumentAttachmentInput,
+  index: number
+) => {
+  if (!doc?.url) return null;
+  const response = await axios.get(doc.url, { responseType: "arraybuffer" });
+  const contentType = String(response.headers["content-type"] || "").toLowerCase();
+  const extension =
+    getExtensionFromContentType(contentType) || getExtensionFromUrl(doc.url) || "bin";
+  const label = sanitizeFilename(doc.label || `document_${index + 1}`);
+  const source = sanitizeFilename(doc.source || "attachment");
+  const filename = `${label}_${source}.${extension}`;
+
+  return {
+    filename,
+    content: Buffer.from(response.data),
+    contentType: contentType || "application/octet-stream",
+  };
+};
+
 export class EligibilityCriteriaController {
   static async create(req: Request, res: Response, next: NextFunction) {
     try {
@@ -180,7 +229,13 @@ export class EligibilityCriteriaController {
 
   static async sendMail(req: Request, res: Response, next: NextFunction) {
     try {
-      const { criteriaIds = [], queryId } = req.body || {};
+      const {
+        criteriaIds = [],
+        queryId,
+        pdfBase64,
+        pdfFileName,
+        documentAttachments = [],
+      } = req.body || {};
 
       if (!Array.isArray(criteriaIds) || criteriaIds.length === 0) {
         return res
@@ -212,6 +267,50 @@ export class EligibilityCriteriaController {
         }
       }
 
+      const normalizedDocuments: DocumentAttachmentInput[] = Array.isArray(
+        documentAttachments
+      )
+        ? documentAttachments
+        : [];
+      const uniqueDocuments = Array.from(
+        new Map(
+          normalizedDocuments
+            .filter((doc) => doc?.url)
+            .map((doc) => [String(doc.url), doc])
+        ).values()
+      );
+
+      const documentAttachmentResults = await Promise.all(
+        uniqueDocuments.map(async (doc, index) => {
+          try {
+            return await fetchDocumentAttachment(doc, index);
+          } catch (error) {
+            return { error: true, doc };
+          }
+        })
+      );
+
+      const documentAttachmentFiles = documentAttachmentResults.filter(
+        (item: any) => item && !item.error
+      );
+      const documentAttachmentFailures = documentAttachmentResults.filter(
+        (item: any) => item && item.error
+      );
+
+      const attachments: any[] = [];
+      if (typeof pdfBase64 === "string" && pdfBase64.trim()) {
+        const normalizedPdf = pdfBase64.replace(
+          /^data:application\/pdf;base64,/,
+          ""
+        );
+        attachments.push({
+          filename: pdfFileName || `eligibility-${queryId || "details"}.pdf`,
+          content: Buffer.from(normalizedPdf, "base64"),
+          contentType: "application/pdf",
+        });
+      }
+      attachments.push(...documentAttachmentFiles);
+
       const results = await Promise.all(
         criteriaList.map(async (criteria: any) => {
           const recipients = [
@@ -234,6 +333,10 @@ export class EligibilityCriteriaController {
           const applicantRows = buildApplicantRows(loanQuery);
           const criteriaRows = buildCriteriaRows(criteria);
 
+          const attachmentNote = attachments.length
+            ? `<p style="margin:12px 0 0; font-size:12px; color:#475569;">${attachments.length} attachment(s) included with this email.</p>`
+            : "";
+
           const html = `
             <div style="font-family: Arial, sans-serif; color: #0f172a;">
               <h2 style="margin:0 0 12px;">Eligibility Match Details</h2>
@@ -245,11 +348,12 @@ export class EligibilityCriteriaController {
               }
               <h3 style="margin:16px 0 8px;">Eligibility Criteria</h3>
               <table style="border-collapse:collapse; width:100%; font-size:13px;">${criteriaRows}</table>
+              ${attachmentNote}
             </div>
           `;
 
           await transporter.sendMail(
-            createMailOptions(recipients.join(","), subject, html)
+            createMailOptions(recipients.join(","), subject, html, attachments)
           );
 
           return { id: criteria._id, sent: true, recipients };
@@ -264,6 +368,11 @@ export class EligibilityCriteriaController {
             sent: results.filter((r) => r.sent).length,
             failed: results.filter((r) => !r.sent).length,
             results,
+            attachments: {
+              total: attachments.length,
+              pdfAttached: Boolean(pdfBase64),
+              documentFailures: documentAttachmentFailures.length,
+            },
           },
           "Email dispatch completed"
         )
