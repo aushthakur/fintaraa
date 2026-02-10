@@ -880,7 +880,6 @@ export class UserController {
       return res.status(200).json({
         success: true,
         message: "OTP has been sent successfully",
-        otp: otpCode, // Exposed for QA/demo; hide in production SMS-only flows
         existed,
       });
     } catch (error) {

@@ -219,7 +219,6 @@ export class AgencyController {
       return res.status(200).json({
         success: true,
         message: "OTP has been sent successfully",
-        otp: otpCode,
       });
     } catch (error) {
       next(error);

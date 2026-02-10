@@ -42,10 +42,6 @@ const buildAirtelPayload = (
     throw new Error("Airtel IQ senderId missing");
   }
 
-  // if (!airtel.entityId) {
-  //   throw new Error("Airtel IQ entityId missing");
-  // }
-
   if (!airtel.templateId) {
     throw new Error("Airtel IQ templateId missing");
   }
@@ -55,25 +51,7 @@ const buildAirtelPayload = (
   // Clean Indian mobile number
   const mobile = to.replace(/^\+?91/, "").replace(/\D/g, "");
 
-  let extraFields: Record<string, unknown> = {};
-  try {
-    extraFields = JSON.parse(airtel.extraFields || "{}");
-  } catch {
-    extraFields = {};
-  }
-
-  const metaData =
-    typeof extraFields.metaData === "object" && extraFields.metaData !== null
-      ? (extraFields.metaData as Record<string, unknown>)
-      : {};
-
-  const urlShortenerParams =
-    typeof extraFields.urlShortenerParams === "object" &&
-    extraFields.urlShortenerParams !== null
-      ? (extraFields.urlShortenerParams as Record<string, unknown>)
-      : undefined;
-
-  const messageType = airtel.messageType || "PROMOTIONAL";
+  const messageType = airtel.messageType || "SERVICE_IMPLICIT";
   const allowedMessageTypes = new Set([
     "PROMOTIONAL",
     "TRANSACTIONAL",
@@ -86,21 +64,14 @@ const buildAirtelPayload = (
   }
 
   const payload: Record<string, unknown> = {
-    metaData,
-    priority: false,
-    destinationAddress: mobile,
     customerId: airtel.customerId,
-    filterBlacklistNumbers: false,
+    destinationAddress: [mobile],
+    dltTemplateId: airtel.templateId,
+    entityId: airtel.entityId,
     message: processedMessage.trim(),
     messageType,
-    entityId: airtel.entityId,
     sourceAddress: airtel.senderId,
-    dltTemplateId: airtel.templateId,
   };
-
-  if (urlShortenerParams) {
-    payload.urlShortenerParams = urlShortenerParams;
-  }
 
   return payload;
 };
@@ -155,7 +126,7 @@ export async function sendSMS({ to, otp }: { to: string; otp: string }) {
 
     // ⚠️ EXACT DLT TEMPLATE TEXT
     const message =
-      "{otp} is your OTP to verify your mobile number for login on Fintaraa App/Website. Valid for 1 minute..";
+      "{otp} is your OTP to verify your mobile number for login on Fintaraa App/Website. Valid for 1 minute.";
 
     return await sendAirtelIqSMS(to, message, { otp });
   } catch (err: any) {

@@ -78,7 +78,7 @@ export const config = {
       // Airtel IQ API endpoint
       baseUrl:
         process.env.AIRTEL_IQ_SMS_BASE_URL ||
-        "http://iqsms.airtel.in/api/v1/send-sms",
+        "https://iqsms.airtel.in/api/v1/send-prepaid-sms",
 
       // Required identifiers from Airtel IQ dashboard
       customerId: process.env.AIRTEL_IQ_SMS_CUSTOMER_ID || "",
@@ -86,8 +86,8 @@ export const config = {
       entityId: process.env.AIRTEL_IQ_SMS_ENTITY_ID || "",
       templateId: process.env.AIRTEL_IQ_SMS_TEMPLATE_ID || "",
 
-      // Message type: PROMOTIONAL or TRANSACTIONAL
-      messageType: process.env.AIRTEL_IQ_SMS_MESSAGE_TYPE || "PROMOTIONAL",
+      // Message type: PROMOTIONAL, TRANSACTIONAL, SERVICE_IMPLICIT, SERVICE_EXPLICIT
+      messageType: process.env.AIRTEL_IQ_SMS_MESSAGE_TYPE || "SERVICE_IMPLICIT",
 
       // Optional metadata
       extraFields: process.env.AIRTEL_IQ_SMS_EXTRA_FIELDS || "{}",
