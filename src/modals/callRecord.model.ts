@@ -13,6 +13,7 @@ export interface ICallRecord extends Document {
   state?: string;
   pincode?: string;
   callStatus?: string;
+  followUp?: boolean;
   productService?: string;
   loanAmount?: number;
   callbackAt?: Date;
@@ -51,6 +52,7 @@ const CallRecordSchema = new Schema<ICallRecord>(
     state: { type: String, trim: true },
     pincode: { type: String, trim: true },
     callStatus: { type: String, trim: true },
+    followUp: { type: Boolean, default: false },
     productService: { type: String, trim: true },
     loanAmount: { type: Number },
     callbackAt: { type: Date },
