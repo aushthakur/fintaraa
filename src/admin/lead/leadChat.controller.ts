@@ -11,6 +11,151 @@ import { Types } from "mongoose";
 
 export class LeadChatController {
   /**
+   * Get unique live chat conversations between agents and users (lead chats only)
+   */
+  static async getConversations(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const currentUserId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+
+      if (!role || (role !== "admin" && role !== "agent")) {
+        throw new ApiError(403, "Access denied");
+      }
+
+      const match: any = {
+        leadId: { $exists: true, $ne: null },
+        $or: [
+          { senderModel: "User", receiverModel: "Agent" },
+          { senderModel: "Agent", receiverModel: "User" },
+        ],
+      };
+
+      if (role === "agent" && currentUserId) {
+        match.$or = [
+          {
+            senderModel: "Agent",
+            receiverModel: "User",
+            sender: new Types.ObjectId(String(currentUserId)),
+          },
+          {
+            senderModel: "User",
+            receiverModel: "Agent",
+            receiver: new Types.ObjectId(String(currentUserId)),
+          },
+        ];
+      }
+
+      const rows = await Message.aggregate([
+        { $match: match },
+        { $sort: { createdAt: -1 } },
+        {
+          $addFields: {
+            userId: {
+              $cond: [{ $eq: ["$senderModel", "User"] }, "$sender", "$receiver"],
+            },
+            agentId: {
+              $cond: [{ $eq: ["$senderModel", "Agent"] }, "$sender", "$receiver"],
+            },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              leadId: "$leadId",
+              userId: "$userId",
+              agentId: "$agentId",
+            },
+            lastMessage: { $first: "$$ROOT" },
+            unreadCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$receiver", new Types.ObjectId(String(currentUserId))] },
+                      { $ne: ["$status", "read"] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+        { $sort: { "lastMessage.createdAt": -1 } },
+      ]);
+
+      const leadIds = [...new Set(rows.map((r: any) => String(r?._id?.leadId)).filter(Boolean))];
+      const userIds = [...new Set(rows.map((r: any) => String(r?._id?.userId)).filter(Boolean))];
+      const agentIds = [...new Set(rows.map((r: any) => String(r?._id?.agentId)).filter(Boolean))];
+
+      const [leads, users, agents] = await Promise.all([
+        Lead.find({ _id: { $in: leadIds } })
+          .select("_id leadRef fullName mobile")
+          .lean(),
+        User.find({ _id: { $in: userIds } })
+          .select("_id name email mobile")
+          .lean(),
+        Agent.find({ _id: { $in: agentIds } })
+          .select("_id name email")
+          .lean(),
+      ]);
+
+      const leadMap = new Map(leads.map((lead: any) => [String(lead._id), lead]));
+      const userMap = new Map(users.map((u: any) => [String(u._id), u]));
+      const agentMap = new Map(agents.map((a: any) => [String(a._id), a]));
+
+      const conversations = rows.map((row: any) => {
+        const leadId = String(row?._id?.leadId || "");
+        const userId = String(row?._id?.userId || "");
+        const agentId = String(row?._id?.agentId || "");
+        const lead = leadMap.get(leadId);
+        const user = userMap.get(userId);
+        const agent = agentMap.get(agentId);
+        const msg = row?.lastMessage || {};
+
+        return {
+          _id: `${leadId}:${userId}:${agentId}`,
+          leadId,
+          leadRef: lead?.leadRef || leadId.slice(-8),
+          leadName: lead?.fullName || "Lead",
+          user: {
+            _id: userId,
+            name: user?.name || "User",
+            email: user?.email || "",
+            mobile: user?.mobile || "",
+          },
+          agent: {
+            _id: agentId,
+            name: agent?.name || "Agent",
+            email: agent?.email || "",
+          },
+          unreadCount: Number(row?.unreadCount) || 0,
+          lastMessage: {
+            _id: String(msg?._id || ""),
+            text: msg?.text || "",
+            createdAt: msg?.createdAt,
+            senderModel: msg?.senderModel,
+            attachmentsCount: Array.isArray(msg?.attachments)
+              ? msg.attachments.length
+              : 0,
+          },
+        };
+      });
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, conversations, "Conversations fetched successfully"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * Get all messages for a specific lead
    */
   static async getLeadMessages(
@@ -404,4 +549,3 @@ export class LeadChatController {
     }
   }
 }
-

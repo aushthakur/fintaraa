@@ -41,6 +41,7 @@ router
   .post(asyncHandler(LeadController.createLead));
 
 router.get("/pipeline/summary", asyncHandler(LeadController.pipelineSummary));
+router.get("/chat/conversations", asyncHandler(LeadChatController.getConversations));
 
 router.get("/:id", asyncHandler(LeadController.getLead));
 router.post("/:id/notes", asyncHandler(LeadController.addNote));

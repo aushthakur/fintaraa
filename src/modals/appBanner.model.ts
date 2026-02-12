@@ -81,4 +81,13 @@ const appBannerSchema = new Schema<IAppBanner>(
   { timestamps: true }
 );
 
+appBannerSchema.index({
+  status: 1,
+  audience: 1,
+  placement: 1,
+  priority: -1,
+  createdAt: -1,
+});
+appBannerSchema.index({ startAt: 1, endAt: 1 });
+
 export const AppBanner = mongoose.model<IAppBanner>("AppBanner", appBannerSchema);
