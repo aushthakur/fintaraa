@@ -17,8 +17,7 @@ export interface SurepassCibilRequestPayload {
   consent: string;
 }
 
-export interface SurepassCibilInput
-  extends Partial<SurepassCibilRequestPayload> {
+export interface SurepassCibilInput extends Partial<SurepassCibilRequestPayload> {
   mobileNumber?: string;
   phoneNumber?: string;
   contactNumber?: string;
@@ -52,7 +51,7 @@ const normalizeGender = (value: string) => value.trim().toLowerCase();
 const normalizeConsent = (value: string) => value.trim().toLowerCase();
 
 const ensureEnvConfig = (
-  env: SurepassEnvironment
+  env: SurepassEnvironment,
 ): SurepassEnvConfig & { environment: SurepassEnvironment } => {
   const targetEnv = env === "production" ? "production" : "sandbox";
   const envConfig =
@@ -63,7 +62,7 @@ const ensureEnvConfig = (
   if (!envConfig?.token) {
     throw new ApiError(
       500,
-      `Surepass token is not configured for ${targetEnv} environment`
+      `Surepass token is not configured for ${targetEnv} environment`,
     );
   }
 
@@ -74,7 +73,7 @@ const ensureEnvConfig = (
 };
 
 export const prepareSurepassCibilPayload = (
-  input: SurepassCibilInput
+  input: SurepassCibilInput,
 ): SurepassCibilRequestPayload => {
   const mobileCandidate =
     input.mobile ||
@@ -88,7 +87,7 @@ export const prepareSurepassCibilPayload = (
   if (!mobileCandidate) {
     throw new ApiError(
       400,
-      "Mobile number is required to fetch the CIBIL report"
+      "Mobile number is required to fetch the CIBIL report",
     );
   }
 
@@ -107,7 +106,7 @@ export const prepareSurepassCibilPayload = (
   if (!input.consent) {
     throw new ApiError(
       400,
-      "Customer consent is required to fetch the CIBIL report"
+      "Customer consent is required to fetch the CIBIL report",
     );
   }
 
@@ -139,7 +138,7 @@ export const prepareSurepassCibilPayload = (
 
 export const fetchSurepassCibilReport = async (
   payload: SurepassCibilRequestPayload,
-  options?: { environment?: SurepassEnvironment }
+  options?: { environment?: SurepassEnvironment },
 ) => {
   const environment =
     options?.environment ||
@@ -150,7 +149,7 @@ export const fetchSurepassCibilReport = async (
   try {
     const url = `${envConfig.baseUrl}${config.surepass.endpoints.cibil}`;
     payload = { ...payload, consent: "Y" };
-    console.log(payload, envConfig, url);
+    // console.log(payload, envConfig, url);
     const { data } = await axios.post(url, payload, {
       headers: {
         Authorization: `Bearer ${envConfig.token}`,
@@ -158,6 +157,8 @@ export const fetchSurepassCibilReport = async (
       },
       timeout: config.surepass.timeoutMs,
     });
+
+    console.log(data);
 
     return {
       environment: envConfig.environment,
@@ -177,7 +178,7 @@ export const fetchSurepassCibilReport = async (
 
 export const fetchSurepassCibilPdfReport = async (
   payload: SurepassCibilRequestPayload,
-  options?: { environment?: SurepassEnvironment }
+  options?: { environment?: SurepassEnvironment },
 ) => {
   const environment =
     options?.environment ||
@@ -189,6 +190,7 @@ export const fetchSurepassCibilPdfReport = async (
     const url = `${envConfig.baseUrl}${config.surepass.endpoints.cibilPdf}`;
     payload = { ...payload, consent: "Y" };
 
+    console.log(url, payload);
     const { data } = await axios.post(url, payload, {
       headers: {
         Authorization: `Bearer ${envConfig.token}`,
@@ -212,7 +214,7 @@ export const fetchSurepassCibilPdfReport = async (
 };
 
 export const prepareSurepassRcPayload = (
-  input: SurepassRcInput
+  input: SurepassRcInput,
 ): SurepassRcRequestPayload => {
   const candidate =
     input.id_number || input.idNumber || input.carNumber || input.vehicleNumber;
@@ -234,7 +236,7 @@ export const prepareSurepassRcPayload = (
 
 export const fetchSurepassRcDetails = async (
   payload: SurepassRcRequestPayload,
-  options?: { environment?: SurepassEnvironment }
+  options?: { environment?: SurepassEnvironment },
 ) => {
   const environment =
     options?.environment ||

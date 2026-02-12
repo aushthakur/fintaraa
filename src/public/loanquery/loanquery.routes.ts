@@ -13,13 +13,11 @@ const router = Router();
 // All routes require authentication
 router.use(authenticateToken);
 
+router.post("/rc-lookup", asyncHandler(LoanQueryController.fetchRcDetails));
+router.post("/:id/cibil", asyncHandler(LoanQueryController.fetchCibilForQuery));
 router.post(
-  "/rc-lookup",
-  asyncHandler(LoanQueryController.fetchRcDetails)
-);
-router.post(
-  "/:id/cibil",
-  asyncHandler(LoanQueryController.fetchCibilForQuery)
+  "/fetch-cibil-pdf-by-mobile",
+  asyncHandler(LoanQueryController.fetchCibilPdfByMobile),
 );
 
 // CRUD routes for loan queries
@@ -56,7 +54,7 @@ router.post(
     { name: "govt_license", maxCount: 1 },
   ]),
   s3UploaderMiddleware("loan-query"),
-  asyncHandler(LoanQueryController.createQuery)
+  asyncHandler(LoanQueryController.createQuery),
 );
 router.get("/stats", asyncHandler(LoanQueryController.getStats));
 router.get("/", asyncHandler(LoanQueryController.getAllQueries));
@@ -94,16 +92,16 @@ router.put(
     { name: "govt_license", maxCount: 1 },
   ]),
   s3UploaderMiddleware("loan-query"),
-  asyncHandler(LoanQueryController.updateQueryById)
+  asyncHandler(LoanQueryController.updateQueryById),
 );
 router.delete("/:id", asyncHandler(LoanQueryController.deleteQueryById));
 router.patch(
   "/:id/assign-lander",
-  asyncHandler(LoanQueryController.assignLander)
+  asyncHandler(LoanQueryController.assignLander),
 );
 router.patch(
   "/:id/assign-agent",
-  asyncHandler(LoanQueryController.assignAgent)
+  asyncHandler(LoanQueryController.assignAgent),
 );
 
 // ====== DETAIL VIEW AND OPERATIONS FOR ADMIN/LANDER ======
@@ -127,11 +125,11 @@ router.patch(
     { name: "govt_license", maxCount: 1 },
   ]),
   s3UploaderMiddleware("loan-query-documents"),
-  asyncHandler(LoanQueryController.updateDocuments)
+  asyncHandler(LoanQueryController.updateDocuments),
 );
 router.patch(
   "/:id/policy-details",
-  asyncHandler(LoanQueryController.updatePolicyDetails)
+  asyncHandler(LoanQueryController.updatePolicyDetails),
 );
 router.patch(
   "/:id/policy-documents",
@@ -154,7 +152,7 @@ router.patch(
     { name: "businessRegistrationCertificateUrl", maxCount: 1 },
   ]),
   s3UploaderMiddleware("loan-query-policy-documents"),
-  asyncHandler(LoanQueryController.updatePolicyDocuments)
+  asyncHandler(LoanQueryController.updatePolicyDocuments),
 );
 router.post("/:id/reassign", asyncHandler(LoanQueryController.reassignLander));
 router.post("/:id/complete", asyncHandler(LoanQueryController.completeQuery));
@@ -162,17 +160,17 @@ router.post("/:id/complete", asyncHandler(LoanQueryController.completeQuery));
 // ====== CHAT ROUTES ======
 router.get(
   "/:id/chat/messages",
-  asyncHandler(LoanQueryChatController.getMessages)
+  asyncHandler(LoanQueryChatController.getMessages),
 );
 router.post(
   "/:id/chat/messages",
   dynamicUpload([{ name: "media", maxCount: 5 }]),
   s3UploaderMiddleware("loan-query-chat"),
-  asyncHandler(LoanQueryChatController.sendMessage)
+  asyncHandler(LoanQueryChatController.sendMessage),
 );
 router.post(
   "/:id/chat/mark-read",
-  asyncHandler(LoanQueryChatController.markAsRead)
+  asyncHandler(LoanQueryChatController.markAsRead),
 );
 
 export default router;

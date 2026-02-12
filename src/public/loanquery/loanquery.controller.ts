@@ -16,6 +16,7 @@ import Admin from "../../modals/admin.model";
 import {
   fetchSurepassRcDetails,
   fetchSurepassCibilReport,
+  fetchSurepassCibilPdfReport,
   prepareSurepassCibilPayload,
   prepareSurepassRcPayload,
 } from "../../services/surepass.service";
@@ -47,11 +48,7 @@ const endOfDay = (d: Date) => {
   return next;
 };
 
-const resolveDateRange = (
-  startRaw: any,
-  endRaw: any,
-  days: number = 7,
-) => {
+const resolveDateRange = (startRaw: any, endRaw: any, days: number = 7) => {
   const now = new Date();
   const end = endOfDay(parseDateInput(endRaw) || now);
   const startParsed = parseDateInput(startRaw);
@@ -77,9 +74,7 @@ const extractFileUrls = (file: any): string[] => {
   if (!file) return [];
   if (typeof file === "string") return [file];
   if (Array.isArray(file)) {
-    return file
-      .map((item) => item?.url || item)
-      .filter(Boolean);
+    return file.map((item) => item?.url || item).filter(Boolean);
   }
   if (file.url) return [file.url];
   return [];
@@ -172,7 +167,9 @@ const normalizeAccountType = (value?: string) => {
   if (!value) return value;
   const normalized = value.toString().trim().toLowerCase();
   const compact = normalized.replace(/[\s_-]+/g, "");
-  if (["saving", "savings", "savingaccount", "savingsaccount"].includes(compact))
+  if (
+    ["saving", "savings", "savingaccount", "savingsaccount"].includes(compact)
+  )
     return "savings";
   if (["current", "currentaccount"].includes(compact)) return "current";
   if (["salary", "salaryaccount"].includes(compact)) return "salary";
@@ -208,8 +205,8 @@ export class LoanQueryController {
                 cached: true,
                 lastFetchedAt: cached.fetchedAt,
               },
-              "RC details fetched successfully"
-            )
+              "RC details fetched successfully",
+            ),
           );
         }
       }
@@ -241,8 +238,8 @@ export class LoanQueryController {
           new ApiResponse(
             200,
             { ...result, cached: false, lastFetchedAt: now },
-            "RC details fetched successfully"
-          )
+            "RC details fetched successfully",
+          ),
         );
     } catch (err) {
       next(err);
@@ -252,7 +249,7 @@ export class LoanQueryController {
   static async fetchCibilForQuery(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const { role, _id } = (req as any).user || {};
@@ -276,8 +273,8 @@ export class LoanQueryController {
           .json(
             new ApiError(
               403,
-              "You can only fetch CIBIL for queries assigned to you"
-            )
+              "You can only fetch CIBIL for queries assigned to you",
+            ),
           );
       }
 
@@ -308,7 +305,7 @@ export class LoanQueryController {
             refreshAvailableInDays: daysRemaining,
             lastFetchedAt: user.cibilLastFetchedAt,
             message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
-          })
+          }),
         );
       }
 
@@ -322,7 +319,7 @@ export class LoanQueryController {
             refreshAvailableInDays: daysRemaining,
             lastFetchedAt: user.cibilLastFetchedAt,
             message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
-          })
+          }),
         );
       }
 
@@ -330,7 +327,8 @@ export class LoanQueryController {
         name: req.body?.name || req.body?.fullName || user.name,
         panNumber: req.body?.panNumber || user.panCard,
         mobile: req.body?.mobile || user.mobile,
-        gender: req.body?.gender || user.gender || "male",
+        gender:
+          req.body?.gender || (user.gender === "female" ? "female" : "male"),
         consent: req.body?.consent || "Y",
       });
 
@@ -339,8 +337,8 @@ export class LoanQueryController {
           environment === "production"
             ? "production"
             : environment === "sandbox"
-            ? "sandbox"
-            : undefined,
+              ? "sandbox"
+              : undefined,
       });
       const score =
         report.data?.score ||
@@ -360,7 +358,114 @@ export class LoanQueryController {
           environment: report.environment,
           report: report.data,
           ...(score ? { cibilScore: score } : {}),
-        })
+        }),
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async fetchCibilPdfByMobile(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { role } = (req as any).user || {};
+      if (!["admin", "agent", "lander"].includes(role)) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(403, "You are not allowed to fetch CIBIL PDF here"),
+          );
+      }
+
+      const { mobile } = req.body || {};
+
+      if (!mobile) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Mobile number is required"));
+      }
+
+      // Normalize mobile number
+      const normalizedMobile = mobile.replace(/\D/g, "");
+
+      // Find user by mobile number
+      const user = await User.findOne({ mobile: normalizedMobile });
+      if (!user) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "User not found with this mobile number"));
+      }
+
+      const { forceRefresh = false } = req.body || {};
+      const now = new Date();
+      const lastFetched = user.cibilPdfLastFetchedAt
+        ? new Date(user.cibilPdfLastFetchedAt)
+        : null;
+      const msDiff = lastFetched ? now.getTime() - lastFetched.getTime() : null;
+      const daysSinceFetch = msDiff ? msDiff / (1000 * 60 * 60 * 24) : null;
+      const refreshLocked = daysSinceFetch !== null && daysSinceFetch < 30;
+      const daysRemaining = Math.max(0, Math.ceil(30 - (daysSinceFetch || 0)));
+      const cachedReport = (user as any)?.cibilPdfReport || null;
+      const cachedLink =
+        cachedReport?.data?.credit_report_link ||
+        cachedReport?.data?.creditReportLink ||
+        cachedReport?.credit_report_link ||
+        cachedReport?.creditReportLink ||
+        null;
+
+      if (!forceRefresh && cachedLink && refreshLocked) {
+        return res.status(200).json(
+          new ApiResponse(200, {
+            cached: true,
+            report: cachedReport,
+            refreshAvailableInDays: daysRemaining,
+            lastFetchedAt: user.cibilPdfLastFetchedAt,
+            message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
+          }),
+        );
+      }
+
+      if (forceRefresh && refreshLocked) {
+        return res.status(200).json(
+          new ApiResponse(200, {
+            cached: true,
+            report: cachedReport,
+            refreshAvailableInDays: daysRemaining,
+            lastFetchedAt: user.cibilPdfLastFetchedAt,
+            message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
+          }),
+        );
+      }
+
+      const payload = prepareSurepassCibilPayload({
+        name: user.name,
+        mobile: user.mobile,
+        panCard: user.panCard,
+        gender: user.gender === "female" ? "female" : "male",
+        consent: "Y",
+      });
+
+      const report = await fetchSurepassCibilPdfReport(payload, {
+        environment: "production",
+      });
+
+      user.cibilPdfLastFetchedAt = now;
+      (user as any).cibilPdfReport = report.data;
+      await user.save();
+
+      return res.status(200).json(
+        new ApiResponse(200, {
+          payload,
+          cached: false,
+          report: report.data,
+          environment: report.environment,
+          refreshAvailableInDays: daysRemaining,
+          lastFetchedAt: user.cibilPdfLastFetchedAt,
+          message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
+        }),
       );
     } catch (err) {
       next(err);
@@ -408,7 +513,7 @@ export class LoanQueryController {
       ) {
         const allowed = allowedFieldsByFormType[req.body.loanType] || [];
         const invalidFields = Object.keys(req.body.policyDetails).filter(
-          (field) => !allowed.includes(field)
+          (field) => !allowed.includes(field),
         );
         if (invalidFields.length > 0) {
           return res
@@ -417,11 +522,11 @@ export class LoanQueryController {
               new ApiError(
                 400,
                 `Field(s) "${invalidFields.join(
-                  ", "
+                  ", ",
                 )}" is/are not allowed for ${
                   req.body.loanType
-                }. Allowed fields: ${allowed.join(", ")}`
-              )
+                }. Allowed fields: ${allowed.join(", ")}`,
+              ),
             );
         }
       }
@@ -447,8 +552,8 @@ export class LoanQueryController {
             .json(
               new ApiError(
                 400,
-                `You already have an active ${req.body.loanType} loan query. Please complete, approve, or cancel the existing query before creating a new one.`
-              )
+                `You already have an active ${req.body.loanType} loan query. Please complete, approve, or cancel the existing query before creating a new one.`,
+              ),
             );
         }
       }
@@ -506,7 +611,7 @@ export class LoanQueryController {
               actorModel: "User",
               reason: "new_loan_query",
               session,
-            }
+            },
           );
         }
 
@@ -607,7 +712,12 @@ export class LoanQueryController {
                 if: { $ifNull: ["$assignedAgentData", false] },
                 then: {
                   _id: "$assignedAgentData._id",
-                  name: { $ifNull: ["$assignedAgentData.name", "$assignedAgentData.username"] },
+                  name: {
+                    $ifNull: [
+                      "$assignedAgentData.name",
+                      "$assignedAgentData.username",
+                    ],
+                  },
                   email: "$assignedAgentData.email",
                   mobile: "$assignedAgentData.mobile",
                 },
@@ -638,12 +748,16 @@ export class LoanQueryController {
 
       const loanQueries = await loanQueryService.getAll(
         req.query,
-        populateStages
+        populateStages,
       );
       return res
         .status(200)
         .json(
-          new ApiResponse(200, loanQueries, "Loan queries fetched successfully")
+          new ApiResponse(
+            200,
+            loanQueries,
+            "Loan queries fetched successfully",
+          ),
         );
     } catch (err) {
       next(err);
@@ -660,16 +774,12 @@ export class LoanQueryController {
       >;
 
       if (!loanType) {
-        return res
-          .status(400)
-          .json(new ApiError(400, "loanType is required"));
+        return res.status(400).json(new ApiError(400, "loanType is required"));
       }
 
       const normalizedLoanType = normalizeLoanType(String(loanType));
       if (!normalizedLoanType) {
-        return res
-          .status(400)
-          .json(new ApiError(400, "Invalid loanType"));
+        return res.status(400).json(new ApiError(400, "Invalid loanType"));
       }
 
       const { start, end } = resolveDateRange(startDate, endDate, 7);
@@ -742,7 +852,7 @@ export class LoanQueryController {
 
       const result = await loanQueryService.getById(
         req.params.id,
-        role !== "admin"
+        role !== "admin",
       );
 
       // Ensure user can only view their own queries (unless admin)
@@ -771,7 +881,7 @@ export class LoanQueryController {
   static async updateQueryById(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const customerId = (req as any).user?._id;
@@ -785,7 +895,7 @@ export class LoanQueryController {
       //only draft queries can be updated
       const existingResult = await loanQueryService.getById(
         req.params.id,
-        true
+        true,
       );
       if (existingResult?.status !== ApplicationStatus.DRAFT) {
         return res
@@ -833,7 +943,7 @@ export class LoanQueryController {
         req.body,
         {
           populate: true,
-        }
+        },
       );
 
       // Track status change
@@ -881,7 +991,7 @@ export class LoanQueryController {
             actorModel: role === "admin" ? "Admin" : "User",
             reason: "draft_submitted",
             session,
-          }
+          },
         );
       }
 
@@ -899,13 +1009,13 @@ export class LoanQueryController {
             actorId: customerId?.toString(),
             reason: "draft_submitted",
             session,
-          }
+          },
         );
         await result.save({ session });
         return res
           .status(200)
           .json(
-            new ApiResponse(200, result, "Loan query updated successfully")
+            new ApiResponse(200, result, "Loan query updated successfully"),
           );
       }
 
@@ -913,7 +1023,11 @@ export class LoanQueryController {
       return res
         .status(200)
         .json(
-          new ApiResponse(200, updatedResult, "Loan query updated successfully")
+          new ApiResponse(
+            200,
+            updatedResult,
+            "Loan query updated successfully",
+          ),
         );
     } catch (err) {
       next(err);
@@ -923,7 +1037,7 @@ export class LoanQueryController {
   static async deleteQueryById(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const result = await loanQueryService.deleteById(req.params.id);
@@ -958,7 +1072,7 @@ export class LoanQueryController {
       // Check if query exists
       const existingResult = await loanQueryService.getById(
         req.params.id,
-        true
+        true,
       );
       if (!existingResult) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
@@ -1000,7 +1114,7 @@ export class LoanQueryController {
         },
         {
           populate: [{ path: "assignedLander", select: "name email mobile" }],
-        }
+        },
       );
 
       // Adjust lander load if needed
@@ -1012,13 +1126,13 @@ export class LoanQueryController {
       }
       await LanderAssignmentEngine.adjustLanderLoad(
         new Types.ObjectId(landerId),
-        1
+        1,
       );
 
       return res
         .status(200)
         .json(
-          new ApiResponse(200, updatedResult, "Lander assigned successfully")
+          new ApiResponse(200, updatedResult, "Lander assigned successfully"),
         );
     } catch (err) {
       next(err);
@@ -1040,7 +1154,10 @@ export class LoanQueryController {
         return res.status(400).json(new ApiError(400, "Agent ID is required"));
       }
 
-      const existingResult = await loanQueryService.getById(req.params.id, true);
+      const existingResult = await loanQueryService.getById(
+        req.params.id,
+        true,
+      );
       if (!existingResult) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
@@ -1084,8 +1201,10 @@ export class LoanQueryController {
           },
         },
         {
-          populate: [{ path: "assignedAgent", select: "name username email mobile" }],
-        }
+          populate: [
+            { path: "assignedAgent", select: "name username email mobile" },
+          ],
+        },
       );
 
       if (
@@ -1096,12 +1215,14 @@ export class LoanQueryController {
       }
       await EmployeeAssignmentEngine.adjustEmployeeLoad(
         new Types.ObjectId(agentId),
-        1
+        1,
       );
 
       return res
         .status(200)
-        .json(new ApiResponse(200, updatedResult, "Agent assigned successfully"));
+        .json(
+          new ApiResponse(200, updatedResult, "Agent assigned successfully"),
+        );
     } catch (err) {
       next(err);
     }
@@ -1117,9 +1238,12 @@ export class LoanQueryController {
       const query = await LoanQuery.findById(req.params.id)
         .populate(
           "customerId",
-          "name email mobile profilePictureUrl cibilScore cibilLastFetchedAt cibilReport cibilRequestPayload cibilPdfLastFetchedAt cibilPdfReport digiLockerVault"
+          "name email mobile profilePictureUrl cibilScore cibilLastFetchedAt cibilReport cibilRequestPayload cibilPdfLastFetchedAt cibilPdfReport digiLockerVault",
         )
-        .populate("assignedAgent", "name username email mobile profilePictureUrl")
+        .populate(
+          "assignedAgent",
+          "name username email mobile profilePictureUrl",
+        )
         .populate("assignedLander", "name email mobile profilePictureUrl")
         .lean();
 
@@ -1164,8 +1288,8 @@ export class LoanQueryController {
           new ApiResponse(
             200,
             responseData,
-            "Loan query details fetched successfully"
-          )
+            "Loan query details fetched successfully",
+          ),
         );
     } catch (err) {
       next(err);
@@ -1194,8 +1318,8 @@ export class LoanQueryController {
           .json(
             new ApiError(
               403,
-              "You can only add notes to queries assigned to you"
-            )
+              "You can only add notes to queries assigned to you",
+            ),
           );
       }
 
@@ -1240,8 +1364,8 @@ export class LoanQueryController {
           .json(
             new ApiError(
               403,
-              "You can only update status of queries assigned to you"
-            )
+              "You can only update status of queries assigned to you",
+            ),
           );
       }
 
@@ -1277,7 +1401,7 @@ export class LoanQueryController {
   static async updateDocuments(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const actorId = (req as any).user?._id;
@@ -1295,8 +1419,8 @@ export class LoanQueryController {
           .json(
             new ApiError(
               403,
-              "You can only update documents of queries assigned to you"
-            )
+              "You can only update documents of queries assigned to you",
+            ),
           );
       }
 
@@ -1348,7 +1472,7 @@ export class LoanQueryController {
       query.activities.push({
         type: LoanQueryActivityType.DOCUMENT_UPLOADED,
         description: `Documents uploaded: ${Object.keys(documentsToAdd).join(
-          ", "
+          ", ",
         )}`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
         actorModel: role === "admin" ? "Admin" : "Lander",
@@ -1369,7 +1493,7 @@ export class LoanQueryController {
   static async updatePolicyDocuments(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const actorId = (req as any).user?._id;
@@ -1386,8 +1510,8 @@ export class LoanQueryController {
           .json(
             new ApiError(
               403,
-              "You can only update policy documents of queries assigned to you"
-            )
+              "You can only update policy documents of queries assigned to you",
+            ),
           );
       }
 
@@ -1422,7 +1546,7 @@ export class LoanQueryController {
 
       const allowed = allowedFieldsByFormType[query.loanType] || [];
       const invalidFields = Object.keys(incoming).filter(
-        (field) => !allowed.includes(field)
+        (field) => !allowed.includes(field),
       );
       if (invalidFields.length > 0) {
         return res
@@ -1431,9 +1555,9 @@ export class LoanQueryController {
             new ApiError(
               400,
               `Field(s) "${invalidFields.join(
-                ", "
-              )}" is/are not allowed for ${query.loanType}`
-            )
+                ", ",
+              )}" is/are not allowed for ${query.loanType}`,
+            ),
           );
       }
 
@@ -1470,7 +1594,7 @@ export class LoanQueryController {
       return res
         .status(200)
         .json(
-          new ApiResponse(200, query, "Policy documents updated successfully")
+          new ApiResponse(200, query, "Policy documents updated successfully"),
         );
     } catch (err) {
       next(err);
@@ -1480,7 +1604,7 @@ export class LoanQueryController {
   static async updatePolicyDetails(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const actorId = (req as any).user?._id;
@@ -1505,8 +1629,8 @@ export class LoanQueryController {
           .json(
             new ApiError(
               403,
-              "You can only update policy details of queries assigned to you"
-            )
+              "You can only update policy details of queries assigned to you",
+            ),
           );
       }
 
@@ -1528,7 +1652,7 @@ export class LoanQueryController {
       return res
         .status(200)
         .json(
-          new ApiResponse(200, query, "Policy details updated successfully")
+          new ApiResponse(200, query, "Policy details updated successfully"),
         );
     } catch (err) {
       next(err);
@@ -1596,7 +1720,7 @@ export class LoanQueryController {
       }
       await LanderAssignmentEngine.adjustLanderLoad(
         new Types.ObjectId(landerId),
-        1
+        1,
       );
 
       return res
@@ -1624,7 +1748,7 @@ export class LoanQueryController {
         return res
           .status(403)
           .json(
-            new ApiError(403, "You can only complete queries assigned to you")
+            new ApiError(403, "You can only complete queries assigned to you"),
           );
       }
 
@@ -1667,7 +1791,10 @@ export class LoanQueryController {
 
       // Adjust lander load - reduce by 1 as this query is now completed
       if (query.assignedAgent) {
-        await EmployeeAssignmentEngine.adjustEmployeeLoad(query.assignedAgent, -1);
+        await EmployeeAssignmentEngine.adjustEmployeeLoad(
+          query.assignedAgent,
+          -1,
+        );
       }
       if (query.assignedLander) {
         console.log(`  📉 Adjusting lander load for ${query.assignedLander}`);
