@@ -101,6 +101,10 @@ router.patch(
   "/:id/assign-lander",
   asyncHandler(LoanQueryController.assignLander)
 );
+router.patch(
+  "/:id/assign-agent",
+  asyncHandler(LoanQueryController.assignAgent)
+);
 
 // ====== DETAIL VIEW AND OPERATIONS FOR ADMIN/LANDER ======
 router.get("/:id/detail", asyncHandler(LoanQueryController.getQueryDetail));

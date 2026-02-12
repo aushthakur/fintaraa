@@ -16,6 +16,7 @@ import { Types } from "mongoose";
 import Lander from "../../modals/lander.model";
 import { User } from "../../modals/user.model";
 import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
+import Admin from "../../modals/admin.model";
 
 const insuranceQueryService = new CommonService(InsuranceQuery);
 
@@ -877,6 +878,99 @@ export class InsuranceQueryController {
         .json(
           new ApiResponse(200, updatedResult, "Lander assigned successfully")
         );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async assignAgent(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const { role } = (req as any).user || {};
+      const { agentId } = req.body;
+
+      if (role !== "admin") {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Only admin can assign agents"));
+      }
+
+      if (!agentId) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Agent ID is required"));
+      }
+
+      const existingResult = await insuranceQueryService.getById(
+        req.params.id,
+        true,
+      );
+      if (!existingResult) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Insurance query not found"));
+      }
+
+      const agent = await Admin.findById(agentId).populate("role");
+      if (!agent) {
+        return res.status(404).json(new ApiError(404, "Agent not found"));
+      }
+      if ((agent as any)?.role?.name !== "agent") {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Selected employee is not an agent"));
+      }
+
+      const actorId = (req as any).user?._id;
+      const previousAgentId = existingResult.assignedAgent;
+      const agentName = (agent as any).name || agent.username || agent.email;
+
+      const updatedResult = await insuranceQueryService.updateById(
+        req.params.id,
+        {
+          assignedAgent: agentId,
+          $push: {
+            activities: {
+              type: InsuranceQueryActivityType.AGENT_ASSIGNED,
+              description: `Agent assigned: ${agentName}${
+                previousAgentId ? " (reassigned)" : ""
+              }`,
+              actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+              actorModel: "Admin",
+              payload: {
+                agentId,
+                agentName,
+                previousAgentId: previousAgentId
+                  ? String(previousAgentId)
+                  : undefined,
+                mode: "manual",
+              },
+              createdAt: new Date(),
+            },
+          },
+        },
+        {
+          populate: [{ path: "assignedAgent", select: "name username email mobile" }],
+        }
+      );
+
+      if (
+        previousAgentId &&
+        previousAgentId.toString() !== agentId.toString()
+      ) {
+        await EmployeeAssignmentEngine.adjustEmployeeLoad(previousAgentId, -1);
+      }
+      await EmployeeAssignmentEngine.adjustEmployeeLoad(
+        new Types.ObjectId(agentId),
+        1
+      );
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, updatedResult, "Agent assigned successfully"));
     } catch (err) {
       next(err);
     }

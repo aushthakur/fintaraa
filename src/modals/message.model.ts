@@ -17,6 +17,7 @@ export interface IMessageAttachment {
 
 export interface IMessage extends Document {
   text: string;
+  isEncrypted?: boolean;
   createdAt: Date;
   updatedAt: Date;
   sender: Types.ObjectId;
@@ -52,6 +53,7 @@ const messageSchema = new Schema<IMessage>(
           if ((!value || value.trim().length === 0) && (!this.attachments || this.attachments.length === 0)) {
             return false;
           }
+          if (this.isEncrypted) return true;
           // If text exists, check length and patterns
           if (value && value.trim().length > 0) {
             if (value.length > 500) return false;
@@ -72,7 +74,15 @@ const messageSchema = new Schema<IMessage>(
           return "Links are not allowed";
         },
       },
-      set: (value: string) => value ? sanitizeMessageText(value) : "",
+      set: (value: string) => {
+        if (!value) return "";
+        if (value.startsWith("enc:v1:")) return value;
+        return sanitizeMessageText(value);
+      },
+    },
+    isEncrypted: {
+      type: Boolean,
+      default: false,
     },
     status: {
       type: String,

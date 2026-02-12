@@ -59,6 +59,7 @@ router.put(
 );
 router.delete("/:id", asyncHandler(InsuranceQueryController.deleteQueryById));
 router.patch("/:id/assign-lander", asyncHandler(InsuranceQueryController.assignLander));
+router.patch("/:id/assign-agent", asyncHandler(InsuranceQueryController.assignAgent));
 
 // ====== DETAIL VIEW AND OPERATIONS FOR ADMIN/LANDER ======
 router.get("/:id/detail", asyncHandler(InsuranceQueryController.getQueryDetail));
@@ -97,4 +98,3 @@ router.post(
 router.post("/:id/chat/mark-read", asyncHandler(InsuranceQueryChatController.markAsRead));
 
 export default router;
-
