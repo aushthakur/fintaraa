@@ -265,7 +265,7 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
     },
     assignedAgent: {
       type: Schema.Types.ObjectId,
-      ref: "Agent",
+      ref: "Admin",
       index: true,
     },
     assignedLander: {

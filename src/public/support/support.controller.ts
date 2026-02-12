@@ -6,6 +6,7 @@ import {
 } from "../../modals/ticket.model";
 import ApiError from "../../utils/ApiError";
 import Agent from "../../modals/agent.model";
+import Admin from "../../modals/admin.model";
 import { User } from "../../modals/user.model";
 import Ticket from "../../modals/ticket.model";
 import ApiResponse from "../../utils/ApiResponse";
@@ -616,7 +617,9 @@ export const getAgents = async (
         assignedAgent: { $exists: true, $ne: null },
       });
       const agents = assignedAgentIds.length
-        ? await Agent.find({ _id: { $in: assignedAgentIds } })
+        ? await Admin.find({ _id: { $in: assignedAgentIds } }).select(
+            "_id name username email mobile profilePictureUrl",
+          )
         : [];
       return res
         .status(200)

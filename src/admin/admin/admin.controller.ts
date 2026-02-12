@@ -23,18 +23,77 @@ const extractFileUrl = (file: any): string | undefined => {
 };
 
 export class AdminController {
+  private static parseBoolean(value: any, fallback = false) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (["true", "1", "yes", "active"].includes(normalized)) return true;
+      if (["false", "0", "no", "inactive"].includes(normalized)) return false;
+    }
+    return fallback;
+  }
+
+  private static normalizeArrayInput(value: any) {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean);
+    }
+    if (typeof value === "string") {
+      return value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+    return [];
+  }
+
+  private static sanitizeEmployeePayload(payload: any = {}) {
+    const normalized: any = { ...payload };
+    normalized.status = AdminController.parseBoolean(payload.status, true);
+    normalized.availability = AdminController.parseBoolean(
+      payload.availability,
+      true,
+    );
+    normalized.leadAutoAssign = AdminController.parseBoolean(
+      payload.leadAutoAssign,
+      true,
+    );
+
+    if (payload.leadCapacity !== undefined && payload.leadCapacity !== "") {
+      const cap = Number(payload.leadCapacity);
+      if (Number.isFinite(cap)) normalized.leadCapacity = Math.max(1, Math.floor(cap));
+    }
+    if (payload.activeLeads !== undefined && payload.activeLeads !== "") {
+      const active = Number(payload.activeLeads);
+      if (Number.isFinite(active)) normalized.activeLeads = Math.max(0, Math.floor(active));
+    }
+
+    normalized.serviceablePincodes = AdminController.normalizeArrayInput(
+      payload.serviceablePincodes,
+    );
+    normalized.productFocusLoan = AdminController.normalizeArrayInput(
+      payload.productFocusLoan,
+    );
+    normalized.productFocusInsurance = AdminController.normalizeArrayInput(
+      payload.productFocusInsurance,
+    );
+
+    if (!normalized.name && normalized.username) {
+      normalized.name = normalized.username;
+    }
+
+    return normalized;
+  }
+
   /**
    * Create a new user
    */
   static async createAdmin(req: Request, res: Response, next: NextFunction) {
     try {
-      const { username, email, password, role, status } = req.body;
+      const payload = AdminController.sanitizeEmployeePayload(req.body);
       const user = await AdminController.createUser({
-        role,
-        email,
-        username,
-        password,
-        status: status === "active",
+        ...payload,
       });
       res
         .status(201)
@@ -77,10 +136,11 @@ export class AdminController {
   ): Promise<any> {
     try {
       const { id } = req.params;
-      const { username, role, status } = req.body;
+      const updateData = AdminController.sanitizeEmployeePayload(req.body);
+      delete updateData.password;
       const updatedUser = await Admin.findByIdAndUpdate(
         id,
-        { username, role, status: status === "active" },
+        updateData,
         { new: true, runValidators: true }
       );
 
@@ -115,15 +175,27 @@ export class AdminController {
         },
       },
       { $unwind: "$roleData" },
-      {
-        $project: {
-          _id: 1,
-          email: 1,
-          status: 1,
-          username: 1,
-          createdAt: 1,
-          updatedAt: 1,
-          role: "$roleData.name",
+        {
+          $project: {
+            _id: 1,
+            email: 1,
+            status: 1,
+            username: 1,
+            name: 1,
+            mobile: 1,
+            location: 1,
+            department: 1,
+            availability: 1,
+            leadCapacity: 1,
+            activeLeads: 1,
+            leadAutoAssign: 1,
+            serviceablePincodes: 1,
+            productFocusLoan: 1,
+            productFocusInsurance: 1,
+            roleId: "$roleData._id",
+            createdAt: 1,
+            updatedAt: 1,
+            role: "$roleData.name",
         },
       }];
       const result = await adminService.getAll(req.query, pipeline);
@@ -303,8 +375,36 @@ export class AdminController {
     password: string;
     role: string;
     status: boolean;
+    name?: string;
+    mobile?: string;
+    department?: string;
+    location?: string;
+    availability?: boolean;
+    leadCapacity?: number;
+    activeLeads?: number;
+    leadAutoAssign?: boolean;
+    serviceablePincodes?: string[];
+    productFocusLoan?: string[];
+    productFocusInsurance?: string[];
   }) {
-    const { username, email, password, role, status } = userData;
+    const {
+      username,
+      email,
+      password,
+      role,
+      status,
+      name,
+      mobile,
+      department,
+      location,
+      availability,
+      leadCapacity,
+      activeLeads,
+      leadAutoAssign,
+      serviceablePincodes,
+      productFocusLoan,
+      productFocusInsurance,
+    } = userData;
 
     const existingUser = await Admin.findOne({
       $or: [{ email }, { username }],
@@ -312,7 +412,24 @@ export class AdminController {
     if (existingUser)
       throw new Error("User with this email or username already exists");
 
-    const user = new Admin({ username, email, password, role, status });
+    const user = new Admin({
+      username,
+      email,
+      password,
+      role,
+      status,
+      name,
+      mobile,
+      department,
+      location,
+      availability,
+      leadCapacity,
+      activeLeads,
+      leadAutoAssign,
+      serviceablePincodes,
+      productFocusLoan,
+      productFocusInsurance,
+    });
     return await user.save();
   }
 
@@ -587,8 +704,6 @@ export class AdminController {
       
       const result = await landerService.updateById(req.params.id, updateData, {
         populate: { path: "role", select: "name" },
-        new: true,
-        runValidators: true,
       });
       if (!result)
         return res.status(404).json(new ApiError(404, "Failed to update lander"));

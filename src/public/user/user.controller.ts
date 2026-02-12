@@ -376,7 +376,7 @@ export class UserController {
         const updated = await userService.updateById(
           existingByMobile._id.toString(),
           updatePayload,
-          { new: true, populate: false },
+          { populate: false },
         );
         if (referrer) {
           await ReferralEvent.create({
@@ -526,7 +526,6 @@ export class UserController {
       }
 
       const updatedUser = await userService.updateById(_id, updatePayload, {
-        new: true,
         populate: false,
       });
 
@@ -645,7 +644,7 @@ export class UserController {
           },
           kycProfile: updatedKyc,
         },
-        { new: true, populate: false },
+        { populate: false },
       );
 
       const sanitizedDocs = (updatedUser.digiLockerVault?.documents || []).map(
@@ -750,7 +749,7 @@ export class UserController {
             documents: nextKycDocs,
           },
         },
-        { new: true, populate: false },
+        { populate: false },
       );
 
       const sanitizedDocs = (updatedUser.digiLockerVault?.documents || []).map(
@@ -1510,7 +1509,6 @@ export class UserController {
 
       const updatedUser = await userService.updateById(_id, updatePayload, {
         populate: false,
-        new: true,
       });
 
       if (verification?.status === KycVerificationStatus.VERIFIED) {

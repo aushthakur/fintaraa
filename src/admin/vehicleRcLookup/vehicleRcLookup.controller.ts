@@ -82,8 +82,7 @@ export class VehicleRcLookupController {
         [
           { path: "lastFetchedBy", select: "name mobile email" },
           { path: "lastAccessedBy", select: "name mobile email" },
-        ],
-        { lean: true }
+        ]
       );
       return res
         .status(200)

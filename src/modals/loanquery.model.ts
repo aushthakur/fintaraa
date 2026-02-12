@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
 import { Gender } from "./user.model";
 import { ApplicationStatus } from "./insurancequery.model";
+import { generateLoanId } from "../utils/loanId";
 
 export enum AllowedDocumentType {
   PAN_CARD = "pan_card",
@@ -187,6 +188,7 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
 
 export interface ILoanQuery extends Document {
   customerId: Types.ObjectId;
+  loanId?: string;
   // Personal Details
   loanAmount: number;
   firstName: string;
@@ -308,6 +310,13 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     bankStatementUrl: { type: String, trim: true },
     
     // Loan Type & Status
+    loanId: {
+      type: String,
+      trim: true,
+      index: true,
+      unique: true,
+      sparse: true,
+    },
     loanType: {
       type: String,
       enum: Object.values(LoanType),
@@ -350,7 +359,7 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     },
     assignedAgent: {
       type: Schema.Types.ObjectId,
-      ref: "Agent",
+      ref: "Admin",
       index: true,
     },
     assignedLander: {
@@ -388,6 +397,18 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
 
 LoanQuerySchema.index({ mobile: 1, email: 1 });
 LoanQuerySchema.index({ customerId: 1 });
+
+LoanQuerySchema.pre("save", async function (next) {
+  const doc = this as ILoanQuery;
+  if (!doc.isNew || doc.loanId) return next();
+  try {
+    const session = doc.$session();
+    doc.loanId = await generateLoanId(session || undefined);
+    return next();
+  } catch (error) {
+    return next(error as any);
+  }
+});
 
 export const LoanQuery = mongoose.model<ILoanQuery>(
   "LoanQuery",

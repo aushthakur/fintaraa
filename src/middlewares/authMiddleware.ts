@@ -126,15 +126,38 @@ export const authorize =
   };
 
 const getUserByRole = async (role: Role, id: string) => {
-  const modelMap: Record<Role, any> = {
-    admin: Admin,
+  if (role === "agent") {
+    const employee = await Admin.findById(id).populate("role");
+    if (employee && (employee as any)?.role?.name === "agent") {
+      const data: any = employee.toObject();
+      return { ...data, role: "agent" };
+    }
+
+    // Backward compatibility for legacy agent tokens
+    const legacyAgent = await Agent.findById(id).populate("role");
+    if (legacyAgent) {
+      const data: any = legacyAgent.toObject();
+      return { ...data, role: "agent" };
+    }
+    return null;
+  }
+
+  if (role === "admin") {
+    const admin = await Admin.findById(id).populate("role");
+    if (!admin) return null;
+    const data: any = admin.toObject();
+    return { ...data, role: "admin" };
+  }
+
+  const modelMap: Partial<Record<Role, any>> = {
     guest: User,
     property: User,
     lander: Lander,
-    agent: Agent,
     agency: Agency,
     agency_member: Agency,
   };
   const Model = modelMap[role];
-  return Model?.findById(id);
+  const user = await Model?.findById(id);
+  if (!user) return null;
+  return { ...(user.toObject ? user.toObject() : user), role };
 };

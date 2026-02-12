@@ -30,6 +30,7 @@ import {
 } from "../modals/insurancequery.model";
 import LanderAssignmentEngine from "./landerAssignment.service";
 import { config } from "../config/config";
+import { normalizeLoanType } from "../utils/loanType";
 import {
   InteraktTemplatePayload,
   sendInteraktTemplateMessage,
@@ -690,9 +691,12 @@ export class LeadManagementService {
   ) {
     console.log(`  📝 Building loan query from form data...`);
 
+    const normalizedLoanType = normalizeLoanType(formData?.loanType);
+
     // Merge form data with lead/borrower data
     const loanQueryData: any = {
       ...formData,
+      ...(normalizedLoanType ? { loanType: normalizedLoanType } : {}),
       customerId: borrower._id,
       // Ensure bankStatementUrl has a value - use placeholder if not uploaded yet
       bankStatementUrl: formData.bankStatementUrl || "",

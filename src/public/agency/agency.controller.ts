@@ -754,7 +754,7 @@ export class AgencyController {
           },
           kycProfile: updatedKyc,
         },
-        { new: true, populate: false },
+        { populate: false },
       );
 
       const sanitizedDocs = (

@@ -34,6 +34,7 @@ router.post(
   s3UploaderMiddleware("insurance-query"),
   asyncHandler(InsuranceQueryController.createQuery)
 );
+router.get("/stats", asyncHandler(InsuranceQueryController.getStats));
 router.get("/", asyncHandler(InsuranceQueryController.getAllQueries));
 router.get("/:id", asyncHandler(InsuranceQueryController.getQueryById));
 router.put(
@@ -96,5 +97,4 @@ router.post(
 router.post("/:id/chat/mark-read", asyncHandler(InsuranceQueryChatController.markAsRead));
 
 export default router;
-
 

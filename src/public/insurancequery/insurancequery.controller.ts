@@ -2,14 +2,56 @@ import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
 import { NextFunction, Request, Response } from "express";
 import { CommonService } from "../../services/common.services";
-import { InsuranceQuery } from "../../modals/insurancequery.model";
-import { ApplicationStatus, allowedFieldsByFormType, InsuranceQueryActivityType } from "../../modals/insurancequery.model";
+import {
+  InsuranceQuery,
+  InsuranceType,
+} from "../../modals/insurancequery.model";
+import {
+  ApplicationStatus,
+  allowedFieldsByFormType,
+  InsuranceQueryActivityType,
+} from "../../modals/insurancequery.model";
 import LanderAssignmentEngine from "../../services/landerAssignment.service";
 import { Types } from "mongoose";
 import Lander from "../../modals/lander.model";
 import { User } from "../../modals/user.model";
+import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
 
-  const insuranceQueryService = new CommonService(InsuranceQuery);
+const insuranceQueryService = new CommonService(InsuranceQuery);
+
+const parseDateInput = (value?: any) => {
+  if (!value) return null;
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const startOfDay = (d: Date) => {
+  const next = new Date(d);
+  next.setHours(0, 0, 0, 0);
+  return next;
+};
+
+const endOfDay = (d: Date) => {
+  const next = new Date(d);
+  next.setHours(23, 59, 59, 999);
+  return next;
+};
+
+const resolveDateRange = (
+  startRaw: any,
+  endRaw: any,
+  days: number = 7,
+) => {
+  const now = new Date();
+  const end = endOfDay(parseDateInput(endRaw) || now);
+  const startParsed = parseDateInput(startRaw);
+  if (startParsed) {
+    return { start: startOfDay(startParsed), end };
+  }
+  const start = new Date(end);
+  start.setDate(start.getDate() - (days - 1));
+  return { start: startOfDay(start), end };
+};
 
 // Helper function to extract URL from uploaded file object
 const extractFileUrl = (file: any): string | undefined => {
@@ -372,9 +414,23 @@ export class InsuranceQueryController {
           createdAt: new Date(),
         });
         
+        const session = (req as any).mongoSession;
+
+        // Auto-assign employee (from Admin model with role=agent)
+        if (result && !result.assignedAgent) {
+          result = await EmployeeAssignmentEngine.ensureAssignmentForInsuranceQuery(
+            result,
+            {
+              actorId: customerId?.toString(),
+              actorModel: "User",
+              reason: "new_insurance_query",
+              session,
+            }
+          );
+        }
+
         // Auto-assign lander if not already assigned
         if (result && !result.assignedLander) {
-          const session = (req as any).mongoSession;
           result = await LanderAssignmentEngine.ensureAssignment(
             result,
             {
@@ -383,10 +439,8 @@ export class InsuranceQueryController {
               session,
             }
           );
-          await result.save({ session });
-        } else {
-          await result.save();
         }
+        await result.save({ session });
       }
 
       if (!result)
@@ -427,7 +481,9 @@ export class InsuranceQueryController {
       
       // Handle status filtering
       // If status is explicitly provided, use it; otherwise exclude draft queries
-      if (!req.query.status) {
+      if (req.query.status === "all") {
+        delete req.query.status;
+      } else if (!req.query.status) {
         req.query.status = { $ne: ApplicationStatus.DRAFT };
       }
       
@@ -435,7 +491,7 @@ export class InsuranceQueryController {
       const populateStages = [
         {
           $lookup: {
-            from: "agents",
+            from: "admins",
             localField: "assignedAgent",
             foreignField: "_id",
             as: "assignedAgentData",
@@ -468,7 +524,7 @@ export class InsuranceQueryController {
                 if: { $ifNull: ["$assignedAgentData", false] },
                 then: {
                   _id: "$assignedAgentData._id",
-                  name: "$assignedAgentData.name",
+                  name: { $ifNull: ["$assignedAgentData.name", "$assignedAgentData.username"] },
                   email: "$assignedAgentData.email",
                   mobile: "$assignedAgentData.mobile",
                 },
@@ -507,6 +563,86 @@ export class InsuranceQueryController {
             "Insurance queries fetched successfully"
           )
         );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getStats(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      const { typeOfInsurance, startDate, endDate } = req.query as Record<
+        string,
+        string
+      >;
+
+      if (!typeOfInsurance) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "typeOfInsurance is required"));
+      }
+
+      const normalizedType = String(typeOfInsurance).toLowerCase();
+      if (
+        !Object.values(InsuranceType).includes(
+          normalizedType as InsuranceType,
+        )
+      ) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid typeOfInsurance"));
+      }
+
+      const { start, end } = resolveDateRange(startDate, endDate, 7);
+
+      const match: Record<string, any> = {
+        typeOfInsurance: normalizedType,
+        createdAt: { $gte: start, $lte: end },
+      };
+
+      if (role === "agent" && userId) {
+        match.assignedAgent = userId;
+      } else if (role === "lander" && userId) {
+        match.assignedLander = userId;
+      } else if (role !== "admin" && userId) {
+        match.customerId = userId;
+      }
+
+      const rows = await InsuranceQuery.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: "$status",
+            count: { $sum: 1 },
+          },
+        },
+      ]);
+
+      const byStatus: Record<string, number> = {};
+      let total = 0;
+      rows.forEach((row: any) => {
+        const key = row?._id ? String(row._id) : "unknown";
+        const count = Number(row?.count) || 0;
+        byStatus[key] = count;
+        total += count;
+      });
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            typeOfInsurance: normalizedType,
+            range: {
+              startDate: start.toISOString(),
+              endDate: end.toISOString(),
+            },
+            total,
+            byStatus,
+          },
+          "Insurance query stats fetched successfully",
+        ),
+      );
     } catch (err) {
       next(err);
     }
@@ -595,8 +731,6 @@ export class InsuranceQueryController {
 
       const updatedResult = await insuranceQueryService.updateById(req.params.id, req.body, {
         populate: true,
-        new: true,
-        runValidators: true,
       });
       
       // Track status change
@@ -625,6 +759,25 @@ export class InsuranceQueryController {
         });
       }
       
+      // Auto-assign employee if status changed from draft to non-draft and no employee assigned
+      if (
+        updatedResult &&
+        existingResult?.status === ApplicationStatus.DRAFT &&
+        updatedResult.status !== ApplicationStatus.DRAFT &&
+        !updatedResult.assignedAgent
+      ) {
+        const session = (req as any).mongoSession;
+        await EmployeeAssignmentEngine.ensureAssignmentForInsuranceQuery(
+          updatedResult as any,
+          {
+            actorId: customerId?.toString(),
+            actorModel: role === "admin" ? "Admin" : "User",
+            reason: "draft_submitted",
+            session,
+          }
+        );
+      }
+
       // Auto-assign lander if status changed from draft to non-draft and no lander assigned
       if (
         updatedResult &&
@@ -716,8 +869,6 @@ export class InsuranceQueryController {
         { assignedLander: landerId },
         {
           populate: [{ path: "assignedLander", select: "name email mobile" }],
-          new: true,
-          runValidators: true,
         }
       );
 
@@ -744,7 +895,7 @@ export class InsuranceQueryController {
       
       const query = await InsuranceQuery.findById(req.params.id)
         .populate("customerId", "name email mobile profilePictureUrl")
-        .populate("assignedAgent", "name email mobile profilePictureUrl")
+        .populate("assignedAgent", "name username email mobile profilePictureUrl")
         .populate("assignedLander", "name email mobile profilePictureUrl")
         .lean();
 
@@ -1143,6 +1294,9 @@ export class InsuranceQueryController {
       await query.save();
 
       // Adjust lander load - reduce by 1 as this query is now completed
+      if (query.assignedAgent) {
+        await EmployeeAssignmentEngine.adjustEmployeeLoad(query.assignedAgent, -1);
+      }
       if (query.assignedLander) {
         console.log(`  📉 Adjusting lander load for ${query.assignedLander}`);
         await LanderAssignmentEngine.adjustLanderLoad(

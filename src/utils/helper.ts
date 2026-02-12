@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 import { toBoolean } from "validator";
 import { deleteFromS3 } from "../config/s3Uploader";
-import { config } from "../config/config";
 
 const { ObjectId } = mongoose.Types;
 
@@ -12,7 +11,14 @@ const { ObjectId } = mongoose.Types;
  */
 export const getPipeline = (
   query: Record<string, any>,
-  additionalStages?: any[] | Record<string, any>
+  additionalStages?: any[] | Record<string, any>,
+  pipelineOptions?: {
+    sortFirst?: boolean;
+    prependStages?: any[];
+    lookupsInDataFacet?: boolean;
+    afterQuery?: (formatted: any) => any;
+    pipelineModifier?: (pipeline: any[]) => any[];
+  },
 ) => {
   const {
     page = 1,
@@ -43,6 +49,23 @@ export const getPipeline = (
   const limitNumber = Math.max(parseInt(limit, 10), 1);
   const basePipeline: any[] = [];
   const match: Record<string, any> = {};
+  const sortFirst = Boolean(pipelineOptions?.sortFirst);
+  const lookupsInDataFacet = Boolean(pipelineOptions?.lookupsInDataFacet);
+  const prependStages = Array.isArray(pipelineOptions?.prependStages)
+    ? pipelineOptions?.prependStages
+    : [];
+  const pipelineModifier =
+    typeof pipelineOptions?.pipelineModifier === "function"
+      ? pipelineOptions.pipelineModifier
+      : undefined;
+  const paginationMode = String(
+    (query as any).paginationMode ?? (query as any).pagination_mode ?? "cursor",
+  )
+    .toLowerCase()
+    .trim();
+  const cursorRaw = (query as any).cursor;
+  const includeTotalRaw = (query as any).includeTotal;
+  const hasPageParam = Object.prototype.hasOwnProperty.call(query, "page");
 
   // pull out start/end date filters (default to createdAt)
   const startDateFilter = filters.startDate;
@@ -76,6 +99,9 @@ export const getPipeline = (
    */
   const parseValue = (value: any): any => {
     if (isEmpty(value)) return null;
+    if (Array.isArray(value)) {
+      return value.map((entry) => parseValue(entry));
+    }
 
     // Boolean
     if (value === "true") return true;
@@ -93,8 +119,16 @@ export const getPipeline = (
     }
 
     // ObjectId
-    if (typeof value === "string" && ObjectId.isValid(value)) {
-      return safeObjectId(value);
+    if (typeof value === "string") {
+      const objectIdMatch = value.match(
+        /^(?:new\s*)?ObjectId\(['"]?([a-fA-F0-9]{24})['"]?\)$/,
+      );
+      if (objectIdMatch) {
+        return safeObjectId(objectIdMatch[1]);
+      }
+      if (ObjectId.isValid(value)) {
+        return safeObjectId(value);
+      }
     }
 
     // Array (comma-separated)
@@ -106,12 +140,64 @@ export const getPipeline = (
   };
 
   /**
+   * Parse cursor from JSON or base64-encoded JSON
+   */
+  const parseCursor = (raw: any): Record<string, any> | null => {
+    if (raw === null || raw === undefined || raw === "") return null;
+    if (typeof raw === "object") return raw as Record<string, any>;
+
+    if (typeof raw === "string") {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        try {
+          const decoded = Buffer.from(raw, "base64").toString("utf8");
+          return JSON.parse(decoded);
+        } catch {
+          return null;
+        }
+      }
+    }
+
+    return null;
+  };
+
+  /**
+   * Build cursor-based match stage for keyset pagination
+   */
+  const buildCursorMatch = (
+    fields: Array<{ field: string; direction: 1 | -1 }>,
+    cursorValues: Record<string, any> | null,
+  ): Record<string, any> | null => {
+    if (!cursorValues) return null;
+    if (!fields.length) return null;
+
+    const normalized: Record<string, any> = {};
+    for (const field of fields) {
+      if (!(field.field in cursorValues)) return null;
+      normalized[field.field] = parseValue(cursorValues[field.field]);
+    }
+
+    const or: Record<string, any>[] = [];
+    const eq: Record<string, any> = {};
+
+    for (const field of fields) {
+      const value = normalized[field.field];
+      const op = field.direction === 1 ? "$gt" : "$lt";
+      or.push({ ...eq, [field.field]: { [op]: value } });
+      eq[field.field] = value;
+    }
+
+    return or.length ? { $or: or } : null;
+  };
+
+  /**
    * Handle special operators in field names
    * Examples: price__gte, status__in, createdAt__exists
    */
   const parseFieldOperator = (
     key: string,
-    value: any
+    value: any,
   ): { field: string; operator: string; value: any } => {
     const parts = key.split("__");
     const field = parts[0];
@@ -163,7 +249,7 @@ export const getPipeline = (
     obj: any,
     key: string,
     operator: string,
-    value: any
+    value: any,
   ) => {
     const keys = key.split(".");
     let current = obj;
@@ -235,28 +321,79 @@ export const getPipeline = (
     });
   }
 
+  if (prependStages.length > 0) {
+    basePipeline.push(...prependStages);
+  }
+
   // Add match stage if there are filters
   if (Object.keys(match).length > 0) {
     basePipeline.push({ $match: match });
   }
 
   // ==========================================
-  // 🔗 ADDITIONAL STAGES (Lookups, etc.)
+  // 📊 SORTING
   // ==========================================
-  if (Array.isArray(additionalStages)) {
-    basePipeline.push(...additionalStages);
-  } else if (additionalStages && typeof additionalStages === "object") {
-    basePipeline.push(additionalStages);
+  const sortStage: Record<string, 1 | -1> = {};
+  const sortFields: Array<{ field: string; direction: 1 | -1 }> = [];
+  const pushSortField = (field: string, direction: 1 | -1) => {
+    if (!field) return;
+    sortStage[field] = direction;
+    sortFields.push({ field, direction });
+  };
+
+  // Multi-field sorting: "price:asc,createdAt:desc"
+  if (multiSort) {
+    multiSort.split(",").forEach((s: string) => {
+      const [field, directionRaw] = s.trim().split(":");
+      if (field) {
+        const direction = directionRaw === "asc" ? 1 : -1;
+        pushSortField(field, direction);
+      }
+    });
+  } else {
+    // Single field sorting
+    const direction = sortDir === "asc" ? 1 : -1;
+    pushSortField(sortKey, direction);
   }
 
-  // ==========================================
-  // 🔎 ADVANCED SEARCH
-  // ==========================================
+  const usePagination = toBoolean(pagination.toString());
+  const includeTotal = toBoolean(includeTotalRaw ?? "false");
+  // Only use cursor pagination if:
+  // 1. Pagination is enabled
+  // 2. paginationMode is explicitly "cursor" (not empty/default)
+  // 3. A cursor is actually provided
+  // 4. NO page/limit parameters are provided (use page/limit for offset pagination)
+  const useCursor =
+    usePagination &&
+    paginationMode === "cursor" &&
+    !!cursorRaw &&
+    !hasPageParam;
+  const cursor = useCursor ? parseCursor(cursorRaw) : null;
+  const hasNestedSort = sortFields.some((f) => f.field.includes("."));
+
+  if (useCursor && !hasNestedSort) {
+    const lastDirection =
+      sortFields.length > 0 ? sortFields[sortFields.length - 1].direction : -1;
+    if (!sortStage._id) {
+      pushSortField("_id", lastDirection);
+    }
+  }
+
+  const lookupStages: any[] = [];
+  if (Array.isArray(additionalStages)) {
+    lookupStages.push(...additionalStages);
+  } else if (additionalStages && typeof additionalStages === "object") {
+    lookupStages.push(additionalStages);
+  }
+
+  let searchStage: any | null = null;
+  let searchKeys: string[] = [];
   if (search && searchkey) {
     const keys = searchkey
       .split(",")
       .map((k: string) => k.trim())
       .filter(Boolean);
+    searchKeys = keys;
 
     if (keys.length > 0) {
       const searchConditions = keys.map((k: any) => ({
@@ -268,13 +405,11 @@ export const getPipeline = (
           ? { $and: searchConditions }
           : { $or: searchConditions };
 
-      basePipeline.push({ $match: searchQuery });
+      searchStage = { $match: searchQuery };
     }
   }
 
-  // ==========================================
-  // 📋 PROJECTION
-  // ==========================================
+  let projectStage: any | null = null;
   if (fields || exclude) {
     const projectFields: any = {};
 
@@ -295,82 +430,174 @@ export const getPipeline = (
     }
 
     if (Object.keys(projectFields).length > 0) {
-      basePipeline.push({ $project: projectFields });
+      projectStage = { $project: projectFields };
     }
   }
 
-  // ==========================================
-  // 📊 SORTING
-  // ==========================================
-  const sortStage: Record<string, 1 | -1> = {};
-
-  // Multi-field sorting: "price:asc,createdAt:desc"
-  if (multiSort) {
-    multiSort.split(",").forEach((s: string) => {
-      const [field, direction] = s.trim().split(":");
-      if (field) {
-        sortStage[field] = direction === "asc" ? 1 : -1;
-      }
-    });
-  } else {
-    // Single field sorting
-    sortStage[sortKey] = sortDir === "asc" ? 1 : -1;
+  const searchNeedsLookup = searchKeys.some((key) => key.includes("."));
+  const countPipeline: any[] = [...basePipeline];
+  if (searchStage) {
+    if (searchNeedsLookup && lookupStages.length > 0) {
+      countPipeline.push(...lookupStages);
+    }
+    countPipeline.push(searchStage);
   }
-
-  basePipeline.push({ $sort: sortStage });
+  countPipeline.push({ $count: "total" });
 
   // ==========================================
   // 📄 PAGINATION
   // ==========================================
   let pipeline: any[] = [];
 
-  if (toBoolean(pagination.toString())) {
-    pipeline = [
-      ...basePipeline,
-      {
-        $facet: {
-          data: [
-            { $skip: (pageNumber - 1) * limitNumber },
-            { $limit: limitNumber },
-          ],
-          metadata: [
-            { $count: "total" },
-            {
-              $addFields: {
-                page: pageNumber,
-                limit: limitNumber,
-                totalPages: {
-                  $ceil: { $divide: ["$total", limitNumber] },
+  if (usePagination && useCursor && !hasNestedSort) {
+    const cursorMatch = buildCursorMatch(sortFields, cursor);
+    const fullPipeline = [...basePipeline];
+    if (searchStage) fullPipeline.push(searchStage);
+    if (cursorMatch) fullPipeline.push({ $match: cursorMatch });
+    fullPipeline.push({ $sort: sortStage });
+    fullPipeline.push({ $limit: limitNumber + 1 });
+    if (lookupStages.length > 0) {
+      fullPipeline.push(...lookupStages);
+    }
+    if (projectStage) fullPipeline.push(projectStage);
+    pipeline = [...fullPipeline];
+  } else if (usePagination) {
+    if (lookupsInDataFacet) {
+      const dataStages = [
+        { $skip: (pageNumber - 1) * limitNumber },
+        { $limit: limitNumber },
+        ...lookupStages,
+      ];
+      if (projectStage) dataStages.push(projectStage);
+
+      pipeline = [
+        ...basePipeline,
+        ...(searchStage ? [searchStage] : []),
+        { $sort: sortStage },
+        {
+          $facet: {
+            data: dataStages,
+            metadata: [
+              { $count: "total" },
+              {
+                $addFields: {
+                  page: pageNumber,
+                  limit: limitNumber,
+                  totalPages: {
+                    $ceil: { $divide: ["$total", limitNumber] },
+                  },
                 },
               },
+            ],
+          },
+        },
+        {
+          $project: {
+            data: 1,
+            total: { $ifNull: [{ $arrayElemAt: ["$metadata.total", 0] }, 0] },
+            page: { $ifNull: [{ $arrayElemAt: ["$metadata.page", 0] }, 1] },
+            limit: {
+              $ifNull: [{ $arrayElemAt: ["$metadata.limit", 0] }, limitNumber],
             },
-          ],
-        },
-      },
-      {
-        $project: {
-          data: 1,
-          total: { $ifNull: [{ $arrayElemAt: ["$metadata.total", 0] }, 0] },
-          page: { $ifNull: [{ $arrayElemAt: ["$metadata.page", 0] }, 1] },
-          limit: {
-            $ifNull: [{ $arrayElemAt: ["$metadata.limit", 0] }, limitNumber],
-          },
-          totalPages: {
-            $ifNull: [{ $arrayElemAt: ["$metadata.totalPages", 0] }, 0],
+            totalPages: {
+              $ifNull: [{ $arrayElemAt: ["$metadata.totalPages", 0] }, 0],
+            },
           },
         },
-      },
-    ];
+      ];
+    } else {
+      const fullPipeline = [...basePipeline];
+      if (sortFirst) {
+        fullPipeline.push({ $sort: sortStage });
+      }
+      if (lookupStages.length > 0) {
+        fullPipeline.push(...lookupStages);
+      }
+      if (searchStage) fullPipeline.push(searchStage);
+      if (projectStage) fullPipeline.push(projectStage);
+      if (!sortFirst) {
+        fullPipeline.push({ $sort: sortStage });
+      }
+
+      pipeline = [
+        ...fullPipeline,
+        {
+          $facet: {
+            data: [
+              { $skip: (pageNumber - 1) * limitNumber },
+              { $limit: limitNumber },
+            ],
+            metadata: [
+              { $count: "total" },
+              {
+                $addFields: {
+                  page: pageNumber,
+                  limit: limitNumber,
+                  totalPages: {
+                    $ceil: { $divide: ["$total", limitNumber] },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        {
+          $project: {
+            data: 1,
+            total: { $ifNull: [{ $arrayElemAt: ["$metadata.total", 0] }, 0] },
+            page: { $ifNull: [{ $arrayElemAt: ["$metadata.page", 0] }, 1] },
+            limit: {
+              $ifNull: [{ $arrayElemAt: ["$metadata.limit", 0] }, limitNumber],
+            },
+            totalPages: {
+              $ifNull: [{ $arrayElemAt: ["$metadata.totalPages", 0] }, 0],
+            },
+          },
+        },
+      ];
+    }
   } else {
-    pipeline = [...basePipeline];
+    const fullPipeline = [...basePipeline];
+    if (sortFirst) {
+      fullPipeline.push({ $sort: sortStage });
+    }
+    if (lookupStages.length > 0) {
+      fullPipeline.push(...lookupStages);
+    }
+    if (searchStage) fullPipeline.push(searchStage);
+    if (projectStage) fullPipeline.push(projectStage);
+    if (!sortFirst) {
+      fullPipeline.push({ $sort: sortStage });
+    }
+
+    pipeline = [...fullPipeline];
+  }
+
+  if (pipelineModifier) {
+    const modified = pipelineModifier([...pipeline]);
+    if (Array.isArray(modified) && modified.length > 0) {
+      pipeline = modified;
+    }
   }
 
   // ==========================================
   // 🎯 RETURN PIPELINE
   // ==========================================
+  const paginationModeUsed = useCursor ? "cursor" : "offset";
+
   return {
     pipeline,
     matchStage: match,
+    meta: {
+      paginationMode: paginationModeUsed,
+      useCursor,
+      sortFields,
+      limit: limitNumber,
+      page: pageNumber,
+      includeTotal,
+      cursor,
+      countPipeline,
+    },
     options: {
       collation: { locale: "en", strength: 2 },
       allowDiskUse: true,
@@ -390,7 +617,7 @@ export const paginationResult = (
   pageNumber: number,
   limitNumber: number,
   totalResults: number,
-  results: any[]
+  results: any[],
 ) => {
   return {
     result: results,
@@ -409,7 +636,7 @@ export const paginationResult = (
  * @returns {ObjectId | null} - The ObjectId or null if invalid
  */
 export const convertToObjectId = (
-  id: string
+  id: string,
 ): mongoose.Types.ObjectId | null => {
   try {
     return new ObjectId(id);
@@ -520,34 +747,154 @@ export const isValidJSON = (jsonString: string): boolean => {
   }
 };
 
-export const extractImageUrl = async (input: any, existing: string) => {
-  if (!input || (Array.isArray(input) && input.length === 0))
-    return existing || "";
-  if (Array.isArray(input) && input.length > 0) {
-    const newUrl = input[0]?.url;
-    if (existing && existing !== newUrl) {
-      const s3Key = (() => {
-        try {
-          const parsed = new URL(existing);
-          const path = parsed.pathname.replace(/^\/+/, "");
-          if (config.s3?.bucket && path.startsWith(`${config.s3.bucket}/`)) {
-            return path.slice(config.s3.bucket.length + 1);
-          }
-          if (config.s3?.bucket && parsed.hostname.startsWith(`${config.s3.bucket}.`)) {
-            return path;
-          }
-          return path;
-        } catch {
-          const bucketMatch = config.s3?.bucket
-            ? existing.split(`/${config.s3.bucket}/`)[1]
-            : undefined;
-          return existing.split(".com/")[1] || bucketMatch;
-        }
-      })();
-      if (s3Key) await deleteFromS3(s3Key);
+/**
+ * Extracts S3 key from a full URL
+ * Handles different URL formats:
+ * - https://bucket.s3.region.amazonaws.com/key
+ * - https://baseUrl/bucket/key
+ * - http://localhost:9000/bucket/key (MinIO)
+ */
+export const extractS3KeyFromUrl = (url: string): string | null => {
+  if (!url || typeof url !== "string") return null;
+
+  try {
+    // Handle standard S3 URLs: https://bucket.s3.region.amazonaws.com/key
+    if (url.includes(".s3.") && url.includes(".amazonaws.com/")) {
+      const parts = url.split(".amazonaws.com/");
+      if (parts.length > 1) return parts[1];
     }
-    return newUrl || "";
+
+    // Handle custom baseUrl (MinIO, Wasabi, etc.): https://baseUrl/bucket/key
+    // Extract everything after the bucket name
+    const urlObj = new URL(url);
+    const pathParts = urlObj.pathname.split("/").filter(Boolean);
+    if (pathParts.length >= 2) {
+      // Skip bucket name, return the rest
+      return pathParts.slice(1).join("/");
+    }
+
+    // Fallback: try to extract after .com/ or last /
+    const match = url.match(/(?:\.com\/|:\/\/[^\/]+\/)(.+)$/);
+    if (match && match[1]) return match[1];
+
+    return null;
+  } catch (error) {
+    console.error("Error extracting S3 key:", error);
+    return null;
   }
-  if (typeof input === "string") return input;
-  return existing || "";
+};
+
+/**
+ * Deletes image from S3 if URL is a valid S3 URL
+ */
+export const deleteImageFromS3 = async (
+  url: string | null | undefined,
+): Promise<void> => {
+  if (!url || typeof url !== "string") return;
+
+  // Only delete if it's an S3 URL (not blob URLs or local URLs)
+  if (
+    url.startsWith("blob:") ||
+    url.startsWith("data:") ||
+    !url.includes("http")
+  ) {
+    return;
+  }
+
+  const s3Key = extractS3KeyFromUrl(url);
+  if (s3Key) {
+    try {
+      await deleteFromS3(s3Key);
+    } catch (error) {
+      console.error(`Failed to delete image from S3: ${url}`, error);
+      // Don't throw - allow update to continue even if S3 delete fails
+    }
+  }
+};
+
+/**
+ * Extracts image URL and handles deletion of old images
+ * - If input is null/empty and existing exists: delete existing from S3, return empty
+ * - If input is new and different from existing: delete existing from S3, return new
+ * - If input is same as existing: return existing (no deletion)
+ */
+export const extractImageUrl = async (
+  input: any,
+  existing: string | null | undefined,
+): Promise<string> => {
+  // Handle deletion: if input is explicitly null/empty and existing exists
+  const isDeletion =
+    input === null ||
+    input === undefined ||
+    input === "" ||
+    (Array.isArray(input) && input.length === 0) ||
+    (Array.isArray(input) &&
+      input.length === 1 &&
+      (input[0] === null ||
+        input[0] === "" ||
+        input[0]?.url === null ||
+        input[0]?.url === ""));
+
+  if (isDeletion) {
+    // Delete existing image from S3 if it exists
+    if (existing) {
+      await deleteImageFromS3(existing);
+    }
+    return "";
+  }
+
+  // Extract new URL from input
+  let newUrl: string | undefined;
+
+  if (Array.isArray(input) && input.length > 0) {
+    newUrl =
+      input[0]?.url || (typeof input[0] === "string" ? input[0] : undefined);
+  } else if (typeof input === "string") {
+    newUrl = input;
+  } else if (input && typeof input === "object" && input.url) {
+    newUrl = input.url;
+  }
+
+  // If new URL is different from existing, delete the old one
+  if (existing && newUrl && existing !== newUrl) {
+    await deleteImageFromS3(existing);
+  }
+
+  return newUrl || existing || "";
+};
+
+/**
+ * Handles array of images - detects deletions and removes them from S3
+ * Returns the final array of URLs and deletes removed images from S3
+ */
+export const extractImageArray = async (
+  input: any,
+  existing: string[] | null | undefined,
+): Promise<string[]> => {
+  const existingArray = existing || [];
+
+  // Normalize input to array of URLs
+  let incomingUrls: string[] = [];
+
+  if (Array.isArray(input)) {
+    incomingUrls = input
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object" && item.url) return item.url;
+        return null;
+      })
+      .filter((url): url is string => url !== null && url !== "");
+  } else if (input && typeof input === "string") {
+    incomingUrls = [input];
+  }
+
+  // Find images that were removed (exist in existing but not in incoming)
+  const removedUrls = existingArray.filter(
+    (url) => !incomingUrls.includes(url),
+  );
+
+  // Delete removed images from S3
+  await Promise.all(removedUrls.map((url) => deleteImageFromS3(url)));
+
+  return incomingUrls;
 };

@@ -58,6 +58,7 @@ router.post(
   s3UploaderMiddleware("loan-query"),
   asyncHandler(LoanQueryController.createQuery)
 );
+router.get("/stats", asyncHandler(LoanQueryController.getStats));
 router.get("/", asyncHandler(LoanQueryController.getAllQueries));
 router.get("/:id", asyncHandler(LoanQueryController.getQueryById));
 router.put(

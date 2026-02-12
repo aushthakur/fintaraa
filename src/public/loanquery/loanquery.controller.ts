@@ -11,6 +11,7 @@ import { ApplicationStatus } from "../../modals/insurancequery.model";
 import LanderAssignmentEngine from "../../services/landerAssignment.service";
 import { Types } from "mongoose";
 import Lander from "../../modals/lander.model";
+import { normalizeLoanType } from "../../utils/loanType";
 import {
   fetchSurepassRcDetails,
   fetchSurepassCibilReport,
@@ -19,12 +20,47 @@ import {
 } from "../../services/surepass.service";
 import { VehicleRcLookup } from "../../modals/vehicleRcLookup.model";
 import { User } from "../../modals/user.model";
+import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
 
 const RC_CACHE_TTL_DAYS = 365;
 const normalizeRcNumber = (value: string) =>
   value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 
 const loanQueryService = new CommonService(LoanQuery);
+
+const parseDateInput = (value?: any) => {
+  if (!value) return null;
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const startOfDay = (d: Date) => {
+  const next = new Date(d);
+  next.setHours(0, 0, 0, 0);
+  return next;
+};
+
+const endOfDay = (d: Date) => {
+  const next = new Date(d);
+  next.setHours(23, 59, 59, 999);
+  return next;
+};
+
+const resolveDateRange = (
+  startRaw: any,
+  endRaw: any,
+  days: number = 7,
+) => {
+  const now = new Date();
+  const end = endOfDay(parseDateInput(endRaw) || now);
+  const startParsed = parseDateInput(startRaw);
+  if (startParsed) {
+    return { start: startOfDay(startParsed), end };
+  }
+  const start = new Date(end);
+  start.setDate(start.getDate() - (days - 1));
+  return { start: startOfDay(start), end };
+};
 
 // Helper function to extract URL from uploaded file object
 const extractFileUrl = (file: any): string | undefined => {
@@ -340,6 +376,9 @@ export class LoanQueryController {
           .json(new ApiError(401, "User authentication required"));
       }
 
+      const normalizedLoanType = normalizeLoanType(req.body.loanType);
+      if (normalizedLoanType) req.body.loanType = normalizedLoanType;
+
       // Process uploaded files and map URLs
       processFileUploads(req);
 
@@ -455,18 +494,30 @@ export class LoanQueryController {
           createdAt: new Date(),
         });
 
+        const session = (req as any).mongoSession;
+
+        // Auto-assign employee (from Admin model with role=agent)
+        if (result && !result.assignedAgent) {
+          result = await EmployeeAssignmentEngine.ensureAssignmentForLoanQuery(
+            result,
+            {
+              actorId: customerId?.toString(),
+              actorModel: "User",
+              reason: "new_loan_query",
+              session,
+            }
+          );
+        }
+
         // Auto-assign lander if not already assigned
         if (result && !result.assignedLander) {
-          const session = (req as any).mongoSession;
           result = await LanderAssignmentEngine.ensureAssignment(result, {
             actorId: customerId?.toString(),
             reason: "new_loan_query",
             session,
           });
-          await result.save({ session });
-        } else {
-          await result.save();
         }
+        await result.save({ session });
       }
 
       if (!result)
@@ -485,6 +536,19 @@ export class LoanQueryController {
     try {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
+
+      const requiresStatus =
+        role === "admin" || role === "agent" || role === "lander";
+      if (req.query.status === "all") {
+        delete req.query.status;
+      } else if (requiresStatus && !req.query.status) {
+        req.query.status = ApplicationStatus.SUBMITTED;
+      }
+
+      if (req.query.loanType) {
+        const normalized = normalizeLoanType(String(req.query.loanType));
+        if (normalized) req.query.loanType = normalized;
+      }
 
       // For agents, only show queries assigned to them
       if (role === "agent" && userId) {
@@ -509,7 +573,7 @@ export class LoanQueryController {
       const populateStages = [
         {
           $lookup: {
-            from: "agents",
+            from: "admins",
             localField: "assignedAgent",
             foreignField: "_id",
             as: "assignedAgentData",
@@ -542,7 +606,7 @@ export class LoanQueryController {
                 if: { $ifNull: ["$assignedAgentData", false] },
                 then: {
                   _id: "$assignedAgentData._id",
-                  name: "$assignedAgentData.name",
+                  name: { $ifNull: ["$assignedAgentData.name", "$assignedAgentData.username"] },
                   email: "$assignedAgentData.email",
                   mobile: "$assignedAgentData.mobile",
                 },
@@ -580,6 +644,91 @@ export class LoanQueryController {
         .json(
           new ApiResponse(200, loanQueries, "Loan queries fetched successfully")
         );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getStats(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      const { loanType, startDate, endDate } = req.query as Record<
+        string,
+        string
+      >;
+
+      if (!loanType) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "loanType is required"));
+      }
+
+      const normalizedLoanType = normalizeLoanType(String(loanType));
+      if (!normalizedLoanType) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid loanType"));
+      }
+
+      const { start, end } = resolveDateRange(startDate, endDate, 7);
+
+      const match: Record<string, any> = {
+        loanType: normalizedLoanType,
+        createdAt: { $gte: start, $lte: end },
+      };
+
+      if (role === "agent" && userId) {
+        match.assignedAgent = userId;
+      } else if (role === "lander" && userId) {
+        match.assignedLander = userId;
+      } else if (role !== "admin" && userId) {
+        match.customerId = userId;
+      }
+
+      const rows = await LoanQuery.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: "$status",
+            count: { $sum: 1 },
+            amount: { $sum: { $ifNull: ["$loanAmount", 0] } },
+          },
+        },
+      ]);
+
+      const byStatus: Record<string, number> = {};
+      const amountByStatus: Record<string, number> = {};
+      let total = 0;
+      let totalAmount = 0;
+
+      rows.forEach((row: any) => {
+        const key = row?._id ? String(row._id) : "unknown";
+        const count = Number(row?.count) || 0;
+        const amount = Number(row?.amount) || 0;
+        byStatus[key] = count;
+        amountByStatus[key] = amount;
+        total += count;
+        totalAmount += amount;
+      });
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            loanType: normalizedLoanType,
+            range: {
+              startDate: start.toISOString(),
+              endDate: end.toISOString(),
+            },
+            total,
+            totalAmount,
+            byStatus,
+            amountByStatus,
+          },
+          "Loan query stats fetched successfully",
+        ),
+      );
     } catch (err) {
       next(err);
     }
@@ -626,6 +775,11 @@ export class LoanQueryController {
     try {
       const customerId = (req as any).user?._id;
       const { role } = (req as any).user || {};
+
+      if (req.body.loanType) {
+        const normalized = normalizeLoanType(req.body.loanType);
+        if (normalized) req.body.loanType = normalized;
+      }
 
       //only draft queries can be updated
       const existingResult = await loanQueryService.getById(
@@ -678,8 +832,6 @@ export class LoanQueryController {
         req.body,
         {
           populate: true,
-          new: true,
-          runValidators: true,
         }
       );
 
@@ -711,6 +863,25 @@ export class LoanQueryController {
           actorModel: role === "admin" ? "Admin" : "User",
           createdAt: new Date(),
         });
+      }
+
+      // Auto-assign employee if status changed from draft to non-draft and no employee assigned
+      if (
+        updatedResult &&
+        existingResult?.status === ApplicationStatus.DRAFT &&
+        updatedResult.status !== ApplicationStatus.DRAFT &&
+        !updatedResult.assignedAgent
+      ) {
+        const session = (req as any).mongoSession;
+        await EmployeeAssignmentEngine.ensureAssignmentForLoanQuery(
+          updatedResult as any,
+          {
+            actorId: customerId?.toString(),
+            actorModel: role === "admin" ? "Admin" : "User",
+            reason: "draft_submitted",
+            session,
+          }
+        );
       }
 
       // Auto-assign lander if status changed from draft to non-draft and no lander assigned
@@ -828,8 +999,6 @@ export class LoanQueryController {
         },
         {
           populate: [{ path: "assignedLander", select: "name email mobile" }],
-          new: true,
-          runValidators: true,
         }
       );
 
@@ -867,7 +1036,7 @@ export class LoanQueryController {
           "customerId",
           "name email mobile profilePictureUrl cibilScore cibilLastFetchedAt cibilReport cibilRequestPayload cibilPdfLastFetchedAt cibilPdfReport digiLockerVault"
         )
-        .populate("assignedAgent", "name email mobile profilePictureUrl")
+        .populate("assignedAgent", "name username email mobile profilePictureUrl")
         .populate("assignedLander", "name email mobile profilePictureUrl")
         .lean();
 
@@ -1414,6 +1583,9 @@ export class LoanQueryController {
       await query.save();
 
       // Adjust lander load - reduce by 1 as this query is now completed
+      if (query.assignedAgent) {
+        await EmployeeAssignmentEngine.adjustEmployeeLoad(query.assignedAgent, -1);
+      }
       if (query.assignedLander) {
         console.log(`  📉 Adjusting lander load for ${query.assignedLander}`);
         await LanderAssignmentEngine.adjustLanderLoad(query.assignedLander, -1);
