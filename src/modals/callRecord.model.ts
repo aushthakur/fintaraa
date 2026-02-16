@@ -17,6 +17,7 @@ export interface ICallRecord extends Document {
   productService?: string;
   loanAmount?: number;
   callbackAt?: Date;
+  callbackNotifiedAt?: Date;
   leadStatus?: string;
   fatherName?: string;
   motherName?: string;
@@ -56,6 +57,7 @@ const CallRecordSchema = new Schema<ICallRecord>(
     productService: { type: String, trim: true },
     loanAmount: { type: Number },
     callbackAt: { type: Date },
+    callbackNotifiedAt: { type: Date },
     leadStatus: { type: String, trim: true },
     fatherName: { type: String, trim: true },
     motherName: { type: String, trim: true },
@@ -78,7 +80,7 @@ const CallRecordSchema = new Schema<ICallRecord>(
     createdBy: { type: Schema.Types.ObjectId, ref: "Admin" },
     updatedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 CallRecordSchema.index({ phoneNumber: 1, createdAt: -1 });
@@ -86,5 +88,5 @@ CallRecordSchema.index({ assignee: 1, assignedAt: -1 });
 
 export const CallRecord = mongoose.model<ICallRecord>(
   "CallRecord",
-  CallRecordSchema
+  CallRecordSchema,
 );

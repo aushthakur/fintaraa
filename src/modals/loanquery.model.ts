@@ -202,13 +202,13 @@ export interface ILoanQuery extends Document {
   isEmailVerified: boolean;
   panNumber: string;
   aadhaarNumber: string;
-  
+
   // Contact & Address
   pincode: string;
   state: string;
   city: string;
   street: string;
-  
+
   // Professional Details
   employmentType: string; // Self-employed, Self Employed Professional, Self Employed Non-Professional
   industry?: string;
@@ -216,33 +216,34 @@ export interface ILoanQuery extends Document {
   monthlyIncome: number;
   workExperience?: number; // in years
   officeAddress: string;
-  
+
   // Bank Details
   bankName: string;
   accountType: string;
   accountNumber: string;
   ifscCode: string;
   bankStatementUrl: string;
-  
+
   // Loan Type & Status
   loanType: LoanType;
   status: ApplicationStatus;
-  
+  approved?: boolean; // New field for approval status
+
   // Mixed policyDetails for other dynamic fields
   policyDetails?: Record<string, any>;
-  
+
   // Mixed documents field for document uploads
   documents?: Record<string, any>;
-  
+
   assignedAgent?: Types.ObjectId;
   assignedLander?: Types.ObjectId;
   activities: ILoanQueryActivity[];
-  
+
   // Commission tracking
   commissionRecorded: boolean;
   commissionRecordedAt?: Date;
   commissionTransactionId?: Types.ObjectId;
-  
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -277,38 +278,43 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     isEmailVerified: { type: Boolean, default: false },
     panNumber: { type: String, required: true, trim: true, uppercase: true },
     aadhaarNumber: { type: String, required: true, trim: true },
-    
+
     // Contact & Address
     pincode: { type: String, required: true, trim: true },
     state: { type: String, required: true, trim: true },
     city: { type: String, required: true, trim: true },
     street: { type: String, required: true, trim: true },
-    
+
     // Professional Details
-    employmentType: { 
-      type: String, 
-      required: true, 
+    employmentType: {
+      type: String,
+      required: true,
       trim: true,
-      enum: ["self_employed", "self_employed_professional", "self_employed_non_professional", "salaried"],
+      enum: [
+        "self_employed",
+        "self_employed_professional",
+        "self_employed_non_professional",
+        "salaried",
+      ],
     },
     industry: { type: String, trim: true },
     companyName: { type: String, required: true, trim: true },
     monthlyIncome: { type: Number, required: true },
     workExperience: { type: Number }, // in years
     officeAddress: { type: String, required: true, trim: true },
-    
+
     // Bank Details
     bankName: { type: String, required: true, trim: true },
-    accountType: { 
-      type: String, 
-      required: true, 
+    accountType: {
+      type: String,
+      required: true,
       trim: true,
       enum: ["savings", "current", "salary"],
     },
     accountNumber: { type: String, required: true, trim: true },
     ifscCode: { type: String, required: true, trim: true, uppercase: true },
     bankStatementUrl: { type: String, trim: true },
-    
+
     // Loan Type & Status
     loanId: {
       type: String,
@@ -330,28 +336,35 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
       default: ApplicationStatus.PENDING,
       index: true,
     },
-    
+    approved: { type: Boolean, default: false, index: true },
+
     // Mixed policyDetails for other dynamic fields
     policyDetails: {
       type: Schema.Types.Mixed,
       default: {},
     },
-    
+
     // Mixed documents field for document uploads
     documents: {
       type: Schema.Types.Mixed,
       default: {},
       validate: {
         validator: function (value: Record<string, any>) {
-          if (!value || typeof value !== "object" || Object.keys(value).length === 0) {
+          if (
+            !value ||
+            typeof value !== "object" ||
+            Object.keys(value).length === 0
+          ) {
             return true; // Allow empty object
           }
           // Check if all keys in documents are allowed document types
-          return Object.keys(value).every((docKey) => allowedDocumentTypes.includes(docKey as AllowedDocumentType));
+          return Object.keys(value).every((docKey) =>
+            allowedDocumentTypes.includes(docKey as AllowedDocumentType),
+          );
         },
         message: function (props: any) {
           const invalidDocs = Object.keys(props.value || {}).filter(
-            (doc) => !allowedDocumentTypes.includes(doc as AllowedDocumentType)
+            (doc) => !allowedDocumentTypes.includes(doc as AllowedDocumentType),
           );
           return `Document type(s) "${invalidDocs.join(", ")}" is/are not allowed. Allowed document types: ${allowedDocumentTypes.join(", ")}`;
         },
@@ -390,9 +403,12 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     // Commission tracking
     commissionRecorded: { type: Boolean, default: false, index: true },
     commissionRecordedAt: { type: Date },
-    commissionTransactionId: { type: Schema.Types.ObjectId, ref: "WalletTransaction" },
+    commissionTransactionId: {
+      type: Schema.Types.ObjectId,
+      ref: "WalletTransaction",
+    },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 LoanQuerySchema.index({ mobile: 1, email: 1 });
@@ -412,5 +428,5 @@ LoanQuerySchema.pre("save", async function (next) {
 
 export const LoanQuery = mongoose.model<ILoanQuery>(
   "LoanQuery",
-  LoanQuerySchema
+  LoanQuerySchema,
 );

@@ -12,17 +12,28 @@ interface DualNotificationTemplate {
 
 function formatStatus(status?: any): any {
   switch (status) {
-    case "hired": return "Hired";
-    case "applied": return "Applied";
-    case "offered": return "Offered";
-    case "rejected": return "Rejected";
-    case "withdrawn": return "Withdrawn";
-    case "shortlisted": return "Shortlisted";
-    case "under_review": return "Under Review";
-    case "interview": return "Interview Scheduled";
-    case "offer_declined": return "Offer Declined";
-    case "offer_accepted": return "Offer Accepted";
-    default: return status || "Updated";
+    case "hired":
+      return "Hired";
+    case "applied":
+      return "Applied";
+    case "offered":
+      return "Offered";
+    case "rejected":
+      return "Rejected";
+    case "withdrawn":
+      return "Withdrawn";
+    case "shortlisted":
+      return "Shortlisted";
+    case "under_review":
+      return "Under Review";
+    case "interview":
+      return "Interview Scheduled";
+    case "offer_declined":
+      return "Offer Declined";
+    case "offer_accepted":
+      return "Offer Accepted";
+    default:
+      return status || "Updated";
   }
 }
 
@@ -65,10 +76,7 @@ function formatConnectionStatus(status?: any): {
   }
 }
 
-export const NotificationMessages: Record<
-  string,
-  DualNotificationTemplate
-> = {
+export const NotificationMessages: Record<string, DualNotificationTemplate> = {
   "application-status-update": {
     sender: (ctx) => ({
       title: `Application marked as "${formatStatus(ctx?.status)}"`,
@@ -288,6 +296,7 @@ export const NotificationMessages: Record<
       message: `You earned ${ctx?.points || 100} points for a successful referral.`,
     }),
   },
+
   "preferences-updated": {
     sender: () => ({
       title: "Preferences Updated",
@@ -296,6 +305,17 @@ export const NotificationMessages: Record<
     receiver: () => ({
       title: "Preferences Updated",
       message: "Your notification preferences were updated.",
+    }),
+  },
+
+  "callback-reminder": {
+    sender: (ctx) => ({
+      title: "Callback Reminder Set",
+      message: `You set a callback reminder for ${ctx?.phone || "a lead"} at ${ctx?.callbackTime || "the scheduled time"}.`,
+    }),
+    receiver: (ctx) => ({
+      title: "⏰ Callback in 5 Minutes",
+      message: `Reminder: You have a callback scheduled in 5 minutes for ${ctx?.name || ctx?.phone || "a lead"}${ctx?.product ? ` (${ctx.product})` : ""}.`,
     }),
   },
 };

@@ -835,18 +835,10 @@ export class UserController {
       let user = await User.findOne({ mobile });
       const existed = Boolean(user);
       if (!user) {
-        // Auto-provision lightweight user so OTP flow works for new signups
-        const placeholderEmail = `${mobile}@signup.fintara`;
-        user = await User.create({
-          mobile,
-          role: "user",
-          agreedToTerms: true,
-          email: placeholderEmail,
-          privacyPolicyAccepted: true,
-          name: `User ${mobile.slice(-4)}`,
-          status: UserStatus.PENDING_VERIFICATION,
-          password: crypto.randomBytes(10).toString("hex"),
-        });
+        // Don't auto-create user with placeholder email during OTP generation
+        // User will be created only when they verify OTP and provide actual email
+        // For now, just store the OTP and proceed
+        user = null;
       }
 
       const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
@@ -1202,7 +1194,7 @@ export class UserController {
 
   static async verifyOtp(req: Request, res: Response, next: NextFunction) {
     try {
-      const { mobile, otp } = req.body;
+      const { mobile, otp, email, name } = req.body;
 
       if (!mobile || !otp) {
         return res.status(400).json({
@@ -1228,11 +1220,44 @@ export class UserController {
       otpDoc.verified = true;
       await otpDoc.save();
 
-      const user: any = await User.findOne({ mobile });
+      let user: any = await User.findOne({ mobile });
+
+      // If user doesn't exist, create one (requires email)
       if (!user) {
-        return res
-          .status(404)
-          .json({ success: false, message: "User not found" });
+        if (!email) {
+          return res.status(400).json({
+            success: false,
+            message: "Email is required for new user registration",
+          });
+        }
+
+        // Check if email is already taken
+        const emailTaken = await User.findOne({ email: email.toLowerCase() });
+        if (emailTaken) {
+          return res.status(400).json({
+            success: false,
+            message: "Email already in use",
+          });
+        }
+
+        // Create new user
+        const referralCode = await generateReferralCode();
+        user = await User.create({
+          mobile,
+          email: email.toLowerCase(),
+          name: name || `User ${mobile.slice(-4)}`,
+          role: "user",
+          agreedToTerms: true,
+          privacyPolicyAccepted: true,
+          status: UserStatus.ACTIVE,
+          isMobileVerified: true,
+          isEmailVerified: false,
+          referralCode,
+          password:
+            crypto.randomBytes(12).toString("hex") +
+            "@" +
+            Date.now().toString(16),
+        });
       }
 
       if ([UserStatus.SUSPENDED, UserStatus.INACTIVE].includes(user.status)) {
