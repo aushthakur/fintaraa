@@ -11,35 +11,28 @@ export interface IEligibilityCriteria extends Document {
   salaryType: string;
   itrWithFinancial?: string;
   gstProgram?: string;
-  selfEmp?: number;
-  salaryEmp?: number;
   cashProfit?: number;
   lowTv?: number;
-  bankAmount?: number;
   bankingSurrogate?: string;
   companyListed?: string;
-  foir?: number;
+  foir?: string;
   minimumVintage?: number;
   businessAge?: number;
-  grossIncome?: number;
   currentExperience?: number;
   totalExperience?: number;
   salaryAmount?: number;
+  form16Itr?: string;
+  grossSalary?: number;
+  netSalary?: number;
   currentTotalEmi?: number;
   netIncome?: number;
+  netProfit?: number;
   cibilScoreWithCall?: number;
-  catAApproved?: string;
-  catBSemiApproved?: string;
-  catCUnapproved?: string;
-  propertyType?: string;
-  empAge?: number;
-  loanTenure?: number;
-  rateOfInterest?: number;
-  emiAmount?: number;
-  loginFees?: number;
-  processingFees?: number;
-  legalValuation?: number;
-  insurance?: number;
+  catAApproved?: boolean;
+  catBSemiApproved?: boolean;
+  catCUnapproved?: boolean;
+  rateOfInterest?: string;
+  averageBankBalance?: number;
   rm?: string;
   rmMailId?: string;
   rmMbNo?: string;
@@ -49,6 +42,7 @@ export interface IEligibilityCriteria extends Document {
   zsm?: string;
   zsmMailId?: string;
   zsmMbNo?: string;
+  remarks?: string;
   status: EligibilityCriteriaStatus;
   createdAt?: Date;
   updatedAt?: Date;
@@ -61,35 +55,28 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     salaryType: { type: String, trim: true, required: true },
     itrWithFinancial: { type: String, trim: true },
     gstProgram: { type: String, trim: true },
-    selfEmp: { type: Number },
-    salaryEmp: { type: Number },
     cashProfit: { type: Number },
     lowTv: { type: Number },
-    bankAmount: { type: Number },
     bankingSurrogate: { type: String, trim: true },
     companyListed: { type: String, trim: true },
-    foir: { type: Number },
+    foir: { type: String, trim: true },
     minimumVintage: { type: Number },
     businessAge: { type: Number },
-    grossIncome: { type: Number },
     currentExperience: { type: Number },
     totalExperience: { type: Number },
     salaryAmount: { type: Number },
+    form16Itr: { type: String, trim: true },
+    grossSalary: { type: Number },
+    netSalary: { type: Number },
     currentTotalEmi: { type: Number },
     netIncome: { type: Number },
+    netProfit: { type: Number },
     cibilScoreWithCall: { type: Number },
-    catAApproved: { type: String, trim: true },
-    catBSemiApproved: { type: String, trim: true },
-    catCUnapproved: { type: String, trim: true },
-    propertyType: { type: String, trim: true },
-    empAge: { type: Number },
-    loanTenure: { type: Number },
-    rateOfInterest: { type: Number },
-    emiAmount: { type: Number },
-    loginFees: { type: Number },
-    processingFees: { type: Number },
-    legalValuation: { type: Number },
-    insurance: { type: Number },
+    catAApproved: { type: Boolean },
+    catBSemiApproved: { type: Boolean },
+    catCUnapproved: { type: Boolean },
+    rateOfInterest: { type: String, trim: true },
+    averageBankBalance: { type: Number },
     rm: { type: String, trim: true },
     rmMailId: { type: String, trim: true },
     rmMbNo: { type: String, trim: true },
@@ -99,13 +86,14 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     zsm: { type: String, trim: true },
     zsmMailId: { type: String, trim: true },
     zsmMbNo: { type: String, trim: true },
+    remarks: { type: String, trim: true },
     status: {
       type: String,
       enum: Object.values(EligibilityCriteriaStatus),
       default: EligibilityCriteriaStatus.ACTIVE,
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 EligibilityCriteriaSchema.index({ loanType: 1, bankName: 1, salaryType: 1 });
@@ -113,5 +101,5 @@ EligibilityCriteriaSchema.index({ status: 1 });
 
 export const EligibilityCriteria = mongoose.model<IEligibilityCriteria>(
   "EligibilityCriteria",
-  EligibilityCriteriaSchema
+  EligibilityCriteriaSchema,
 );

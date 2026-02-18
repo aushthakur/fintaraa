@@ -11,47 +11,41 @@ const EligibilityCriteriaService = new CommonService(EligibilityCriteria);
 const criteriaFieldLabels: Record<string, string> = {
   loanType: "Loan Type",
   bankName: "Bank Name",
-  salaryType: "Salary Type",
+  salaryType: "Income Type",
   itrWithFinancial: "ITR With Financial",
   gstProgram: "GST Program",
-  selfEmp: "Self Emp",
-  salaryEmp: "Salary Emp",
   cashProfit: "Cash Profit",
-  lowTv: "Low TV",
-  bankAmount: "Bank Amount",
+  lowTv: "Low LTV",
   bankingSurrogate: "Banking Surrogate",
   companyListed: "Company Listed",
   foir: "FOIR",
   minimumVintage: "Minimum Vintage",
   businessAge: "Business Age",
-  grossIncome: "Gross Income",
   currentExperience: "Current Experience",
   totalExperience: "Total Experience",
   salaryAmount: "Salary Amount",
+  form16Itr: "Form16/ITR",
+  grossSalary: "Gross Salary",
+  netSalary: "Net Salary",
   currentTotalEmi: "Current Total EMI",
   netIncome: "Net Income",
-  cibilScoreWithCall: "CIBIL Score With Call",
+  netProfit: "Net Profit",
+  cibilScoreWithCall: "CIBIL Score",
   catAApproved: "Cat A Approved",
   catBSemiApproved: "Cat B Semi Approved",
   catCUnapproved: "Cat C Unapproved",
-  propertyType: "Property Type",
-  empAge: "Employee Age",
-  loanTenure: "Loan Tenure",
   rateOfInterest: "Rate Of Interest",
-  emiAmount: "EMI Amount",
-  loginFees: "Login Fees",
-  processingFees: "Processing Fees",
-  legalValuation: "Legal Valuation",
-  insurance: "Insurance",
+  averageBankBalance: "Average Bank Balance",
   rm: "RM",
   rmMailId: "RM Mail ID",
   rmMbNo: "RM Mobile",
   asm: "ASM",
   asmMailId: "ASM Mail ID",
   asmMbNo: "ASM Mobile",
-  zsm: "ZSM",
-  zsmMailId: "ZSM Mail ID",
-  zsmMbNo: "ZSM Mobile",
+  zsm: "RSM",
+  zsmMailId: "RSM Mail ID",
+  zsmMbNo: "RSM Mobile",
+  remarks: "Remarks",
   status: "Status",
 };
 
@@ -91,7 +85,7 @@ const buildApplicantRows = (loan: Record<string, any> | null) => {
   return Object.entries(applicant)
     .map(
       ([label, value]) =>
-        `<tr><td style=\"padding:6px 10px;border:1px solid #e2e8f0;font-weight:600;\">${label}</td><td style=\"padding:6px 10px;border:1px solid #e2e8f0;\">${formatValue(value)}</td></tr>`
+        `<tr><td style=\"padding:6px 10px;border:1px solid #e2e8f0;font-weight:600;\">${label}</td><td style=\"padding:6px 10px;border:1px solid #e2e8f0;\">${formatValue(value)}</td></tr>`,
     )
     .join("");
 };
@@ -103,7 +97,9 @@ type DocumentAttachmentInput = {
 };
 
 const sanitizeFilename = (value: string) => {
-  const cleaned = value.replace(/[^a-zA-Z0-9-_]+/g, "_").replace(/^_+|_+$/g, "");
+  const cleaned = value
+    .replace(/[^a-zA-Z0-9-_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
   return cleaned || "document";
 };
 
@@ -126,13 +122,17 @@ const getExtensionFromUrl = (url: string) => {
 
 const fetchDocumentAttachment = async (
   doc: DocumentAttachmentInput,
-  index: number
+  index: number,
 ) => {
   if (!doc?.url) return null;
   const response = await axios.get(doc.url, { responseType: "arraybuffer" });
-  const contentType = String(response.headers["content-type"] || "").toLowerCase();
+  const contentType = String(
+    response.headers["content-type"] || "",
+  ).toLowerCase();
   const extension =
-    getExtensionFromContentType(contentType) || getExtensionFromUrl(doc.url) || "bin";
+    getExtensionFromContentType(contentType) ||
+    getExtensionFromUrl(doc.url) ||
+    "bin";
   const label = sanitizeFilename(doc.label || `document_${index + 1}`);
   const source = sanitizeFilename(doc.source || "attachment");
   const filename = `${label}_${source}.${extension}`;
@@ -177,7 +177,7 @@ export class EligibilityCriteriaController {
     try {
       const result = await EligibilityCriteriaService.getById(
         req.params.id,
-        false
+        false,
       );
       if (!result) {
         return res
@@ -196,7 +196,7 @@ export class EligibilityCriteriaController {
     try {
       const result = await EligibilityCriteriaService.updateById(
         req.params.id,
-        req.body
+        req.body,
       );
       if (!result) {
         return res
@@ -257,7 +257,7 @@ export class EligibilityCriteriaController {
       if (queryId) {
         loanQuery = await LoanQuery.findById(queryId)
           .select(
-            "firstName lastName email mobile loanType loanAmount employmentType monthlyIncome customerId cibilScore"
+            "firstName lastName email mobile loanType loanAmount employmentType monthlyIncome customerId cibilScore",
           )
           .populate("customerId", "cibilScore")
           .lean();
@@ -268,7 +268,7 @@ export class EligibilityCriteriaController {
       }
 
       const normalizedDocuments: DocumentAttachmentInput[] = Array.isArray(
-        documentAttachments
+        documentAttachments,
       )
         ? documentAttachments
         : [];
@@ -276,8 +276,8 @@ export class EligibilityCriteriaController {
         new Map(
           normalizedDocuments
             .filter((doc) => doc?.url)
-            .map((doc) => [String(doc.url), doc])
-        ).values()
+            .map((doc) => [String(doc.url), doc]),
+        ).values(),
       );
 
       const documentAttachmentResults = await Promise.all(
@@ -287,21 +287,21 @@ export class EligibilityCriteriaController {
           } catch (error) {
             return { error: true, doc };
           }
-        })
+        }),
       );
 
       const documentAttachmentFiles = documentAttachmentResults.filter(
-        (item: any) => item && !item.error
+        (item: any) => item && !item.error,
       );
       const documentAttachmentFailures = documentAttachmentResults.filter(
-        (item: any) => item && item.error
+        (item: any) => item && item.error,
       );
 
       const attachments: any[] = [];
       if (typeof pdfBase64 === "string" && pdfBase64.trim()) {
         const normalizedPdf = pdfBase64.replace(
           /^data:application\/pdf;base64,/,
-          ""
+          "",
         );
         attachments.push({
           filename: pdfFileName || `eligibility-${queryId || "details"}.pdf`,
@@ -353,11 +353,11 @@ export class EligibilityCriteriaController {
           `;
 
           await transporter.sendMail(
-            createMailOptions(recipients.join(","), subject, html, attachments)
+            createMailOptions(recipients.join(","), subject, html, attachments),
           );
 
           return { id: criteria._id, sent: true, recipients };
-        })
+        }),
       );
 
       return res.status(200).json(
@@ -374,8 +374,8 @@ export class EligibilityCriteriaController {
               documentFailures: documentAttachmentFailures.length,
             },
           },
-          "Email dispatch completed"
-        )
+          "Email dispatch completed",
+        ),
       );
     } catch (err) {
       next(err);
