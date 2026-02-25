@@ -41,19 +41,20 @@ export class AgentAuthController {
         { upsert: true, new: true, setDefaultsOnInsert: true },
       );
 
-      // Send OTP via Airtel IQ SMS
-      try {
-        await sendSMS({
-          to: mobile,
-          otp: otpCode,
+      // Send OTP via Airtel IQ SMS in background to avoid blocking API response
+      void sendSMS({
+        to: mobile,
+        otp: otpCode,
+      })
+        .then(() => {
+          console.log(`Agent OTP sent to ${mobile}: ${otpCode} (via Airtel IQ)`);
+        })
+        .catch((smsError: any) => {
+          console.error(
+            `Failed to send Agent OTP SMS to ${mobile}:`,
+            smsError.message,
+          );
         });
-        console.log(`Agent OTP sent to ${mobile}: ${otpCode} (via Airtel IQ)`);
-      } catch (smsError: any) {
-        console.error(
-          `Failed to send Agent OTP SMS to ${mobile}:`,
-          smsError.message,
-        );
-      }
 
       return res.status(200).json({
         success: true,

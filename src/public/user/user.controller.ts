@@ -856,17 +856,21 @@ export class UserController {
         { upsert: true, new: true, setDefaultsOnInsert: true },
       );
 
-      // Send OTP via Airtel IQ SMS
-      try {
-        await sendSMS({
-          to: mobile,
-          otp: otpCode,
+      // Send OTP via Airtel IQ SMS in background to avoid blocking API response
+      void sendSMS({
+        to: mobile,
+        otp: otpCode,
+      })
+        .then(() => {
+          console.log(`OTP sent to ${mobile}: ${otpCode} (via Airtel IQ)`);
+        })
+        .catch((smsError: any) => {
+          console.error(
+            `Failed to send OTP SMS to ${mobile}:`,
+            smsError.message,
+          );
+          // Don't fail the request, OTP is still valid for testing
         });
-        console.log(`OTP sent to ${mobile}: ${otpCode} (via Airtel IQ)`);
-      } catch (smsError: any) {
-        console.error(`Failed to send OTP SMS to ${mobile}:`, smsError.message);
-        // Don't fail the request, OTP is still valid for testing
-      }
 
       return res.status(200).json({
         success: true,
