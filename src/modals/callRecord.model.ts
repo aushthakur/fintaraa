@@ -33,6 +33,9 @@ export interface ICallRecord extends Document {
   assignedBy?: Types.ObjectId;
   assignedAt?: Date;
   assignmentMode?: "auto" | "manual";
+  channelAgency?: Types.ObjectId;
+  attachedLead?: Types.ObjectId;
+  channelMatchedAt?: Date;
   createdBy?: Types.ObjectId;
   updatedBy?: Types.ObjectId;
   createdAt?: Date;
@@ -77,6 +80,9 @@ const CallRecordSchema = new Schema<ICallRecord>(
       enum: ["auto", "manual"],
       default: "auto",
     },
+    channelAgency: { type: Schema.Types.ObjectId, ref: "Agency" },
+    attachedLead: { type: Schema.Types.ObjectId, ref: "Lead" },
+    channelMatchedAt: { type: Date },
     createdBy: { type: Schema.Types.ObjectId, ref: "Admin" },
     updatedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
   },
@@ -85,6 +91,8 @@ const CallRecordSchema = new Schema<ICallRecord>(
 
 CallRecordSchema.index({ phoneNumber: 1, createdAt: -1 });
 CallRecordSchema.index({ assignee: 1, assignedAt: -1 });
+CallRecordSchema.index({ channelAgency: 1, updatedAt: -1 });
+CallRecordSchema.index({ attachedLead: 1, updatedAt: -1 });
 
 export const CallRecord = mongoose.model<ICallRecord>(
   "CallRecord",

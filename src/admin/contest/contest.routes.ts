@@ -10,6 +10,8 @@ import { Contest } from "../../modals/contest.model";
 import { mediaUrlMiddleware } from "../../middlewares/mediaUrlMiddleware";
 
 const {
+  applyContest,
+  getMyContestSummary,
   createContest,
   getAllContests,
   getContestById,
@@ -20,6 +22,13 @@ const {
 const router = express.Router();
 
 router
+  .get("/mine/summary", authenticateToken, asyncHandler(getMyContestSummary))
+  .post(
+    "/:id/apply",
+    authenticateToken,
+    authorize("agency", "agency_member"),
+    asyncHandler(applyContest)
+  )
   .get("/", authenticateToken, asyncHandler(getAllContests))
   .post(
     "/",

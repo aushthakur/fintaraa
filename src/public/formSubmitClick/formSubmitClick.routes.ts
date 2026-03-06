@@ -23,4 +23,16 @@ router.get(
   asyncHandler(FormSubmitClickController.listEvents)
 );
 
+router.get(
+  "/my/summary",
+  authenticateToken,
+  asyncHandler(FormSubmitClickController.getMySummary)
+);
+
+router.get(
+  "/my/events",
+  authenticateToken,
+  asyncHandler(FormSubmitClickController.getMyEvents)
+);
+
 export default router;

@@ -13,7 +13,7 @@ export const generateLoanId = async (session?: ClientSession) => {
   const counterKey = `loanId:${prefix}`;
   const counter = await Counter.findOneAndUpdate(
     { key: counterKey },
-    { $inc: { seq: 1 }, $setOnInsert: { seq: 0 } },
+    { $inc: { seq: 1 } },
     {
       new: true,
       upsert: true,

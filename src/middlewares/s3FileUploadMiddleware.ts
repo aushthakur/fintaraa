@@ -22,7 +22,6 @@ export const s3UploaderMiddleware = (folder: string) => {
       const files = req.files as Record<string, Express.Multer.File[]>;
 
       if (!files || Object.keys(files).length === 0) {
-        console.log("No files found in request");
         return next();
       }
 

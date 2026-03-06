@@ -85,6 +85,7 @@ export class DashboardController {
         insuranceAgg,
         topUsers,
         topLoans,
+        topInsurance,
         // Advanced breakdowns + totals
         loansByStatusAgg,
         loansByTypeAgg,
@@ -172,6 +173,13 @@ export class DashboardController {
         LoanQuery.find({})
           .select(
             "firstName lastName email mobile loanAmount loanType status customerId createdAt"
+          )
+          .sort({ createdAt: -1 })
+          .limit(5)
+          .lean(),
+        InsuranceQuery.find({})
+          .select(
+            "firstName lastName email mobile typeOfInsurance status customerId createdAt"
           )
           .sort({ createdAt: -1 })
           .limit(5)
@@ -376,6 +384,16 @@ export class DashboardController {
             loanAmount: l.loanAmount,
             status: l.status,
             createdAt: l.createdAt,
+          })),
+          insuranceApplications: topInsurance.map((i: any) => ({
+            id: i._id?.toString?.() ?? String(i._id),
+            customerId: i.customerId?.toString?.() ?? String(i.customerId),
+            name: `${i.firstName ?? ""} ${i.lastName ?? ""}`.trim(),
+            email: i.email,
+            mobile: i.mobile,
+            typeOfInsurance: i.typeOfInsurance,
+            status: i.status,
+            createdAt: i.createdAt,
           })),
         },
       };

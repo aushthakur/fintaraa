@@ -237,12 +237,17 @@ export interface ILoanQuery extends Document {
 
   assignedAgent?: Types.ObjectId;
   assignedLander?: Types.ObjectId;
+  channelAgency?: Types.ObjectId;
+  ownerAgency?: Types.ObjectId;
   activities: ILoanQueryActivity[];
 
   // Commission tracking
   commissionRecorded: boolean;
   commissionRecordedAt?: Date;
   commissionTransactionId?: Types.ObjectId;
+  agencyCommissionRecorded?: boolean;
+  agencyCommissionRecordedAt?: Date;
+  agencyCommissionTransactionId?: Types.ObjectId;
 
   createdAt: Date;
   updatedAt: Date;
@@ -380,6 +385,16 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
       ref: "Lander",
       index: true,
     },
+    channelAgency: {
+      type: Schema.Types.ObjectId,
+      ref: "Agency",
+      index: true,
+    },
+    ownerAgency: {
+      type: Schema.Types.ObjectId,
+      ref: "Agency",
+      index: true,
+    },
     activities: {
       type: [
         {
@@ -407,12 +422,19 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
       type: Schema.Types.ObjectId,
       ref: "WalletTransaction",
     },
+    agencyCommissionRecorded: { type: Boolean, default: false, index: true },
+    agencyCommissionRecordedAt: { type: Date },
+    agencyCommissionTransactionId: {
+      type: Schema.Types.ObjectId,
+      ref: "AgencyCommissionTransaction",
+    },
   },
   { timestamps: true },
 );
 
 LoanQuerySchema.index({ mobile: 1, email: 1 });
 LoanQuerySchema.index({ customerId: 1 });
+LoanQuerySchema.index({ ownerAgency: 1, status: 1, createdAt: -1 });
 
 LoanQuerySchema.pre("save", async function (next) {
   const doc = this as ILoanQuery;

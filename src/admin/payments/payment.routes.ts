@@ -1,16 +1,11 @@
 import express from "express";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { PaymentController } from "./payment.controller";
-import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
+import { authenticateToken } from "../../middlewares/authMiddleware";
 
 const router = express.Router();
 
 router.use(authenticateToken);
-
-router
-  .route("/commission-rules")
-  .post(asyncHandler(PaymentController.createCommissionRule))
-  .get(asyncHandler(PaymentController.getCommissionRules));
 
 // Commission recording endpoints
 router.post(

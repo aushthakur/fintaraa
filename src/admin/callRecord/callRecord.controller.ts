@@ -8,8 +8,203 @@ import { sendSingleNotification } from "../../services/notification.service";
 import { UserType } from "../../modals/notification.model";
 import { User } from "../../modals/user.model";
 import { LoanQuery } from "../../modals/loanquery.model";
+import { Agency } from "../../modals/agency.model";
+import Lead, { LeadConnectorType } from "../../modals/lead.model";
+import { leadManagementService } from "../../services/leadManagement.service";
 
 const CallRecordService = new CommonService<ICallRecord>(CallRecord as any);
+
+const normalizePhoneDigits = (input?: string): string => {
+  return String(input || "").replace(/\D/g, "");
+};
+
+const normalizePhoneToLeadFormat = (input?: string): string => {
+  const digits = normalizePhoneDigits(input);
+  if (!digits) return "";
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+  if (digits.length > 10) return `+91${digits.slice(-10)}`;
+  return `+${digits}`;
+};
+
+const buildSourceTag = (value?: string): string | null => {
+  const source = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!source) return null;
+  const sanitized = source.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  if (!sanitized) return null;
+  return `channel_source_${sanitized}`;
+};
+
+const findAgencyByPhone = async (phoneNumber?: string) => {
+  const digits = normalizePhoneDigits(phoneNumber);
+  if (!digits) return null;
+
+  const last10 = digits.length > 10 ? digits.slice(-10) : digits;
+  const candidates = Array.from(
+    new Set([digits, last10, `+91${last10}`, `91${last10}`, `0${last10}`]),
+  );
+
+  const escapedLast10 = last10.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`${escapedLast10}$`, "i");
+
+  return Agency.findOne({
+    $or: [{ mobile: { $in: candidates } }, { mobile: { $regex: regex } }],
+  });
+};
+
+const resolveOwningAgency = async (agency: any) => {
+  if (!agency) return null;
+  if (agency.role === "agency") return agency;
+  if (agency.role === "agency_member" && agency.parentAgency) {
+    const parent = await Agency.findById(agency.parentAgency);
+    return parent || agency;
+  }
+  return agency;
+};
+
+const attachLeadToAgencyFromSource = async (
+  callRecord: ICallRecord,
+  actorId?: string,
+) => {
+  const dataSource = String(callRecord?.dataSource || "").trim();
+  if (!dataSource) return null;
+
+  const matchedAgency = await findAgencyByPhone(callRecord?.phoneNumber);
+  if (!matchedAgency) return null;
+
+  const owningAgency = await resolveOwningAgency(matchedAgency);
+  if (!owningAgency) return null;
+
+  const fullName =
+    `${callRecord.firstName || ""} ${callRecord.lastName || ""}`.trim() ||
+    `Lead ${normalizePhoneDigits(callRecord.phoneNumber).slice(-4)}`;
+
+  const sourceTag = buildSourceTag(dataSource);
+  const leadPayload: Record<string, any> = {
+    firstName: callRecord.firstName,
+    lastName: callRecord.lastName,
+    fullName,
+    mobile: normalizePhoneToLeadFormat(callRecord.phoneNumber),
+    email: callRecord.email,
+    city: callRecord.city,
+    state: callRecord.state,
+    pincode: callRecord.pincode,
+    loanAmount: callRecord.loanAmount,
+    loanType: callRecord.productService,
+    productType: callRecord.productService,
+    loanPurpose: callRecord.productService,
+    channel: dataSource,
+    campaignName: dataSource,
+    affiliateId: owningAgency._id.toString(),
+    tags: [
+      "call_record",
+      "channel_management",
+      ...(sourceTag ? [sourceTag] : []),
+    ],
+    callRecordId: callRecord._id?.toString(),
+    agencyId: owningAgency._id.toString(),
+    agencyName: owningAgency.name,
+    agencyRole: owningAgency.role,
+    agencyMobile: owningAgency.mobile,
+  };
+
+  const captured = await leadManagementService.captureLead(leadPayload, {
+    source: LeadConnectorType.MANUAL,
+    channel: dataSource,
+    actorId,
+  });
+
+  const lead = captured?.lead;
+  if (lead?._id) {
+    await Lead.findByIdAndUpdate(lead._id, {
+      $set: {
+        "capturedFrom.channel": dataSource,
+        "capturedFrom.affiliateId": owningAgency._id.toString(),
+        "metadata.channelAgencyId": owningAgency._id.toString(),
+        "metadata.channelAgencyName": owningAgency.name,
+        "metadata.channelAgencyPhone": owningAgency.mobile,
+        "metadata.channelSource": dataSource,
+        "metadata.callRecordId": callRecord._id?.toString(),
+      },
+      $addToSet: {
+        tags: {
+          $each: [
+            "call_record",
+            "channel_management",
+            ...(sourceTag ? [sourceTag] : []),
+          ],
+        },
+      },
+    });
+  }
+
+  const callRecordUpdate: Record<string, any> = {
+    channelAgency: owningAgency._id,
+    channelMatchedAt: new Date(),
+  };
+  if (lead?._id) callRecordUpdate.attachedLead = lead._id;
+
+  const updatedRecord = await CallRecord.findByIdAndUpdate(
+    callRecord._id,
+    { $set: callRecordUpdate },
+    { new: true },
+  );
+
+  return {
+    agency: owningAgency,
+    lead,
+    callRecord: updatedRecord || callRecord,
+    created: captured?.created,
+  };
+};
+
+const getFollowUpBucketFilter = (
+  bucketRaw?: string | string[],
+): Record<string, any> | null => {
+  const bucket = String(bucketRaw || "")
+    .trim()
+    .toLowerCase();
+  if (!bucket) return null;
+
+  const now = new Date();
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday = new Date(now);
+  endOfToday.setHours(23, 59, 59, 999);
+
+  if (bucket === "today") {
+    return {
+      followUp: true,
+      callbackAt: {
+        $gte: startOfToday,
+        $lte: endOfToday,
+      },
+    };
+  }
+
+  if (bucket === "upcoming") {
+    return {
+      followUp: true,
+      callbackAt: {
+        $gt: endOfToday,
+      },
+    };
+  }
+
+  if (bucket === "missed") {
+    return {
+      followUp: true,
+      callbackAt: {
+        $lt: startOfToday,
+        $ne: null,
+      },
+    };
+  }
+
+  return null;
+};
 
 // Map productService values to loan types
 const loanProductToLoanType: Record<string, string> = {
@@ -185,10 +380,22 @@ export class CallRecordController {
           .json(new ApiError(400, "Failed to create call record"));
 
       if (assigneeId) await notifyAssignee(req, result, assigneeId);
+      let finalRecord: any = result;
+
+      // Auto-attach channel agency + lead when source is provided.
+      if (String(result?.dataSource || "").trim()) {
+        const linked = await attachLeadToAgencyFromSource(
+          result,
+          adminId?.toString?.(),
+        );
+        if (linked?.callRecord) {
+          finalRecord = linked.callRecord;
+        }
+      }
 
       return res
         .status(201)
-        .json(new ApiResponse(201, result, "Call record created"));
+        .json(new ApiResponse(201, finalRecord, "Call record created"));
     } catch (err) {
       next(err);
     }
@@ -213,6 +420,34 @@ export class CallRecordController {
         },
         {
           $lookup: {
+            from: "agencies",
+            localField: "channelAgency",
+            foreignField: "_id",
+            as: "channelAgency",
+          },
+        },
+        {
+          $unwind: {
+            path: "$channelAgency",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "leads",
+            localField: "attachedLead",
+            foreignField: "_id",
+            as: "attachedLead",
+          },
+        },
+        {
+          $unwind: {
+            path: "$attachedLead",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
             from: "admins",
             localField: "assignedBy",
             foreignField: "_id",
@@ -227,8 +462,14 @@ export class CallRecordController {
         },
       ];
 
-      // Handle callback date range filters
-      const { callbackStart, callbackEnd, ...queryParams } = req.query;
+      // Handle callback date range and follow-up bucket filters
+      const { callbackStart, callbackEnd, followUpBucket, ...queryParams } =
+        req.query as Record<string, any>;
+
+      const followUpBucketFilter = getFollowUpBucketFilter(followUpBucket);
+      if (followUpBucketFilter) {
+        Object.assign(queryParams, followUpBucketFilter);
+      }
 
       // Add callbackAt date range if provided
       if (callbackStart || callbackEnd) {
@@ -242,7 +483,14 @@ export class CallRecordController {
           endDate.setHours(23, 59, 59, 999);
           callbackDateFilter.$lte = endDate;
         }
-        queryParams.callbackAt = callbackDateFilter;
+        const existingCallbackFilter =
+          queryParams.callbackAt && typeof queryParams.callbackAt === "object"
+            ? queryParams.callbackAt
+            : {};
+        queryParams.callbackAt = {
+          ...existingCallbackFilter,
+          ...callbackDateFilter,
+        };
       }
 
       const result = await CallRecordService.getAll(queryParams, lookupStages);
@@ -291,6 +539,7 @@ export class CallRecordController {
         return res
           .status(404)
           .json(new ApiError(404, "Failed to update call record"));
+      let finalRecord: any = result;
 
       if (incomingAssignee && incomingAssignee !== previousAssignee) {
         await notifyAssignee(req, result, incomingAssignee);
@@ -308,9 +557,34 @@ export class CallRecordController {
         }
       }
 
+      // Auto-attach channel agency + lead when source is provided.
+      const sourceValue =
+        updates?.dataSource !== undefined ? updates.dataSource : result?.dataSource;
+      if (String(sourceValue || "").trim()) {
+        const linked = await attachLeadToAgencyFromSource(
+          result,
+          adminId?.toString?.(),
+        );
+        if (linked?.callRecord) {
+          finalRecord = linked.callRecord;
+        }
+      } else if (updates?.dataSource !== undefined) {
+        finalRecord = await CallRecord.findByIdAndUpdate(
+          req.params.id,
+          {
+            $unset: {
+              channelAgency: "",
+              attachedLead: "",
+              channelMatchedAt: "",
+            },
+          },
+          { new: true },
+        );
+      }
+
       return res
         .status(200)
-        .json(new ApiResponse(200, result, "Call record updated"));
+        .json(new ApiResponse(200, finalRecord || result, "Call record updated"));
     } catch (err) {
       next(err);
     }

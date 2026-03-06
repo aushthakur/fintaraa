@@ -196,12 +196,17 @@ export interface IInsuranceQuery extends Document {
   policyDetails?: Record<string, any>;
   assignedAgent?: Types.ObjectId;
   assignedLander?: Types.ObjectId;
+  channelAgency?: Types.ObjectId;
+  ownerAgency?: Types.ObjectId;
   activities: IInsuranceQueryActivity[];
   
   // Commission tracking
   commissionRecorded: boolean;
   commissionRecordedAt?: Date;
   commissionTransactionId?: Types.ObjectId;
+  agencyCommissionRecorded?: boolean;
+  agencyCommissionRecordedAt?: Date;
+  agencyCommissionTransactionId?: Types.ObjectId;
   
   createdAt: Date;
   updatedAt: Date;
@@ -273,6 +278,16 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
       ref: "Lander",
       index: true,
     },
+    channelAgency: {
+      type: Schema.Types.ObjectId,
+      ref: "Agency",
+      index: true,
+    },
+    ownerAgency: {
+      type: Schema.Types.ObjectId,
+      ref: "Agency",
+      index: true,
+    },
     activities: {
       type: [
         {
@@ -297,12 +312,19 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
     commissionRecorded: { type: Boolean, default: false, index: true },
     commissionRecordedAt: { type: Date },
     commissionTransactionId: { type: Schema.Types.ObjectId, ref: "WalletTransaction" },
+    agencyCommissionRecorded: { type: Boolean, default: false, index: true },
+    agencyCommissionRecordedAt: { type: Date },
+    agencyCommissionTransactionId: {
+      type: Schema.Types.ObjectId,
+      ref: "AgencyCommissionTransaction",
+    },
   },
   { timestamps: true }
 );
 
 InsuranceQuerySchema.index({ mobile: 1, email: 1 });
 InsuranceQuerySchema.index({ customerId: 1 });
+InsuranceQuerySchema.index({ ownerAgency: 1, status: 1, createdAt: -1 });
 
 export const InsuranceQuery = mongoose.model<IInsuranceQuery>(
   "InsuranceQuery",

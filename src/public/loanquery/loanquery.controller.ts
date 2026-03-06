@@ -22,7 +22,9 @@ import {
 } from "../../services/surepass.service";
 import { VehicleRcLookup } from "../../modals/vehicleRcLookup.model";
 import { User } from "../../modals/user.model";
+import { Agency } from "../../modals/agency.model";
 import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
+import { agencyEarningsService } from "../../services/agencyEarnings.service";
 
 const RC_CACHE_TTL_DAYS = 365;
 const normalizeRcNumber = (value: string) =>
@@ -58,6 +60,99 @@ const resolveDateRange = (startRaw: any, endRaw: any, days: number = 7) => {
   const start = new Date(end);
   start.setDate(start.getDate() - (days - 1));
   return { start: startOfDay(start), end };
+};
+
+const getIdString = (value: any): string => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && value?._id) return String(value._id);
+  return String(value);
+};
+
+const resolveAgencyAccessIds = async (
+  userId: any,
+  role?: string,
+): Promise<Set<string>> => {
+  const ids = new Set<string>();
+  const actorId = getIdString(userId);
+  if (!actorId) return ids;
+  ids.add(actorId);
+
+  if (role === "agency_member") {
+    const self = await Agency.findById(actorId).select("parentAgency").lean();
+    const parentAgencyId = getIdString((self as any)?.parentAgency);
+    if (parentAgencyId) ids.add(parentAgencyId);
+  }
+
+  return ids;
+};
+
+const canAccessLoanQuery = async (
+  query: any,
+  userId: any,
+  role?: string,
+): Promise<boolean> => {
+  if (role === "admin") return true;
+
+  const actorId = getIdString(userId);
+  if (!actorId) return false;
+
+  if (role === "lander") {
+    const assignedLanderId = getIdString(
+      query?.assignedLander?._id || query?.assignedLander,
+    );
+    return assignedLanderId === actorId;
+  }
+
+  if (role === "agent") {
+    const assignedAgentId = getIdString(
+      query?.assignedAgent?._id || query?.assignedAgent,
+    );
+    return assignedAgentId === actorId;
+  }
+
+  if (role === "agency" || role === "agency_member") {
+    const allowedAgencyIds = await resolveAgencyAccessIds(actorId, role);
+
+    const ownerAgencyId = getIdString(
+      query?.ownerAgencyDetails?._id ||
+        query?.ownerAgency?._id ||
+        query?.ownerAgency,
+    );
+    const channelAgencyId = getIdString(
+      query?.channelAgencyDetails?._id ||
+        query?.channelAgency?._id ||
+        query?.channelAgency,
+    );
+
+    if (ownerAgencyId && allowedAgencyIds.has(ownerAgencyId)) return true;
+    if (channelAgencyId && allowedAgencyIds.has(channelAgencyId)) return true;
+
+    // Backward compatibility: old records may only contain member in channelAgency.
+    if (role === "agency" && channelAgencyId) {
+      const channelAgency = await Agency.findById(channelAgencyId)
+        .select("parentAgency")
+        .lean();
+      const parentId = getIdString((channelAgency as any)?.parentAgency);
+      if (parentId && parentId === actorId) return true;
+    }
+
+    return false;
+  }
+
+  const customerOwnerId = getIdString(
+    query?.customerIdDetails?._id || query?.customerId?._id || query?.customerId,
+  );
+  return customerOwnerId === actorId;
+};
+
+const resolveActivityActorModel = (
+  role?: string,
+): "Admin" | "Agent" | "Lander" | "User" => {
+  if (role === "admin") return "Admin";
+  if (role === "agent") return "Agent";
+  if (role === "lander") return "Lander";
+  return "User";
 };
 
 // Helper function to extract URL from uploaded file object
@@ -476,6 +571,7 @@ export class LoanQueryController {
     try {
       // Get customer ID from authenticated user token
       const customerId = (req as any).user?._id;
+      const role = (req as any).user?.role;
       if (!customerId) {
         return res
           .status(401)
@@ -490,6 +586,17 @@ export class LoanQueryController {
 
       // Automatically set customerId from token
       req.body.customerId = customerId;
+      if (role === "agency" || role === "agency_member") {
+        req.body.channelAgency = customerId;
+        if (role === "agency_member") {
+          const agency = await Agency.findById(customerId)
+            .select("parentAgency")
+            .lean();
+          req.body.ownerAgency = agency?.parentAgency || customerId;
+        } else {
+          req.body.ownerAgency = customerId;
+        }
+      }
       if (req.body.accountType) {
         req.body.accountType = normalizeAccountType(req.body.accountType);
       }
@@ -636,6 +743,25 @@ export class LoanQueryController {
     } catch (err) {
       next(err);
     }
+  }
+
+  static async createAgencyQuery(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    const role = (req as any).user?.role;
+    if (role !== "agency" && role !== "agency_member") {
+      return res
+        .status(403)
+        .json(
+          new ApiError(
+            403,
+            "Only agency or agency member can use this endpoint",
+          ),
+        );
+    }
+    return LoanQueryController.createQuery(req, res, next);
   }
 
   static async getAllQueries(req: Request, res: Response, next: NextFunction) {
@@ -856,10 +982,7 @@ export class LoanQueryController {
       );
 
       // Ensure user can only view their own queries (unless admin)
-      if (
-        role !== "admin" &&
-        result?.customerId?._id?.toString() !== customerId
-      ) {
+      if (!(await canAccessLoanQuery(result, customerId, role))) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only view your own loan queries"));
@@ -904,10 +1027,7 @@ export class LoanQueryController {
       }
 
       // Ensure user can only update their own queries (unless admin)
-      if (
-        role !== "admin" &&
-        existingResult.customerId?._id?.toString() !== customerId
-      ) {
+      if (!(await canAccessLoanQuery(existingResult, customerId, role))) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only update your own loan queries"));
@@ -1012,6 +1132,15 @@ export class LoanQueryController {
           },
         );
         await result.save({ session });
+        if (
+          existingResult?.status !== result.status &&
+          result.status === ApplicationStatus.DISBURSED
+        ) {
+          await agencyEarningsService.recordLoanDisbursalCommission(
+            result,
+            customerId?.toString(),
+          );
+        }
         return res
           .status(200)
           .json(
@@ -1020,6 +1149,15 @@ export class LoanQueryController {
       }
 
       await updatedResult.save();
+      if (
+        existingResult?.status !== updatedResult.status &&
+        updatedResult.status === ApplicationStatus.DISBURSED
+      ) {
+        await agencyEarningsService.recordLoanDisbursalCommission(
+          updatedResult,
+          customerId?.toString(),
+        );
+      }
       return res
         .status(200)
         .json(
@@ -1251,14 +1389,15 @@ export class LoanQueryController {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
-      // Check permissions - landers should use their own routes at /lander/*
-      if (
-        role === "lander" &&
-        query.assignedLander?._id?.toString() !== userId
-      ) {
+      if (!(await canAccessLoanQuery(query, userId, role))) {
         return res
           .status(403)
-          .json(new ApiError(403, "You can only view queries assigned to you"));
+          .json(
+            new ApiError(
+              403,
+              "You can only view details of queries created or assigned to you",
+            ),
+          );
       }
 
       const rcNumberCandidate =
@@ -1311,14 +1450,13 @@ export class LoanQueryController {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
-      // Check permissions for lander
-      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+      if (!(await canAccessLoanQuery(query, actorId, role))) {
         return res
           .status(403)
           .json(
             new ApiError(
               403,
-              "You can only add notes to queries assigned to you",
+              "You can only add notes to queries created or assigned to you",
             ),
           );
       }
@@ -1328,7 +1466,7 @@ export class LoanQueryController {
         type: LoanQueryActivityType.NOTE_ADDED,
         description: note,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
-        actorModel: role === "admin" ? "Admin" : "Lander",
+        actorModel: resolveActivityActorModel(role),
         createdAt: new Date(),
       });
 
@@ -1357,14 +1495,13 @@ export class LoanQueryController {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
-      // Check permissions for lander
-      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+      if (!(await canAccessLoanQuery(query, actorId, role))) {
         return res
           .status(403)
           .json(
             new ApiError(
               403,
-              "You can only update status of queries assigned to you",
+              "You can only update status of queries created or assigned to you",
             ),
           );
       }
@@ -1379,7 +1516,7 @@ export class LoanQueryController {
           remarks ? `: ${remarks}` : ""
         }`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
-        actorModel: role === "admin" ? "Admin" : "Lander",
+        actorModel: resolveActivityActorModel(role),
         payload: {
           oldStatus,
           newStatus: status,
@@ -1389,6 +1526,12 @@ export class LoanQueryController {
       });
 
       await query.save();
+      if (oldStatus !== status && status === ApplicationStatus.DISBURSED) {
+        await agencyEarningsService.recordLoanDisbursalCommission(
+          query,
+          actorId?.toString(),
+        );
+      }
 
       return res
         .status(200)
@@ -1412,14 +1555,13 @@ export class LoanQueryController {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
-      // Check permissions for lander
-      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+      if (!(await canAccessLoanQuery(query, actorId, role))) {
         return res
           .status(403)
           .json(
             new ApiError(
               403,
-              "You can only update documents of queries assigned to you",
+              "You can only update documents of queries created or assigned to you",
             ),
           );
       }
@@ -1475,7 +1617,7 @@ export class LoanQueryController {
           ", ",
         )}`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
-        actorModel: role === "admin" ? "Admin" : "Lander",
+        actorModel: resolveActivityActorModel(role),
         payload: { uploadedDocuments: Object.keys(documentsToAdd) },
         createdAt: new Date(),
       });
@@ -1504,13 +1646,13 @@ export class LoanQueryController {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
-      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+      if (!(await canAccessLoanQuery(query, actorId, role))) {
         return res
           .status(403)
           .json(
             new ApiError(
               403,
-              "You can only update policy documents of queries assigned to you",
+              "You can only update policy documents of queries created or assigned to you",
             ),
           );
       }
@@ -1584,7 +1726,7 @@ export class LoanQueryController {
         type: LoanQueryActivityType.DOCUMENT_UPLOADED,
         description: `Policy documents uploaded: ${uploadedFields.join(", ")}`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
-        actorModel: role === "admin" ? "Admin" : "Lander",
+        actorModel: resolveActivityActorModel(role),
         payload: { uploadedDocuments: uploadedFields },
         createdAt: new Date(),
       });
@@ -1622,14 +1764,13 @@ export class LoanQueryController {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
-      // Check permissions for lander
-      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+      if (!(await canAccessLoanQuery(query, actorId, role))) {
         return res
           .status(403)
           .json(
             new ApiError(
               403,
-              "You can only update policy details of queries assigned to you",
+              "You can only update policy details of queries created or assigned to you",
             ),
           );
       }
@@ -1642,7 +1783,7 @@ export class LoanQueryController {
         type: LoanQueryActivityType.UPDATED,
         description: `Policy details updated`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
-        actorModel: role === "admin" ? "Admin" : "Lander",
+        actorModel: resolveActivityActorModel(role),
         payload: { updatedFields: Object.keys(policyDetails) },
         createdAt: new Date(),
       });
@@ -1743,12 +1884,14 @@ export class LoanQueryController {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
-      // Check permissions for lander
-      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+      if (!(await canAccessLoanQuery(query, actorId, role))) {
         return res
           .status(403)
           .json(
-            new ApiError(403, "You can only complete queries assigned to you"),
+            new ApiError(
+              403,
+              "You can only complete queries created or assigned to you",
+            ),
           );
       }
 
@@ -1778,7 +1921,7 @@ export class LoanQueryController {
         type: LoanQueryActivityType.STATUS_CHANGED,
         description: `Query completed${remarks ? `: ${remarks}` : ""}`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
-        actorModel: role === "admin" ? "Admin" : "Lander",
+        actorModel: resolveActivityActorModel(role),
         payload: {
           oldStatus,
           newStatus: "completed",

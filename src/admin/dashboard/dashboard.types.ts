@@ -32,5 +32,15 @@ export interface DashboardOverviewResponse {
       status: string;
       createdAt: string;
     }>;
+    insuranceApplications: Array<{
+      id: string;
+      customerId: string;
+      name: string;
+      email: string;
+      mobile: string;
+      typeOfInsurance: string;
+      status: string;
+      createdAt: string;
+    }>;
   };
 }

@@ -5,10 +5,20 @@ export enum EligibilityCriteriaStatus {
   INACTIVE = "inactive",
 }
 
+export enum EligibilityCommissionType {
+  PERCENTAGE = "percentage",
+  FLAT = "flat",
+}
+
 export interface IEligibilityCriteria extends Document {
   loanType: string;
   bankName: string;
   salaryType: string;
+  commissionType?: EligibilityCommissionType;
+  commissionValue?: number;
+  commissionMinAmount?: number;
+  commissionMaxAmount?: number;
+  commissionCapAmount?: number;
   itrWithFinancial?: string;
   gstProgram?: string;
   cashProfit?: number;
@@ -53,6 +63,15 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     loanType: { type: String, trim: true, required: true },
     bankName: { type: String, trim: true, required: true },
     salaryType: { type: String, trim: true, required: true },
+    commissionType: {
+      type: String,
+      enum: Object.values(EligibilityCommissionType),
+      default: EligibilityCommissionType.PERCENTAGE,
+    },
+    commissionValue: { type: Number, default: 0 },
+    commissionMinAmount: { type: Number },
+    commissionMaxAmount: { type: Number },
+    commissionCapAmount: { type: Number },
     itrWithFinancial: { type: String, trim: true },
     gstProgram: { type: String, trim: true },
     cashProfit: { type: Number },

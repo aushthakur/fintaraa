@@ -10,6 +10,8 @@ import { UserType } from "../../modals/notification.model";
 import { Agency, AgencyRole } from "../../modals/agency.model";
 import { CommonService } from "../../services/common.services";
 import { UserStatus, IKycProfile } from "../../modals/user.model";
+import { agencyEarningsService } from "../../services/agencyEarnings.service";
+import { agencyLeadsService } from "../../services/agencyLeads.service";
 import { sendSingleNotification } from "../../services/notification.service";
 import { generateAccessToken, generateRefreshToken } from "../../utils/token";
 
@@ -191,6 +193,39 @@ export class AgencyController {
           status: UserStatus.PENDING_VERIFICATION,
           password: crypto.randomBytes(10).toString("hex"),
         });
+      } else {
+        const updates: Record<string, any> = {};
+
+        if (name && (!agency.name || agency.status === UserStatus.PENDING_VERIFICATION)) {
+          updates.name = name;
+        }
+
+        if (email) {
+          const normalizedEmail = String(email).trim().toLowerCase();
+          if (normalizedEmail && normalizedEmail !== agency.email) {
+            const duplicateEmail = await Agency.findOne({
+              _id: { $ne: agency._id },
+              email: normalizedEmail,
+            }).select("_id");
+            if (duplicateEmail) {
+              return res
+                .status(409)
+                .json({ success: false, message: "Email already in use" });
+            }
+            updates.email = normalizedEmail;
+          }
+        }
+
+        if (parentAgencyId !== undefined) {
+          updates.parentAgency = parentAgencyId || undefined;
+          updates.role = parentAgencyId ? "agency_member" : "agency";
+        }
+
+        if (Object.keys(updates).length > 0) {
+          agency = await Agency.findByIdAndUpdate(agency._id, updates, {
+            new: true,
+          });
+        }
       }
 
       const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
@@ -259,14 +294,22 @@ export class AgencyController {
           .json({ success: false, message: "Agency not found" });
       }
 
-      if ([UserStatus.SUSPENDED, UserStatus.INACTIVE].includes(agency.status)) {
+      if (
+        [UserStatus.SUSPENDED, UserStatus.INACTIVE, UserStatus.DEACTIVATED].includes(
+          agency.status,
+        )
+      ) {
         return res
           .status(403)
           .json({ success: false, message: `Account ${agency.status}` });
       }
 
       agency.isMobileVerified = true;
-      agency.status = UserStatus.ACTIVE;
+      const autoActivated = agency.status === UserStatus.PENDING_VERIFICATION;
+      if (autoActivated) {
+        agency.status = UserStatus.ACTIVE;
+      }
+      await agency.save();
 
       const payload = {
         _id: agency._id,
@@ -288,7 +331,9 @@ export class AgencyController {
 
       return res.status(200).json({
         success: true,
-        message: "OTP verified successfully. Login complete.",
+        message: autoActivated
+          ? "OTP verified successfully. Account activated."
+          : "OTP verified successfully. Login complete.",
         token: accessToken,
         agency: {
           _id: agency._id,
@@ -815,6 +860,124 @@ export class AgencyController {
           "DigiLocker vault fetched successfully",
         ),
       );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getEarningsSummary(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const agencyId = req.user?._id;
+      if (!agencyId) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+      const from = typeof req.query?.from === "string" ? req.query.from : undefined;
+      const to = typeof req.query?.to === "string" ? req.query.to : undefined;
+      const result = await agencyEarningsService.getAgencySummary(
+        agencyId,
+        from,
+        to,
+      );
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Agency earnings summary fetched"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getEarningEvents(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const agencyId = req.user?._id;
+      if (!agencyId) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+      const tabRaw = String(req.query?.tab || "projected").toLowerCase();
+      const tab =
+        tabRaw === "paid" ? "paid" : tabRaw === "earned" ? "earned" : "projected";
+      const from = typeof req.query?.from === "string" ? req.query.from : undefined;
+      const to = typeof req.query?.to === "string" ? req.query.to : undefined;
+      const page = Number(req.query?.page) || 1;
+      const limit = Number(req.query?.limit) || 20;
+      const result = await agencyEarningsService.listAgencyEvents({
+        agencyId,
+        tab,
+        from,
+        to,
+        page,
+        limit,
+      });
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Agency earning events fetched"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getLeadSummary(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const agencyId = req.user?._id;
+      if (!agencyId) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+      const result = await agencyLeadsService.getLeadSummary(agencyId);
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Agency lead summary fetched"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getLeadEvents(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const agencyId = req.user?._id;
+      if (!agencyId) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+      const stageRaw = String(req.query?.stage || "all").toLowerCase();
+      const stage =
+        stageRaw === "pre_login" ||
+        stageRaw === "login" ||
+        stageRaw === "sanction" ||
+        stageRaw === "disbursed"
+          ? stageRaw
+          : "all";
+      const loanType =
+        typeof req.query?.loanType === "string" ? req.query.loanType : undefined;
+      const search =
+        typeof req.query?.search === "string" ? req.query.search : undefined;
+      const page = Number(req.query?.page) || 1;
+      const limit = Number(req.query?.limit) || 20;
+
+      const result = await agencyLeadsService.listLeads({
+        agencyId,
+        stage: stage as any,
+        loanType,
+        search,
+        page,
+        limit,
+      });
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Agency leads fetched"));
     } catch (error) {
       next(error);
     }

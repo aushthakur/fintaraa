@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import ApiResponse from "../../utils/ApiResponse";
 import ApiError from "../../utils/ApiError";
-import CommissionRule from "../../modals/commissionRule.model";
 import LanderWallet from "../../modals/landerWallet.model";
 import WalletTransaction from "../../modals/walletTransaction.model";
 import PayoutRequest from "../../modals/payoutRequest.model";
@@ -15,38 +14,6 @@ const payoutRequestService = new CommonService(PayoutRequest);
 const walletTransactionService = new CommonService(WalletTransaction);
 
 export class PaymentController {
-  static async createCommissionRule(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
-    try {
-      const rule = await CommissionRule.create(req.body);
-      res
-        .status(201)
-        .json(new ApiResponse(201, rule, "Commission rule created"));
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  static async getCommissionRules(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
-    try {
-      const rules = await CommissionRule.find(req.query)
-        .sort({ priority: 1 })
-        .lean();
-      res
-        .status(200)
-        .json(new ApiResponse(200, rules, "Commission rules"));
-    } catch (error) {
-      next(error);
-    }
-  }
-
   // Record commission for loan query disbursement
   static async recordLoanCommission(
     req: Request,

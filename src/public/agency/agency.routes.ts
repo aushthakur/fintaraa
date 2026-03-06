@@ -21,6 +21,16 @@ router.use(authenticateToken);
 
 router.get("/current", asyncHandler(AgencyController.getCurrentAgency));
 router.get(
+  "/earnings/summary",
+  asyncHandler(AgencyController.getEarningsSummary),
+);
+router.get(
+  "/earnings/events",
+  asyncHandler(AgencyController.getEarningEvents),
+);
+router.get("/leads/summary", asyncHandler(AgencyController.getLeadSummary));
+router.get("/leads/events", asyncHandler(AgencyController.getLeadEvents));
+router.get(
   "/notification-preferences",
   asyncHandler(AgencyController.getNotificationPreferences)
 );

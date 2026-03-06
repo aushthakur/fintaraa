@@ -40,6 +40,14 @@ const FormSubmitClickSchema = new Schema(
   { timestamps: true }
 );
 
+FormSubmitClickSchema.index({ createdAt: -1 });
+FormSubmitClickSchema.index({ action: 1, createdAt: -1 });
+FormSubmitClickSchema.index({ formType: 1, createdAt: -1 });
+FormSubmitClickSchema.index({ "meta.actorKind": 1, createdAt: -1 });
+FormSubmitClickSchema.index({ "meta.actorRole": 1, createdAt: -1 });
+FormSubmitClickSchema.index({ "meta.agencyId": 1, createdAt: -1 });
+FormSubmitClickSchema.index({ "meta.leadId": 1, createdAt: -1 });
+
 export const FormSubmitClick = model<IFormSubmitClick>(
   "FormSubmitClick",
   FormSubmitClickSchema

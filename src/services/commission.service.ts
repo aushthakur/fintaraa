@@ -1,96 +1,139 @@
 import { ClientSession } from "mongoose";
-import CommissionRule, {
-  ICommissionRule,
-  CommissionRuleType,
-  ProductType,
-} from "../modals/commissionRule.model";
 import ApiError from "../utils/ApiError";
 import { User } from "../modals/user.model";
 import { InsuranceType, InsuranceQuery } from "../modals/insurancequery.model";
 import { LoanQuery, LoanType } from "../modals/loanquery.model";
+import {
+  EligibilityCriteria,
+  EligibilityCommissionType,
+  EligibilityCriteriaStatus,
+} from "../modals/eligibilityCriteria.model";
 import { WalletService } from "./wallet.service";
 import {
   fetchSurepassCibilReport,
   prepareSurepassCibilPayload,
 } from "./surepass.service";
 
-interface CommissionContext {
-  amount: number; // Generic amount field (can be loan or insurance premium)
-  queryType?: "loan" | "insurance"; // Type of query
-  productType?: ProductType;
-  cibilScore?: number;
-  tags?: string[];
-  geography?: {
-    country?: string;
-    state?: string;
-    city?: string;
-    pincode?: string;
-  };
-}
+type ProductType = LoanType | InsuranceType | string;
+
+const toNumber = (value: any) => {
+  if (value === null || value === undefined) return 0;
+  const parsed = Number(String(value).replace(/,/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const normalizeLookupValue = (value?: any) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+const normalizeSalaryType = (value?: any) => {
+  const key = normalizeLookupValue(value);
+  if (!key) return "";
+  if (["salaried", "salary"].includes(key)) return "salaried";
+  if (
+    [
+      "selfemployedprofessional",
+      "selfemployedpro",
+      "selfprofessional",
+      "selfemployed_professional",
+    ].includes(key)
+  ) {
+    return "selfemployedprofessional";
+  }
+  if (
+    [
+      "selfemployednonprofessional",
+      "selfemployednonpro",
+      "selfnonprofessional",
+      "selfemployed_non_professional",
+      "selfemployed",
+    ].includes(key)
+  ) {
+    return "selfemployednonprofessional";
+  }
+  return key;
+};
 
 export class CommissionService {
-  private computeFromRule(rule: ICommissionRule, amount: number) {
-    if (rule.ruleType === "flat") {
-      return rule.flatAmount || 0;
-    }
+  private computeFromEligibility(
+    criteria: any,
+    amount: number,
+    fallbackType: "percentage" | "flat" = "percentage",
+    fallbackValue = 0,
+  ) {
+    const commissionType = String(
+      criteria?.commissionType || fallbackType,
+    ).toLowerCase();
+    const commissionValue = toNumber(
+      criteria?.commissionValue ?? fallbackValue,
+    );
+    const minAmount = toNumber(criteria?.commissionMinAmount);
+    const maxAmount = toNumber(criteria?.commissionMaxAmount);
+    const capAmount = toNumber(criteria?.commissionCapAmount);
 
-    if (rule.ruleType === "percentage") {
-      return ((rule.percentage || 0) / 100) * amount;
-    }
+    if (!commissionValue || amount <= 0) return 0;
+    if (minAmount && amount < minAmount) return 0;
+    if (maxAmount && amount > maxAmount) return 0;
 
-    if (rule.ruleType === "slab" && rule.slabs && rule.slabs.length) {
-      const matched = rule.slabs.find((slab) => {
-        if (slab.maxAmount && amount > slab.maxAmount) return false;
-        return amount >= slab.minAmount;
-      });
-      if (!matched) return 0;
-      if (matched.rateType === "flat") return matched.rate;
-      return (matched.rate / 100) * amount;
-    }
-    return 0;
+    const computed =
+      commissionType === EligibilityCommissionType.FLAT
+        ? commissionValue
+        : (commissionValue / 100) * amount;
+
+    if (capAmount > 0 && computed > capAmount) return capAmount;
+    return computed;
   }
 
-  async pickRule(context: CommissionContext) {
-    const query: Record<string, any> = { isActive: true };
+  private async pickEligibilityCriteria(input: {
+    loanType?: string;
+    bankName?: string;
+    salaryType?: string;
+  }) {
+    const loanTypeKey = normalizeLookupValue(input.loanType);
+    if (!loanTypeKey) return null;
 
-    // Match queryType (with backward compatibility for leadType)
-    if (context.queryType) {
-      query.$or = [
-        { queryType: context.queryType },
-        { leadType: context.queryType }, // Backward compatibility
-      ];
-    }
+    const bankNameKey = normalizeLookupValue(input.bankName);
+    const salaryTypeKey = normalizeSalaryType(input.salaryType);
 
-    if (context.productType) query.productType = context.productType;
-    if (context.geography?.pincode)
-      query["geography.pincode"] = context.geography.pincode;
+    const rows = await EligibilityCriteria.find({
+      status: EligibilityCriteriaStatus.ACTIVE,
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
 
-    // Match tags (check both new 'tags' and old 'leadTags' fields)
-    if (context.tags && context.tags.length) {
-      query.$or = [
-        ...(query.$or || []),
-        { tags: { $in: context.tags } },
-        { leadTags: { $in: context.tags } }, // Backward compatibility
-      ];
-    }
+    const pick = (matcher: (criteria: any) => boolean) =>
+      rows.find((criteria: any) => matcher(criteria));
 
-    const rules = (await CommissionRule.find(query)
-      .sort({ priority: 1, createdAt: -1 })
-      .lean()) as ICommissionRule[] | any[];
-
-    return rules.find((rule) => {
-      // Check new generic amount fields first, then fall back to old loan-specific fields
-      const minAmount = rule.minAmount ?? rule.minLoanAmount;
-      const maxAmount = rule.maxAmount ?? rule.maxLoanAmount;
-
-      if (minAmount && context.amount < minAmount) return false;
-      if (maxAmount && context.amount > maxAmount) return false;
-      if (rule.minCibil && (context.cibilScore || 0) < rule.minCibil)
-        return false;
-      if (rule.maxCibil && (context.cibilScore || 0) > rule.maxCibil)
-        return false;
-      return true;
-    });
+    return (
+      pick((criteria: any) => {
+        const rowLoan = normalizeLookupValue(criteria.loanType);
+        const rowBank = normalizeLookupValue(criteria.bankName);
+        const rowSalary = normalizeSalaryType(criteria.salaryType);
+        return (
+          rowLoan === loanTypeKey &&
+          Boolean(bankNameKey) &&
+          rowBank === bankNameKey &&
+          Boolean(salaryTypeKey) &&
+          rowSalary === salaryTypeKey
+        );
+      }) ||
+      pick((criteria: any) => {
+        const rowLoan = normalizeLookupValue(criteria.loanType);
+        const rowBank = normalizeLookupValue(criteria.bankName);
+        return (
+          rowLoan === loanTypeKey &&
+          Boolean(bankNameKey) &&
+          rowBank === bankNameKey
+        );
+      }) ||
+      pick(
+        (criteria: any) =>
+          normalizeLookupValue(criteria.loanType) === loanTypeKey,
+      ) ||
+      null
+    );
   }
 
   // Unified method for recording commission for both loans and insurance
@@ -102,6 +145,8 @@ export class CommissionService {
       queryType: "loan" | "insurance"; // Type of query
       productType?: ProductType;
       tags?: string[];
+      commissionRate?: number;
+      commissionAmount?: number;
       geography?: {
         pincode?: string;
       };
@@ -257,23 +302,42 @@ export class CommissionService {
       }
     }
 
-    const rule = await this.pickRule({
-      amount: payload.amount,
-      queryType: payload.queryType,
-      productType: payload.productType,
-      cibilScore: cibilScore || 500,
-      tags: payload.tags,
-      geography: payload.geography,
-    });
+    let commissionAmount = 0;
+    let commissionSource: any = null;
 
-    if (!rule) {
-      throw new ApiError(
-        404,
-        `No active commission rule found for this ${payload.queryType} query`
-      );
+    if (payload.queryType === "loan") {
+      const criteria = await this.pickEligibilityCriteria({
+        loanType: query?.loanType || payload.productType,
+        bankName: query?.bankName || query?.policyDetails?.bankName,
+        salaryType: query?.employmentType || query?.salaryType,
+      });
+      if (!criteria) {
+        throw new ApiError(
+          404,
+          "No active eligibility criteria found for this loan/bank combination",
+        );
+      }
+      commissionAmount = this.computeFromEligibility(criteria, payload.amount);
+      commissionSource = criteria;
+    } else {
+      // Insurance flow does not use eligibility criteria currently.
+      // Fallback to a default 1% unless explicitly provided by caller.
+      const fallbackRate = toNumber((payload as any).commissionRate) || 1;
+      const fallbackFlat = toNumber((payload as any).commissionAmount);
+      commissionAmount = fallbackFlat
+        ? fallbackFlat
+        : this.computeFromEligibility(
+            { commissionType: "percentage", commissionValue: fallbackRate },
+            payload.amount,
+          );
     }
 
-    const commissionAmount = this.computeFromRule(rule, payload.amount);
+    if (commissionAmount <= 0) {
+      throw new ApiError(
+        400,
+        `Commission could not be calculated for this ${payload.queryType} query`,
+      );
+    }
 
     const { wallet, transaction } = await WalletService.credit({
       landerId: payload.landerId,
@@ -282,11 +346,15 @@ export class CommissionService {
       type: "credit",
       description: `Commission for ${payload.queryType} query ${payload.queryId}`,
       metadata: {
-        ruleId: rule._id,
         amount: payload.amount,
         queryType: payload.queryType,
         productType: payload.productType,
         cibilScore: cibilScore || 500,
+        eligibilityCriteriaId: commissionSource?._id,
+        eligibilityLoanType: commissionSource?.loanType,
+        eligibilityBankName: commissionSource?.bankName,
+        commissionType: commissionSource?.commissionType,
+        commissionValue: commissionSource?.commissionValue,
       },
       category: "commission",
       session,
@@ -301,7 +369,7 @@ export class CommissionService {
     return {
       wallet,
       transaction,
-      rule,
+      criteria: commissionSource,
       commissionAmount,
       cibilScore: cibilScore || 500,
     };
@@ -339,6 +407,8 @@ export class CommissionService {
       insuranceQueryId: string; // ID of the completed insurance query
       insuranceType?: InsuranceType;
       tags?: string[];
+      commissionRate?: number;
+      commissionAmount?: number;
       geography?: {
         pincode?: string;
       };
@@ -353,6 +423,8 @@ export class CommissionService {
         queryType: "insurance",
         productType: payload.insuranceType,
         tags: payload.tags,
+        commissionRate: payload.commissionRate,
+        commissionAmount: payload.commissionAmount,
         geography: payload.geography,
       },
       session

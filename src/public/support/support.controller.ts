@@ -19,6 +19,7 @@ import { emitSupportMessage } from "../../config/socket.io";
 import { CommonService } from "../../services/common.services";
 import { convertToObjectId, extractImageUrl } from "../../utils/helper";
 import { sendSingleNotification } from "../../services/notification.service";
+import { Types } from "mongoose";
 
 const agentService = new CommonService(Agent);
 const ticketService = new CommonService(Ticket);
@@ -41,6 +42,88 @@ const ensureTagArray = (tags: unknown): string[] => {
     return [tags.trim()];
   }
   return [];
+};
+
+const normalizeObjectId = (value: any): Types.ObjectId | null => {
+  if (!value) return null;
+  if (value instanceof Types.ObjectId) return value;
+  const casted = String(value);
+  if (!Types.ObjectId.isValid(casted)) return null;
+  return new Types.ObjectId(casted);
+};
+
+const normalizeLabel = (value: unknown, fallback = "Loan") => {
+  const source = String(value || fallback);
+  return source
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (part) => part.toUpperCase());
+};
+
+const resolveAgencyScope = async (agencyId: any) => {
+  const currentObjectId = normalizeObjectId(agencyId);
+  if (!currentObjectId) {
+    return { ownerObjectId: null, scopeObjectIds: [] as Types.ObjectId[] };
+  }
+
+  const currentAgency = await Agency.findById(currentObjectId)
+    .select("_id parentAgency")
+    .lean();
+  const ownerObjectId =
+    normalizeObjectId((currentAgency as any)?.parentAgency) || currentObjectId;
+  const memberIds = await Agency.find({ parentAgency: ownerObjectId }).distinct(
+    "_id",
+  );
+
+  const unique = new Map<string, Types.ObjectId>();
+  [ownerObjectId, ...memberIds]
+    .map((id) => normalizeObjectId(id))
+    .filter((id): id is Types.ObjectId => Boolean(id))
+    .forEach((id) => unique.set(id.toString(), id));
+
+  return {
+    ownerObjectId,
+    scopeObjectIds: Array.from(unique.values()),
+  };
+};
+
+const listAssignedAgentsForMatch = async (match: Record<string, any>) => {
+  const loanQueries = await LoanQuery.find({
+    ...match,
+    assignedAgent: { $exists: true, $ne: null },
+  })
+    .select("_id loanType assignedAgent updatedAt createdAt")
+    .populate("assignedAgent", "_id name username email mobile status")
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .lean();
+
+  const agentMap = new Map<string, any>();
+  for (const query of loanQueries as any[]) {
+    const populatedAgent = query?.assignedAgent;
+    const assignedAgentId = normalizeObjectId(
+      populatedAgent?._id || populatedAgent,
+    );
+    const channelId = normalizeObjectId(query?._id)?.toString();
+    if (!assignedAgentId || !channelId) continue;
+
+    const key = assignedAgentId.toString();
+    if (agentMap.has(key)) continue;
+
+    agentMap.set(key, {
+      _id: key,
+      id: key,
+      name: populatedAgent?.name || populatedAgent?.username || "Assigned Agent",
+      role: "Assigned Agent",
+      serviceName: normalizeLabel(query?.loanType, "Loan"),
+      phone: populatedAgent?.mobile,
+      email: populatedAgent?.email,
+      channelId,
+      loanQueryId: channelId,
+      status: populatedAgent?.status || "Assigned",
+      isAssigned: true,
+    });
+  }
+
+  return Array.from(agentMap.values());
 };
 
 const findEligibleAgentForTicket = async (tags: string[]) => {
@@ -612,15 +695,47 @@ export const getAgents = async (
   try {
     const { _id: userId, role } = req.user || {};
     if (role === "user" && userId) {
-      const assignedAgentIds = await LoanQuery.distinct("assignedAgent", {
-        customerId: userId,
-        assignedAgent: { $exists: true, $ne: null },
+      const userObjectId = normalizeObjectId(userId);
+      if (!userObjectId) {
+        return res
+          .status(200)
+          .json(new ApiResponse(200, [], "Data fetched successfully"));
+      }
+
+      const agents = await listAssignedAgentsForMatch({
+        customerId: userObjectId,
       });
-      const agents = assignedAgentIds.length
-        ? await Admin.find({ _id: { $in: assignedAgentIds } }).select(
-            "_id name username email mobile profilePictureUrl",
-          )
-        : [];
+      return res
+        .status(200)
+        .json(new ApiResponse(200, agents, "Data fetched successfully"));
+    }
+
+    if ((role === "agency" || role === "agency_member") && userId) {
+      const { ownerObjectId, scopeObjectIds } = await resolveAgencyScope(userId);
+      if (!ownerObjectId || !scopeObjectIds.length) {
+        return res
+          .status(200)
+          .json(new ApiResponse(200, [], "Data fetched successfully"));
+      }
+
+      const ownershipFilter = {
+        $or: [
+          { ownerAgency: ownerObjectId },
+          {
+            $and: [
+              {
+                $or: [
+                  { ownerAgency: { $exists: false } },
+                  { ownerAgency: null },
+                ],
+              },
+              { customerId: { $in: scopeObjectIds } },
+            ],
+          },
+        ],
+      };
+
+      const agents = await listAssignedAgentsForMatch(ownershipFilter);
       return res
         .status(200)
         .json(new ApiResponse(200, agents, "Data fetched successfully"));

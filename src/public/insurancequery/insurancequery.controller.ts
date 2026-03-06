@@ -15,6 +15,7 @@ import LanderAssignmentEngine from "../../services/landerAssignment.service";
 import { Types } from "mongoose";
 import Lander from "../../modals/lander.model";
 import { User } from "../../modals/user.model";
+import { Agency } from "../../modals/agency.model";
 import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
 import Admin from "../../modals/admin.model";
 
@@ -316,6 +317,7 @@ export class InsuranceQueryController {
     try {
       // Get customer ID from authenticated user token
       const customerId = (req as any).user?._id;
+      const role = (req as any).user?.role;
       if (!customerId) {
         return res
           .status(401)
@@ -327,6 +329,17 @@ export class InsuranceQueryController {
 
       // Automatically set customerId from token
       req.body.customerId = customerId;
+      if (role === "agency" || role === "agency_member") {
+        req.body.channelAgency = customerId;
+        if (role === "agency_member") {
+          const agency = await Agency.findById(customerId)
+            .select("parentAgency")
+            .lean();
+          req.body.ownerAgency = agency?.parentAgency || customerId;
+        } else {
+          req.body.ownerAgency = customerId;
+        }
+      }
       const user = await User.findById(customerId);
       normalizeInsurancePayload(req, user);
 
