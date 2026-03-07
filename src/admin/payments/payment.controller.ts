@@ -3,6 +3,7 @@ import ApiResponse from "../../utils/ApiResponse";
 import ApiError from "../../utils/ApiError";
 import LanderWallet from "../../modals/landerWallet.model";
 import WalletTransaction from "../../modals/walletTransaction.model";
+import Lander from "../../modals/lander.model";
 import PayoutRequest from "../../modals/payoutRequest.model";
 import BankSubscription from "../../modals/bankSubscription.model";
 import { commissionService } from "../../services/commission.service";
@@ -18,11 +19,14 @@ export class PaymentController {
   static async recordLoanCommission(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const session = (req as any).mongoSession;
-      const result = await commissionService.recordLoanCommission(req.body, session);
+      const result = await commissionService.recordLoanCommission(
+        req.body,
+        session,
+      );
       res
         .status(200)
         .json(new ApiResponse(200, result, "Loan commission credited"));
@@ -35,11 +39,14 @@ export class PaymentController {
   static async recordInsuranceCommission(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const session = (req as any).mongoSession;
-      const result = await commissionService.recordInsuranceCommission(req.body, session);
+      const result = await commissionService.recordInsuranceCommission(
+        req.body,
+        session,
+      );
       res
         .status(200)
         .json(new ApiResponse(200, result, "Insurance commission credited"));
@@ -51,17 +58,27 @@ export class PaymentController {
   static async getLanderWallet(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
-      const wallet = await LanderWallet.findOne({ lander: req.params.landerId });
-      const transactions = await WalletTransaction.find({ lander: req.params.landerId })
+      const wallet = await LanderWallet.findOne({
+        lander: req.params.landerId,
+      });
+      const transactions = await WalletTransaction.find({
+        lander: req.params.landerId,
+      })
         .sort({ createdAt: -1 })
         .limit(Number(req.query.limit) || 50);
 
-      res.status(200).json(
-        new ApiResponse(200, { wallet, transactions }, "Wallet details fetched")
-      );
+      res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            { wallet, transactions },
+            "Wallet details fetched",
+          ),
+        );
     } catch (error) {
       next(error);
     }
@@ -70,18 +87,53 @@ export class PaymentController {
   static async listTransactions(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
-      
+      const agencyId = (req as any).query.agency as string; // Agency filter from query params
+
       // For landers, only show their own transactions
       if (role === "lander" && userId) {
         req.query.lander = userId;
       }
-      // Admin can see all transactions
-      
+      // For agencies, filter by agency
+      else if (role === "agency" && userId) {
+        // If agency filter provided in query, use it; otherwise use logged-in agency
+        const filterAgency = agencyId || userId.toString();
+
+        // Need to filter by landers belonging to this agency
+        // First get lander IDs for this agency, then filter transactions
+        const landers = await Lander.find({ agency: filterAgency })
+          .select("_id")
+          .lean();
+        const landerIds = landers.map((l: any) => l._id);
+
+        if (landerIds.length > 0) {
+          req.query.lander = { $in: landerIds };
+        } else {
+          // No landers found for this agency, return empty
+          req.query.lander = { $in: [] };
+        }
+        req.query.agency = filterAgency;
+      }
+      // Admin can see all transactions (with optional agency filter)
+      else if (agencyId) {
+        // Admin can filter by agency
+        const landers = await Lander.find({ agency: agencyId })
+          .select("_id")
+          .lean();
+        const landerIds = landers.map((l: any) => l._id);
+
+        if (landerIds.length > 0) {
+          req.query.lander = { $in: landerIds };
+        } else {
+          req.query.lander = { $in: [] };
+        }
+        req.query.agency = agencyId;
+      }
+
       // Add lookup stages to populate lander details
       const populateStages = [
         {
@@ -99,6 +151,20 @@ export class PaymentController {
           },
         },
         {
+          $lookup: {
+            from: "agencies",
+            localField: "agency",
+            foreignField: "_id",
+            as: "agencyData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$agencyData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
           $addFields: {
             lander: {
               $cond: {
@@ -108,8 +174,20 @@ export class PaymentController {
                   name: "$landerData.name",
                   email: "$landerData.email",
                   mobile: "$landerData.mobile",
+                  agency: "$landerData.agency",
                 },
                 else: "$lander",
+              },
+            },
+            agency: {
+              $cond: {
+                if: { $ifNull: ["$agencyData", false] },
+                then: {
+                  _id: "$agencyData._id",
+                  name: "$agencyData.name",
+                  email: "$agencyData.email",
+                },
+                else: "$agency",
               },
             },
           },
@@ -117,28 +195,40 @@ export class PaymentController {
         {
           $project: {
             landerData: 0,
+            agencyData: 0,
           },
         },
       ];
-      
-      const transactions = await walletTransactionService.getAll(req.query, populateStages);
-      
+
+      const transactions = await walletTransactionService.getAll(
+        req.query,
+        populateStages,
+      );
+
       res
         .status(200)
         .json(
-          new ApiResponse(200, transactions, "Transaction history fetched successfully")
+          new ApiResponse(
+            200,
+            transactions,
+            "Transaction history fetched successfully",
+          ),
         );
     } catch (error) {
       next(error);
     }
   }
 
-  static async requestPayout(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async requestPayout(req: Request, res: Response, next: NextFunction) {
     try {
+      const { role } = (req as any).user || {};
+      // Only agents/agencies are allowed to request payouts
+      if (
+        !role ||
+        (role !== "agent" && role !== "agency" && role !== "agency_member")
+      ) {
+        throw new ApiError(403, "Only agents/agencies can request payouts");
+      }
       const session = (req as any).mongoSession;
       const payout = await payoutService.requestPayout({
         landerId: req.body.landerId,
@@ -157,11 +247,7 @@ export class PaymentController {
     }
   }
 
-  static async approvePayout(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async approvePayout(req: Request, res: Response, next: NextFunction) {
     try {
       const adminId = (req as any).user?._id;
       if (!adminId) throw new ApiError(403, "User context missing");
@@ -169,12 +255,10 @@ export class PaymentController {
       const payout = await payoutService.approvePayout(
         req.params.id,
         adminId,
-        session
+        session,
       );
 
-      res
-        .status(200)
-        .json(new ApiResponse(200, payout, "Payout processed"));
+      res.status(200).json(new ApiResponse(200, payout, "Payout processed"));
     } catch (error) {
       next(error);
     }
@@ -184,13 +268,13 @@ export class PaymentController {
     try {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
-      
+
       // For landers, only show their own payout requests
       if (role === "lander" && userId) {
         req.query.lander = userId;
       }
       // Admin can see all payout requests
-      
+
       // Add lookup stages to populate lander and approvedBy
       const populateStages = [
         {
@@ -255,12 +339,17 @@ export class PaymentController {
           },
         },
       ];
-      
-      const payouts = await payoutRequestService.getAll(req.query, populateStages);
-      
+
+      const payouts = await payoutRequestService.getAll(
+        req.query,
+        populateStages,
+      );
+
       res
         .status(200)
-        .json(new ApiResponse(200, payouts, "Payout requests fetched successfully"));
+        .json(
+          new ApiResponse(200, payouts, "Payout requests fetched successfully"),
+        );
     } catch (error) {
       next(error);
     }
@@ -269,7 +358,7 @@ export class PaymentController {
   static async upsertBankSubscription(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const session = (req as any).mongoSession;
@@ -289,19 +378,17 @@ export class PaymentController {
   static async chargeSubscription(
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
       const session = (req as any).mongoSession;
       const data = await bankSubscriptionService.chargeSubscription(
         req.params.id,
         req.body,
-        session
+        session,
       );
 
-      res
-        .status(200)
-        .json(new ApiResponse(200, data, "Subscription charged"));
+      res.status(200).json(new ApiResponse(200, data, "Subscription charged"));
     } catch (error) {
       next(error);
     }
@@ -310,10 +397,12 @@ export class PaymentController {
   static async listSubscriptions(
     _req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) {
     try {
-      const subscriptions = await BankSubscription.find().sort({ createdAt: -1 });
+      const subscriptions = await BankSubscription.find().sort({
+        createdAt: -1,
+      });
       res
         .status(200)
         .json(new ApiResponse(200, subscriptions, "Bank subscriptions"));

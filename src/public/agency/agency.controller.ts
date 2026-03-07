@@ -12,6 +12,7 @@ import { CommonService } from "../../services/common.services";
 import { UserStatus, IKycProfile } from "../../modals/user.model";
 import { agencyEarningsService } from "../../services/agencyEarnings.service";
 import { agencyLeadsService } from "../../services/agencyLeads.service";
+import { agencyPayoutService } from "../../services/agencyPayout.service";
 import { sendSingleNotification } from "../../services/notification.service";
 import { generateAccessToken, generateRefreshToken } from "../../utils/token";
 
@@ -978,6 +979,83 @@ export class AgencyController {
       return res
         .status(200)
         .json(new ApiResponse(200, result, "Agency leads fetched"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getPayoutSummary(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const agencyId = req.user?._id;
+      if (!agencyId) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+      const result = await agencyPayoutService.getSummary(agencyId);
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Agency payout summary fetched"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async listPayoutRequests(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const agencyId = req.user?._id;
+      if (!agencyId) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+
+      const status =
+        typeof req.query?.status === "string" ? req.query.status : undefined;
+      const page = Number(req.query?.page) || 1;
+      const limit = Number(req.query?.limit) || 20;
+
+      const result = await agencyPayoutService.listRequests({
+        agencyId,
+        status,
+        page,
+        limit,
+      });
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Agency payout requests fetched"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async createPayoutRequest(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const agencyId = req.user?._id;
+      if (!agencyId) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+
+      const payout = await agencyPayoutService.createRequest({
+        agencyId,
+        amount: Number(req.body?.amount),
+        method: req.body?.method,
+        upiId: req.body?.upiId,
+        bankDetails: req.body?.bankDetails,
+        notes: req.body?.notes,
+      });
+
+      return res
+        .status(201)
+        .json(new ApiResponse(201, payout, "Payout request created"));
     } catch (error) {
       next(error);
     }

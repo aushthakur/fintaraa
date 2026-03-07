@@ -8,6 +8,7 @@ export interface ILander extends Document {
   password: string;
   refreshToken?: string;
   role: Schema.Types.ObjectId;
+  agency?: Schema.Types.ObjectId; // Agency association for agency-wise filtering
   location?: string;
   availability: boolean;
   leadCapacity?: number;
@@ -89,13 +90,14 @@ const LanderSchema: Schema<ILander> = new Schema(
     refreshToken: {
       type: String,
     },
+    agency: { type: Schema.Types.ObjectId, ref: "Agency", index: true }, // Agency association
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // 🔐 Method to compare password during login
 LanderSchema.methods.comparePassword = async function (
-  candidatePassword: string
+  candidatePassword: string,
 ): Promise<boolean> {
   return bcrypt.compare(candidatePassword, this.password);
 };

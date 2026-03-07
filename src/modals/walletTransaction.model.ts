@@ -10,6 +10,7 @@ export type WalletTransactionCategory =
 
 export interface IWalletTransaction extends Document {
   lander: Schema.Types.ObjectId;
+  agency?: Schema.Types.ObjectId; // Agency association for agency-wise filtering
   amount: number;
   runningBalance: number;
   type: WalletTransactionType;
@@ -25,6 +26,7 @@ export interface IWalletTransaction extends Document {
 const WalletTransactionSchema = new Schema<IWalletTransaction>(
   {
     lander: { type: Schema.Types.ObjectId, ref: "Lander", index: true },
+    agency: { type: Schema.Types.ObjectId, ref: "Agency", index: true }, // Agency association
     amount: { type: Number, required: true },
     runningBalance: { type: Number, required: true },
     type: { type: String, enum: ["credit", "debit"], required: true },
@@ -42,14 +44,14 @@ const WalletTransactionSchema = new Schema<IWalletTransaction>(
       default: "completed",
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 WalletTransactionSchema.index({ lander: 1, createdAt: -1 });
 
 const WalletTransaction = mongoose.model<IWalletTransaction>(
   "WalletTransaction",
-  WalletTransactionSchema
+  WalletTransactionSchema,
 );
 
 export default WalletTransaction;

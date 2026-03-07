@@ -31,6 +31,18 @@ router.get(
 router.get("/leads/summary", asyncHandler(AgencyController.getLeadSummary));
 router.get("/leads/events", asyncHandler(AgencyController.getLeadEvents));
 router.get(
+  "/payouts/summary",
+  asyncHandler(AgencyController.getPayoutSummary),
+);
+router.get(
+  "/payouts/requests",
+  asyncHandler(AgencyController.listPayoutRequests),
+);
+router.post(
+  "/payouts/requests",
+  asyncHandler(AgencyController.createPayoutRequest),
+);
+router.get(
   "/notification-preferences",
   asyncHandler(AgencyController.getNotificationPreferences)
 );
