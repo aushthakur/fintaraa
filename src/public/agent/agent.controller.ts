@@ -3,7 +3,8 @@ import { generateAccessToken, generateRefreshToken } from "../../utils/token";
 import Otp from "../../modals/otp.model";
 import Agent from "../../modals/agent.model";
 import { config } from "../../config/config";
-import { sendSMS } from "../../utils/smsService";
+import { logger } from "../../config/logger";
+import { maskMobileForLogs, sendSMS } from "../../utils/smsService";
 
 export class AgentAuthController {
   static async sendOtp(
@@ -42,17 +43,25 @@ export class AgentAuthController {
       );
 
       // Send OTP via Airtel IQ SMS in background to avoid blocking API response
+      const maskedMobile = maskMobileForLogs(mobile);
       void sendSMS({
         to: mobile,
         otp: otpCode,
       })
-        .then(() => {
-          console.log(`Agent OTP sent to ${mobile}: ${otpCode} (via Airtel IQ)`);
+        .then((dispatchResult) => {
+          if (dispatchResult.success) {
+            logger.info(`[OTP][Agent] SMS dispatched to=${maskedMobile}`);
+            return;
+          }
+          logger.warn(
+            `[OTP][Agent] SMS not dispatched to=${maskedMobile} reason=${dispatchResult.reason}`,
+          );
         })
-        .catch((smsError: any) => {
-          console.error(
-            `Failed to send Agent OTP SMS to ${mobile}:`,
-            smsError.message,
+        .catch((smsError: unknown) => {
+          const errMessage =
+            smsError instanceof Error ? smsError.message : String(smsError);
+          logger.error(
+            `[OTP][Agent] SMS dispatch failed to=${maskedMobile} error=${errMessage}`,
           );
         });
 

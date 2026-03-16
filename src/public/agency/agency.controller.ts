@@ -2,7 +2,8 @@ import crypto from "crypto";
 import Otp from "../../modals/otp.model";
 import ApiError from "../../utils/ApiError";
 import { config } from "../../config/config";
-import { sendSMS } from "../../utils/smsService";
+import { logger } from "../../config/logger";
+import { maskMobileForLogs, sendSMS } from "../../utils/smsService";
 import ApiResponse from "../../utils/ApiResponse";
 import { extractImageUrl } from "../../utils/helper";
 import { Request, Response, NextFunction } from "express";
@@ -239,17 +240,25 @@ export class AgencyController {
       );
 
       // Send OTP via Airtel IQ SMS in background to avoid blocking API response
+      const maskedMobile = maskMobileForLogs(mobile);
       void sendSMS({
         to: mobile,
         otp: otpCode,
       })
-        .then(() => {
-          console.log(`Agency OTP sent to ${mobile}: ${otpCode} (via Airtel IQ)`);
+        .then((dispatchResult) => {
+          if (dispatchResult.success) {
+            logger.info(`[OTP][Agency] SMS dispatched to=${maskedMobile}`);
+            return;
+          }
+          logger.warn(
+            `[OTP][Agency] SMS not dispatched to=${maskedMobile} reason=${dispatchResult.reason}`,
+          );
         })
-        .catch((smsError: any) => {
-          console.error(
-            `Failed to send Agency OTP SMS to ${mobile}:`,
-            smsError.message,
+        .catch((smsError: unknown) => {
+          const errMessage =
+            smsError instanceof Error ? smsError.message : String(smsError);
+          logger.error(
+            `[OTP][Agency] SMS dispatch failed to=${maskedMobile} error=${errMessage}`,
           );
         });
 

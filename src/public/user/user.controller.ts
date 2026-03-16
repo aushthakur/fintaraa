@@ -5,7 +5,8 @@ import ApiError from "../../utils/ApiError";
 import { config } from "../../config/config";
 import ApiResponse from "../../utils/ApiResponse";
 import { extractImageUrl } from "../../utils/helper";
-import { sendSMS } from "../../utils/smsService";
+import { logger } from "../../config/logger";
+import { maskMobileForLogs, sendSMS } from "../../utils/smsService";
 import { Request, Response, NextFunction } from "express";
 import {
   User,
@@ -862,17 +863,25 @@ export class UserController {
       );
 
       // Send OTP via Airtel IQ SMS in background to avoid blocking API response
+      const maskedMobile = maskMobileForLogs(mobile);
       void sendSMS({
         to: mobile,
         otp: otpCode,
       })
-        .then(() => {
-          console.log(`OTP sent to ${mobile}: ${otpCode} (via Airtel IQ)`);
+        .then((dispatchResult) => {
+          if (dispatchResult.success) {
+            logger.info(`[OTP][User] SMS dispatched to=${maskedMobile}`);
+            return;
+          }
+          logger.warn(
+            `[OTP][User] SMS not dispatched to=${maskedMobile} reason=${dispatchResult.reason}`,
+          );
         })
-        .catch((smsError: any) => {
-          console.error(
-            `Failed to send OTP SMS to ${mobile}:`,
-            smsError.message,
+        .catch((smsError: unknown) => {
+          const errMessage =
+            smsError instanceof Error ? smsError.message : String(smsError);
+          logger.error(
+            `[OTP][User] SMS dispatch failed to=${maskedMobile} error=${errMessage}`,
           );
           // Don't fail the request, OTP is still valid for testing
         });
