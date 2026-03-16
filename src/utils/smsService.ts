@@ -1,5 +1,33 @@
 import axios from "axios";
 import { config } from "../config/config";
+import { logger } from "../config/logger";
+
+export type SmsDispatchResult =
+  | {
+      success: true;
+      provider: "airtel_iq";
+      response: unknown;
+    }
+  | {
+      success: false;
+      provider: string;
+      reason: string;
+    };
+
+const safeStringify = (value: unknown): string => {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+export const maskMobileForLogs = (value: string): string => {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "unknown";
+  if (digits.length <= 4) return `***${digits}`;
+  return `${digits.slice(0, 2)}******${digits.slice(-2)}`;
+};
 
 /**
  * Replace template variables like {otp} or {OTP}
@@ -83,7 +111,7 @@ const sendAirtelIqSMS = async (
   to: string,
   message: string,
   variables?: Record<string, string | number>,
-) => {
+): Promise<unknown> => {
   const airtel = config.sms?.airtelIq;
 
   if (!airtel?.baseUrl) {
@@ -91,7 +119,9 @@ const sendAirtelIqSMS = async (
   }
 
   const payload = buildAirtelPayload(to, message, variables);
-  console.log(airtel.baseUrl, payload);
+  logger.info(
+    `[SMS][AirtelIQ] Sending SMS to=${maskMobileForLogs(to)} templateId=${airtel.templateId}`,
+  );
 
   const response = await axios.post(airtel.baseUrl, payload, {
     timeout: 30000,
@@ -101,12 +131,13 @@ const sendAirtelIqSMS = async (
     },
   });
 
-  if (config.env === "development") {
-    console.log("✅ Airtel IQ SMS Sent", {
-      to: payload.destinationAddress,
-      response: response.data,
-    });
-  }
+  logger.info(
+    `[SMS][AirtelIQ] SMS sent to=${maskMobileForLogs(to)} status=${response.status}`,
+  );
+  if (config.env === "development")
+    logger.info(
+      `[SMS][AirtelIQ] Response payload=${safeStringify(response.data)}`,
+    );
 
   return response.data;
 };
@@ -114,10 +145,27 @@ const sendAirtelIqSMS = async (
 /**
  * Public SMS function
  */
-export async function sendSMS({ to, otp }: { to: string; otp: string }) {
+export async function sendSMS({
+  to,
+  otp,
+}: {
+  to: string;
+  otp: string;
+}): Promise<SmsDispatchResult> {
+  const maskedTo = maskMobileForLogs(to);
+
   try {
+    if (!to || !otp) {
+      throw new Error("SMS payload requires both 'to' and 'otp'");
+    }
+
     if (!config.sms?.enabled) {
-      return { success: false, message: "SMS service disabled" };
+      logger.warn(`[SMS] Skipped OTP SMS because service is disabled to=${maskedTo}`);
+      return {
+        success: false,
+        provider: config.sms?.provider || "unknown",
+        reason: "SMS service disabled",
+      };
     }
 
     if (config.sms.provider !== "airtel_iq") {
@@ -128,13 +176,23 @@ export async function sendSMS({ to, otp }: { to: string; otp: string }) {
     const message =
       "{otp} is your OTP to verify your mobile number for login on Fintaraa App/Website. Valid for 1 minute.";
 
-    return await sendAirtelIqSMS(to, message, { otp });
-  } catch (err: any) {
-    console.error("❌ SMS Error", {
-      message: err.message,
-      response: err?.response?.data,
-    });
+    const response = await sendAirtelIqSMS(to, message, { otp });
+    return {
+      success: true,
+      provider: "airtel_iq",
+      response,
+    };
+  } catch (err: unknown) {
+    const errMessage =
+      err instanceof Error ? err.message : "Unknown SMS error";
+    const responsePayload =
+      axios.isAxiosError(err) && err.response?.data !== undefined
+        ? ` response=${safeStringify(err.response.data)}`
+        : "";
 
-    throw new Error("Failed to send OTP SMS");
+    logger.error(
+      `[SMS] OTP send failed to=${maskedTo} provider=${config.sms?.provider || "unknown"} error=${errMessage}${responsePayload}`,
+    );
+    throw err instanceof Error ? err : new Error("Failed to send OTP SMS");
   }
 }
