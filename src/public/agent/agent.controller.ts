@@ -6,6 +6,31 @@ import { config } from "../../config/config";
 import { logger } from "../../config/logger";
 import { maskMobileForLogs, sendSMS } from "../../utils/smsService";
 
+const normalizeIndianMobile = (value: string): string => {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 10) return digits;
+  if (digits.length === 12 && digits.startsWith("91")) return digits.slice(2);
+  return digits;
+};
+
+const buildMobileVariants = (value: string): string[] => {
+  const raw = String(value || "").trim();
+  const digits = raw.replace(/\D/g, "");
+  const normalized = normalizeIndianMobile(raw);
+  const variants = new Set<string>();
+
+  if (raw) variants.add(raw);
+  if (digits) variants.add(digits);
+  if (normalized) variants.add(normalized);
+
+  if (normalized.length === 10) {
+    variants.add(`91${normalized}`);
+    variants.add(`+91${normalized}`);
+  }
+
+  return Array.from(variants);
+};
+
 export class AgentAuthController {
   static async sendOtp(
     req: Request,
@@ -14,27 +39,38 @@ export class AgentAuthController {
   ): Promise<any> {
     try {
       const { mobile } = req.body;
-      if (!mobile) {
+      const submittedMobile = String(mobile || "").trim();
+      if (!submittedMobile) {
         return res.status(400).json({
           success: false,
           message: "Phone number is required",
         });
       }
 
-      const agent = await Agent.findOne({ mobile });
+      const normalizedMobile = normalizeIndianMobile(submittedMobile);
+      const mobileVariants = buildMobileVariants(submittedMobile);
+      const otpMobile =
+        normalizedMobile.length === 10 ? normalizedMobile : submittedMobile;
+
+      const agent = await Agent.findOne({
+        mobile: { $in: mobileVariants },
+      });
       if (!agent) {
         return res
           .status(404)
-          .json({ success: false, message: "Agent not found" });
+          .json({
+            success: false,
+            message: "Agent not found with this mobile number",
+          });
       }
 
       const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
       await Otp.findOneAndUpdate(
-        { mobile },
+        { mobile: otpMobile },
         {
-          mobile,
+          mobile: otpMobile,
           expiresAt,
           otp: otpCode,
           verified: false,
@@ -43,9 +79,9 @@ export class AgentAuthController {
       );
 
       // Send OTP via Airtel IQ SMS in background to avoid blocking API response
-      const maskedMobile = maskMobileForLogs(mobile);
+      const maskedMobile = maskMobileForLogs(otpMobile);
       void sendSMS({
-        to: mobile,
+        to: otpMobile,
         otp: otpCode,
       })
         .then((dispatchResult) => {
@@ -81,15 +117,24 @@ export class AgentAuthController {
   ): Promise<any> {
     try {
       const { mobile, otp } = req.body;
+      const submittedMobile = String(mobile || "").trim();
+      const mobileVariants = buildMobileVariants(submittedMobile);
+      const normalizedMobile = normalizeIndianMobile(submittedMobile);
 
-      if (!mobile || !otp) {
+      if (!submittedMobile || !otp) {
         return res.status(400).json({
           success: false,
           message: "Phone number and OTP are required",
         });
       }
 
-      const otpDoc = await Otp.findOne({ mobile, otp });
+      const otpMobiles = Array.from(
+        new Set<string>(
+          [submittedMobile, normalizedMobile, ...mobileVariants].filter(Boolean),
+        ),
+      );
+
+      const otpDoc = await Otp.findOne({ mobile: { $in: otpMobiles }, otp });
       if (!otpDoc || otpDoc.expiresAt < new Date()) {
         return res
           .status(400)
@@ -105,7 +150,9 @@ export class AgentAuthController {
       otpDoc.verified = true;
       await otpDoc.save();
 
-      const agent: any = await Agent.findOne({ mobile }).populate("role");
+      const agent: any = await Agent.findOne({
+        mobile: { $in: mobileVariants },
+      }).populate("role");
       if (!agent) {
         return res
           .status(404)
