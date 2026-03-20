@@ -160,7 +160,9 @@ export async function sendSMS({
     }
 
     if (!config.sms?.enabled) {
-      logger.warn(`[SMS] Skipped OTP SMS because service is disabled to=${maskedTo}`);
+      logger.warn(
+        `[SMS] Skipped OTP SMS because service is disabled to=${maskedTo}`,
+      );
       return {
         success: false,
         provider: config.sms?.provider || "unknown",
@@ -183,8 +185,8 @@ export async function sendSMS({
       response,
     };
   } catch (err: unknown) {
-    const errMessage =
-      err instanceof Error ? err.message : "Unknown SMS error";
+    console.log("Error:", err);
+    const errMessage = err instanceof Error ? err.message : "Unknown SMS error";
     const responsePayload =
       axios.isAxiosError(err) && err.response?.data !== undefined
         ? ` response=${safeStringify(err.response.data)}`

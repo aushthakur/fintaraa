@@ -56,12 +56,10 @@ export class AgentAuthController {
         mobile: { $in: mobileVariants },
       });
       if (!agent) {
-        return res
-          .status(404)
-          .json({
-            success: false,
-            message: "Agent not found with this mobile number",
-          });
+        return res.status(404).json({
+          success: false,
+          message: "Agent not found with this mobile number",
+        });
       }
 
       const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
@@ -130,7 +128,9 @@ export class AgentAuthController {
 
       const otpMobiles = Array.from(
         new Set<string>(
-          [submittedMobile, normalizedMobile, ...mobileVariants].filter(Boolean),
+          [submittedMobile, normalizedMobile, ...mobileVariants].filter(
+            Boolean,
+          ),
         ),
       );
 
