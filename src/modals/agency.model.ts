@@ -37,6 +37,8 @@ export interface IAgency extends Document {
     email?: boolean;
     whatsapp?: boolean;
   };
+  rmName?: string;
+  rmMobile?: string;
   bankDetails?: typeof BankDetailsSchema;
   addresses?: Types.DocumentArray<typeof AddressSchema>;
   kycProfile?: typeof KycProfileSchema;
@@ -91,6 +93,8 @@ const AgencySchema = new Schema<IAgency>(
       email: { type: Boolean, default: true },
       whatsapp: { type: Boolean, default: true },
     },
+    rmName: { type: String, trim: true },
+    rmMobile: { type: String, trim: true },
     bankDetails: { type: BankDetailsSchema },
     addresses: { type: [AddressSchema], default: [] },
     kycProfile: { type: KycProfileSchema, default: {} },

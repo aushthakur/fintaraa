@@ -75,6 +75,7 @@ export const BankDetailsSchema = new Schema(
     accountType: String,
     accountNumber: String,
     accountHolderName: String,
+    cancelledChequeUrl: { type: String, trim: true },
     verified: { type: Boolean, default: false },
   },
   { _id: false }
@@ -357,6 +358,7 @@ export const KycProfileSchema = new Schema(
   {
     reusableAcrossApplications: { type: Boolean, default: true },
     personalDetails: {
+      registerAs: { type: String, trim: true },
       fullName: { type: String, trim: true },
       fatherName: { type: String, trim: true },
       motherName: { type: String, trim: true },
@@ -366,6 +368,19 @@ export const KycProfileSchema = new Schema(
       panNumber: { type: String, trim: true },
       maritalStatus: { type: String, trim: true },
       dependents: { type: Number },
+      mobile: { type: String, trim: true },
+      email: { type: String, trim: true },
+      address: { type: String, trim: true },
+      city: { type: String, trim: true },
+      state: { type: String, trim: true },
+      pinCode: { type: String, trim: true },
+      pincode: { type: String, trim: true },
+      companyName: { type: String, trim: true },
+      businessName: { type: String, trim: true },
+      shopName: { type: String, trim: true },
+      authorisedPersonName: { type: String, trim: true },
+      authorisedPersonMobile: { type: String, trim: true },
+      authorisedPersonEmail: { type: String, trim: true },
     },
     addressDetails: {
       currentAddress: { type: AddressSchema },
