@@ -45,6 +45,17 @@ export interface IAgency extends Document {
   digiLockerVault?: IDigiLockerVault;
   loginMethods?: typeof LoginMethodSchema;
   securityPreferences?: typeof SecurityPreferencesSchema;
+  agentProfileCompleted?: boolean;
+  cibilScore?: number;
+  cibilLastFetchedAt?: Date;
+  cibilReport?: Record<string, any>;
+  cibilRequestPayload?: Record<string, any>;
+  experianScore?: number;
+  experianLastFetchedAt?: Date;
+  experianReport?: Record<string, any>;
+  cibilScoreCheckCredits?: number;
+  experianScoreCheckCredits?: number;
+  lastScorePurchaseAt?: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
 }
 
@@ -95,7 +106,18 @@ const AgencySchema = new Schema<IAgency>(
     },
     rmName: { type: String, trim: true },
     rmMobile: { type: String, trim: true },
+    agentProfileCompleted: { type: Boolean, default: false },
     bankDetails: { type: BankDetailsSchema },
+    cibilScore: { type: Number },
+    cibilLastFetchedAt: { type: Date },
+    cibilReport: { type: Object },
+    cibilRequestPayload: { type: Object },
+    experianScore: { type: Number },
+    experianLastFetchedAt: { type: Date },
+    experianReport: { type: Object },
+    cibilScoreCheckCredits: { type: Number, default: 0 },
+    experianScoreCheckCredits: { type: Number, default: 0 },
+    lastScorePurchaseAt: { type: Date },
     addresses: { type: [AddressSchema], default: [] },
     kycProfile: { type: KycProfileSchema, default: {} },
     digiLockerVault: {

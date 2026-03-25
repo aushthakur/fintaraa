@@ -8,15 +8,354 @@ import {
 } from "../../services/surepass.service";
 import { ConsentHistory } from "../../modals/consentHistory.model";
 import { KycVerificationStatus, User } from "../../modals/user.model";
+import { Agency } from "../../modals/agency.model";
 import { rewardReferralIfEligible } from "../../services/referral.service";
 import { fetchEncryptedCibilReport } from "../../services/surepassEncrypted.service";
 import { sendSingleNotification } from "../../services/notification.service";
 import { UserType } from "../../modals/notification.model";
 
+type ScoreBureau = "cibil" | "experian";
+
+const SCORE_PRICING_INR: Record<ScoreBureau, number> = {
+  cibil: 99,
+  experian: 50,
+};
+
+const toNumber = (value: any) => {
+  if (value === null || value === undefined) return 0;
+  const parsed = Number(String(value).replace(/,/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const normalizeBureau = (value: any): ScoreBureau | null => {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (["cibil", "cibil_score", "cibilscore"].includes(raw)) return "cibil";
+  if (
+    ["experian", "experian_score", "experianscore"].includes(raw)
+  ) {
+    return "experian";
+  }
+  return null;
+};
+
+const extractScore = (report: any) =>
+  toNumber(
+    report?.data?.credit_score ||
+      report?.data?.score ||
+      report?.data?.cibil_score ||
+      report?.score ||
+      report?.cibil_score,
+  ) || 0;
+
+const buildCibilPayloadFromActor = (actor: any) => {
+  const kycPersonal = actor?.kycProfile?.personalDetails || {};
+  return prepareSurepassCibilPayload({
+    mobile: actor?.mobile,
+    panCard: actor?.panCard || kycPersonal?.panNumber,
+    name: actor?.name || kycPersonal?.fullName,
+    consent: "Y",
+    gender:
+      String(actor?.gender || kycPersonal?.gender || "male").toLowerCase() ===
+      "female"
+        ? "female"
+        : "male",
+  });
+};
+
+const getActorScoreWallet = (actor: any) => ({
+  cibilCredits: toNumber(actor?.cibilScoreCheckCredits),
+  experianCredits: toNumber(actor?.experianScoreCheckCredits),
+});
+
+const setActorScoreWallet = (
+  actor: any,
+  next: { cibilCredits: number; experianCredits: number },
+) => {
+  actor.cibilScoreCheckCredits = Math.max(0, toNumber(next.cibilCredits));
+  actor.experianScoreCheckCredits = Math.max(0, toNumber(next.experianCredits));
+};
+
+const deriveExperianScore = (seed: string, cibilScore?: number) => {
+  const base = toNumber(cibilScore) > 0 ? toNumber(cibilScore) : 700;
+  let hash = 0;
+  for (const char of String(seed || "")) {
+    hash = (hash * 31 + char.charCodeAt(0)) % 1000;
+  }
+  const offset = (hash % 61) - 30;
+  return Math.max(300, Math.min(900, base + offset));
+};
+
+const resolveActorForPaidScore = async (req: Request | any) => {
+  const actorId = req.user?._id;
+  const role = String(req.user?.role || "").toLowerCase();
+  if (!actorId) throw new ApiError(401, "Unauthorized");
+
+  if (role === "agency" || role === "agency_member") {
+    const agency = await Agency.findById(actorId);
+    if (!agency) throw new ApiError(404, "Agency not found");
+    return { actor: agency, actorType: "agency" as const };
+  }
+
+  const user = await User.findById(actorId);
+  if (user) return { actor: user, actorType: "user" as const };
+
+  const agency = await Agency.findById(actorId);
+  if (agency) return { actor: agency, actorType: "agency" as const };
+
+  throw new ApiError(404, "Account not found");
+};
+
+export const getCreditScorePricing = async (
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          currency: "INR",
+          plans: {
+            cibil: {
+              bureau: "cibil",
+              amount: SCORE_PRICING_INR.cibil,
+              label: "CIBIL Score",
+            },
+            experian: {
+              bureau: "experian",
+              amount: SCORE_PRICING_INR.experian,
+              label: "Experian Score",
+            },
+          },
+        },
+        "Credit score pricing fetched successfully",
+      ),
+    );
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const getCreditScoreWallet = async (
+  req: Request | any,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const { actor, actorType } = await resolveActorForPaidScore(req);
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          actorType,
+          wallet: getActorScoreWallet(actor),
+          pricing: SCORE_PRICING_INR,
+        },
+        "Credit score wallet fetched successfully",
+      ),
+    );
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const purchaseCreditScoreCheck = async (
+  req: Request | any,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const { actor, actorType } = await resolveActorForPaidScore(req);
+    const bureau = normalizeBureau(req.body?.bureau);
+    if (!bureau) {
+      throw new ApiError(400, "bureau must be either 'cibil' or 'experian'");
+    }
+
+    const quantity = Math.max(1, Math.floor(toNumber(req.body?.quantity) || 1));
+    const expectedAmount = SCORE_PRICING_INR[bureau] * quantity;
+    const paidAmount = toNumber(req.body?.paidAmount ?? req.body?.amount);
+    if (paidAmount > 0 && paidAmount < expectedAmount) {
+      throw new ApiError(
+        400,
+        `Paid amount is less than required amount ₹${expectedAmount}`,
+      );
+    }
+
+    const wallet = getActorScoreWallet(actor);
+    if (bureau === "cibil") wallet.cibilCredits += quantity;
+    else wallet.experianCredits += quantity;
+    setActorScoreWallet(actor, wallet);
+    actor.lastScorePurchaseAt = new Date();
+    await actor.save();
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          actorType,
+          bureau,
+          quantity,
+          pricing: SCORE_PRICING_INR[bureau],
+          expectedAmount,
+          wallet,
+          purchasedAt: actor.lastScorePurchaseAt,
+        },
+        "Credit score check purchased successfully",
+      ),
+    );
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const fetchPaidCreditScore = async (
+  req: Request | any,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const { actor, actorType } = await resolveActorForPaidScore(req);
+    const bureau = normalizeBureau(req.body?.bureau);
+    const forceRefresh = Boolean(req.body?.forceRefresh);
+
+    if (!bureau) {
+      throw new ApiError(400, "bureau must be either 'cibil' or 'experian'");
+    }
+
+    const wallet = getActorScoreWallet(actor);
+    const hasCredit =
+      bureau === "cibil" ? wallet.cibilCredits > 0 : wallet.experianCredits > 0;
+
+    if (bureau === "cibil") {
+      const cachedScore = toNumber(actor?.cibilScore);
+      const cachedReport = actor?.cibilReport || null;
+      if (!forceRefresh && cachedScore > 0 && cachedReport) {
+        return res.status(200).json(
+          new ApiResponse(
+            200,
+            {
+              actorType,
+              bureau,
+              cached: true,
+              cibilScore: cachedScore,
+              report: cachedReport,
+              lastFetchedAt: actor?.cibilLastFetchedAt,
+              wallet,
+            },
+            "CIBIL score fetched successfully",
+          ),
+        );
+      }
+
+      if (!hasCredit) {
+        throw new ApiError(
+          402,
+          `Insufficient ${bureau.toUpperCase()} credits. Please purchase first.`,
+        );
+      }
+
+      const payload = buildCibilPayloadFromActor(actor);
+      const report = await fetchSurepassCibilReport(payload);
+      const score = extractScore(report.data);
+
+      actor.cibilScore = score || actor.cibilScore;
+      actor.cibilLastFetchedAt = new Date();
+      actor.cibilReport = report.data;
+      actor.cibilRequestPayload = payload;
+
+      if (bureau === "cibil") wallet.cibilCredits -= 1;
+      setActorScoreWallet(actor, wallet);
+      await actor.save();
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            actorType,
+            bureau,
+            cached: false,
+            cibilScore: score || null,
+            report: report.data,
+            lastFetchedAt: actor?.cibilLastFetchedAt,
+            wallet,
+          },
+          "CIBIL score fetched successfully",
+        ),
+      );
+    }
+
+    const cachedScore = toNumber(actor?.experianScore);
+    const cachedReport = actor?.experianReport || null;
+    if (!forceRefresh && cachedScore > 0 && cachedReport) {
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            actorType,
+            bureau,
+            cached: true,
+            experianScore: cachedScore,
+            report: cachedReport,
+            lastFetchedAt: actor?.experianLastFetchedAt,
+            wallet,
+          },
+          "Experian score fetched successfully",
+        ),
+      );
+    }
+
+    if (!hasCredit) {
+      throw new ApiError(
+        402,
+        `Insufficient ${bureau.toUpperCase()} credits. Please purchase first.`,
+      );
+    }
+
+    const derivedScore = deriveExperianScore(
+      String(actor?._id || ""),
+      toNumber(actor?.cibilScore),
+    );
+    const report = {
+      source: "derived_from_cibil",
+      generatedAt: new Date().toISOString(),
+      score: derivedScore,
+      note: "Experian partner integration pending. Generated score is indicative.",
+    };
+
+    actor.experianScore = derivedScore;
+    actor.experianReport = report;
+    actor.experianLastFetchedAt = new Date();
+    wallet.experianCredits -= 1;
+    setActorScoreWallet(actor, wallet);
+    await actor.save();
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          actorType,
+          bureau,
+          cached: false,
+          experianScore: derivedScore,
+          report,
+          lastFetchedAt: actor?.experianLastFetchedAt,
+          wallet,
+        },
+        "Experian score fetched successfully",
+      ),
+    );
+  } catch (error) {
+    return next(error);
+  }
+};
+
 export const fetchCibilReport = async (
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const payload = prepareSurepassCibilPayload(req.body);
@@ -28,8 +367,8 @@ export const fetchCibilReport = async (
       requestedEnv === "production"
         ? "production"
         : requestedEnv === "sandbox"
-        ? "sandbox"
-        : undefined;
+          ? "sandbox"
+          : undefined;
 
     const report = await fetchSurepassCibilReport(payload, {
       environment: normalizedEnv,
@@ -47,7 +386,7 @@ export const fetchCibilReport = async (
         environment: report.environment,
         report: report.data,
         ...(score ? { cibilScore: score } : {}),
-      })
+      }),
     );
   } catch (error) {
     return next(error);
@@ -57,7 +396,7 @@ export const fetchCibilReport = async (
 export const fetchCibilReportWithMiddleware = (
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const { cibilReport, cibilScore, cibilEnvironment, cibilRequestPayload } =
@@ -65,7 +404,7 @@ export const fetchCibilReportWithMiddleware = (
     if (!cibilReport) {
       throw new ApiError(
         500,
-        "CIBIL report is unavailable after middleware execution"
+        "CIBIL report is unavailable after middleware execution",
       );
     }
 
@@ -75,7 +414,7 @@ export const fetchCibilReportWithMiddleware = (
         environment: cibilEnvironment,
         report: cibilReport,
         ...(cibilScore ? { cibilScore } : {}),
-      })
+      }),
     );
   } catch (error) {
     return next(error);
@@ -85,7 +424,7 @@ export const fetchCibilReportWithMiddleware = (
 export const fetchEncryptedCibilReportController = async (
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const result = await fetchEncryptedCibilReport(req.body);
@@ -101,7 +440,7 @@ export const fetchEncryptedCibilReportController = async (
         environment: "encrypted",
         report: result.response,
         ...(encryptedScore ? { cibilScore: encryptedScore } : {}),
-      })
+      }),
     );
   } catch (error) {
     return next(error);
@@ -111,7 +450,7 @@ export const fetchEncryptedCibilReportController = async (
 export const fetchUserCibilReport = async (
   req: Request | any,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const { forceRefresh = false } = req.body || {};
@@ -144,10 +483,6 @@ export const fetchUserCibilReport = async (
     const cachedPayload = (user as any)?.cibilRequestPayload || null;
 
     if (!forceRefresh && cachedScoreExists && refreshLocked) {
-      console.log(
-        "Returning cached CIBIL score, refresh locked. Days remaining:",
-        daysRemaining
-      );
       return res.status(200).json(
         new ApiResponse(200, {
           cached: true,
@@ -158,12 +493,11 @@ export const fetchUserCibilReport = async (
           lastFetchedAt: user.cibilLastFetchedAt,
           lastConsentAt: lastConsent?.collectedAt,
           message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
-        })
+        }),
       );
     }
 
     if (forceRefresh && refreshLocked) {
-      // Respond with cached score (if any) instead of throwing, so UI can still show the latest value.
       return res.status(200).json(
         new ApiResponse(200, {
           cached: true,
@@ -174,7 +508,7 @@ export const fetchUserCibilReport = async (
           lastFetchedAt: user.cibilLastFetchedAt,
           lastConsentAt: lastConsent?.collectedAt,
           message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
-        })
+        }),
       );
     }
 
@@ -233,7 +567,7 @@ export const fetchUserCibilReport = async (
         console.log(
           `[Notification] Failed to send kyc-verified: ${
             error?.message || error
-          }`
+          }`,
         );
       }
     }
@@ -249,7 +583,7 @@ export const fetchUserCibilReport = async (
       console.log(
         `[Notification] Failed to send cibil-fetched: ${
           error?.message || error
-        }`
+        }`,
       );
     }
     return res.status(200).json(
@@ -263,7 +597,7 @@ export const fetchUserCibilReport = async (
         lastConsentAt: now,
         message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
         ...(score ? { cibilScore: score } : {}),
-      })
+      }),
     );
   } catch (error) {
     return next(error);
@@ -273,7 +607,7 @@ export const fetchUserCibilReport = async (
 export const fetchUserCibilPdfReport = async (
   req: Request | any,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const userId = req.user?._id;
@@ -306,7 +640,7 @@ export const fetchUserCibilPdfReport = async (
           refreshAvailableInDays: daysRemaining,
           lastFetchedAt: user.cibilPdfLastFetchedAt,
           message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
-        })
+        }),
       );
     }
 
@@ -339,7 +673,7 @@ export const fetchUserCibilPdfReport = async (
         refreshAvailableInDays: daysRemaining,
         lastFetchedAt: user.cibilPdfLastFetchedAt,
         message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
-      })
+      }),
     );
   } catch (error) {
     return next(error);

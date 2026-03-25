@@ -169,6 +169,140 @@ const safeNotify = async (payload: {
   }
 };
 
+const hasMeaningfulValue = (value: any): boolean => {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value.trim() !== "";
+  if (Array.isArray(value)) return value.some((item) => hasMeaningfulValue(item));
+  return true;
+};
+
+const resolveAgencyStatusInput = (value: any): UserStatus | undefined => {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "boolean") {
+    return value ? UserStatus.ACTIVE : UserStatus.INACTIVE;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (
+    ["active", "activate", "activated", "enable", "enabled", "1", "true"].includes(
+      normalized,
+    )
+  ) {
+    return UserStatus.ACTIVE;
+  }
+  if (
+    ["inactive", "deactivate", "disabled", "disable", "0", "false"].includes(
+      normalized,
+    )
+  ) {
+    return UserStatus.INACTIVE;
+  }
+  if (["deactivated", "blocked"].includes(normalized)) {
+    return UserStatus.DEACTIVATED;
+  }
+  if (["suspended", "suspend"].includes(normalized)) {
+    return UserStatus.SUSPENDED;
+  }
+  if (["pending", "pending_verification", "pending-verification"].includes(normalized)) {
+    return UserStatus.PENDING_VERIFICATION;
+  }
+  return undefined;
+};
+
+const evaluateAgencyProfileCompletion = (agency: any) => {
+  const kyc = agency?.kycProfile || {};
+  const personal = kyc?.personalDetails || {};
+  const employment = kyc?.employmentDetails || agency?.employmentDetails || {};
+  const bank = agency?.bankDetails || kyc?.bankDetails || {};
+  const addressDetails = kyc?.addressDetails || agency?.addressDetails || {};
+  const currentAddress =
+    addressDetails?.currentAddress || addressDetails?.address || addressDetails || {};
+  const firstAddress = Array.isArray(agency?.addresses) ? agency.addresses?.[0] : null;
+
+  const mergedAddress = {
+    address:
+      personal?.address ||
+      currentAddress?.address ||
+      currentAddress?.street ||
+      firstAddress?.street ||
+      firstAddress?.address,
+    city: personal?.city || currentAddress?.city || firstAddress?.city,
+    state: personal?.state || currentAddress?.state || firstAddress?.state,
+    pinCode:
+      personal?.pinCode ||
+      personal?.pincode ||
+      currentAddress?.pinCode ||
+      currentAddress?.pincode ||
+      currentAddress?.postalCode ||
+      firstAddress?.pinCode ||
+      firstAddress?.pincode ||
+      firstAddress?.postalCode,
+  };
+
+  const docTypes = new Set<string>();
+  const kycDocuments = Array.isArray(kyc?.documents) ? kyc.documents : [];
+  const vaultDocuments = Array.isArray(agency?.digiLockerVault?.documents)
+    ? agency.digiLockerVault.documents
+    : [];
+  [...kycDocuments, ...vaultDocuments].forEach((doc: any) => {
+    if (!doc?.docType) return;
+    docTypes.add(String(doc.docType).toLowerCase().trim());
+  });
+
+  const checks = [
+    { key: "full_name", ok: hasMeaningfulValue(personal?.fullName || agency?.name) },
+    { key: "pan_number", ok: hasMeaningfulValue(personal?.panNumber) },
+    { key: "aadhaar_number", ok: hasMeaningfulValue(personal?.aadhaarNumber) },
+    { key: "mobile", ok: hasMeaningfulValue(personal?.mobile || agency?.mobile) },
+    { key: "email", ok: hasMeaningfulValue(personal?.email || agency?.email) },
+    { key: "address", ok: hasMeaningfulValue(mergedAddress.address) },
+    { key: "city", ok: hasMeaningfulValue(mergedAddress.city) },
+    { key: "state", ok: hasMeaningfulValue(mergedAddress.state) },
+    { key: "pin_code", ok: hasMeaningfulValue(mergedAddress.pinCode) },
+    { key: "business_name", ok: hasMeaningfulValue(employment?.employerName) },
+    { key: "business_address", ok: hasMeaningfulValue(employment?.companyAddress) },
+    { key: "total_experience", ok: hasMeaningfulValue(employment?.totalExperience) },
+    { key: "bank_holder", ok: hasMeaningfulValue(bank?.accountHolderName) },
+    { key: "bank_name", ok: hasMeaningfulValue(bank?.bankName) },
+    { key: "bank_account_type", ok: hasMeaningfulValue(bank?.accountType) },
+    { key: "bank_account_number", ok: hasMeaningfulValue(bank?.accountNumber) },
+    { key: "bank_ifsc", ok: hasMeaningfulValue(bank?.ifscCode) },
+    {
+      key: "cancelled_cheque",
+      ok:
+        hasMeaningfulValue(bank?.cancelledChequeUrl) ||
+        docTypes.has("cancelled_cheque"),
+    },
+    { key: "pan_document", ok: docTypes.has("pan_card") },
+    { key: "aadhaar_document", ok: docTypes.has("aadhaar_card") },
+  ];
+
+  const completedFields = checks.filter((item) => item.ok).length;
+  const totalFields = checks.length;
+  const completionPercent = totalFields
+    ? Math.round((completedFields / totalFields) * 100)
+    : 0;
+
+  return {
+    completedFields,
+    totalFields,
+    completionPercent,
+    missingFields: checks.filter((item) => !item.ok).map((item) => item.key),
+    isComplete: completedFields === totalFields,
+  };
+};
+
+const withAgencyProfileMeta = (agency: any) => {
+  const plain = agency?.toObject ? agency.toObject() : { ...(agency || {}) };
+  const profileCompletion = evaluateAgencyProfileCompletion(plain);
+  return {
+    ...plain,
+    agentProfileCompleted: profileCompletion.isComplete,
+    requiresKycCompletion: !profileCompletion.isComplete,
+    profileCompletion,
+  };
+};
+
 export class AgencyController {
   static async sendOtp(req: Request, res: Response, next: NextFunction) {
     try {
@@ -332,6 +466,12 @@ export class AgencyController {
       agency.refreshToken = refreshToken;
       await agency.save();
 
+      const completion = evaluateAgencyProfileCompletion(agency);
+      if (agency.agentProfileCompleted !== completion.isComplete) {
+        agency.agentProfileCompleted = completion.isComplete;
+        await agency.save();
+      }
+
       res.cookie("refreshToken", refreshToken, {
         httpOnly: true,
         sameSite: "strict",
@@ -352,6 +492,9 @@ export class AgencyController {
           name: agency.name,
           mobile: agency.mobile,
           parentAgency: agency.parentAgency,
+          agentProfileCompleted: completion.isComplete,
+          requiresKycCompletion: !completion.isComplete,
+          profileCompletion: completion,
         },
       });
     } catch (error) {
@@ -370,10 +513,17 @@ export class AgencyController {
       if (!agency)
         return res.status(404).json(new ApiError(404, "Agency not found"));
 
+      const payload = withAgencyProfileMeta(agency);
+      if (agency?.agentProfileCompleted !== payload.agentProfileCompleted) {
+        await Agency.findByIdAndUpdate(_id, {
+          agentProfileCompleted: payload.agentProfileCompleted,
+        });
+      }
+
       return res
         .status(200)
         .json(
-          new ApiResponse(200, agency, "Agency details fetched successfully"),
+          new ApiResponse(200, payload, "Agency details fetched successfully"),
         );
     } catch (error) {
       next(error);
@@ -574,7 +724,14 @@ export class AgencyController {
         parentAgency: _id,
         agreedToTerms: true,
         privacyPolicyAccepted: true,
-        status: UserStatus.PENDING_VERIFICATION,
+        status:
+          resolveAgencyStatusInput(
+            req.body.status ??
+              req.body.memberStatus ??
+              (typeof req.body.isActive === "boolean"
+                ? req.body.isActive
+                : undefined),
+          ) || UserStatus.ACTIVE,
         password: crypto.randomBytes(10).toString("hex"),
         notification: { sms: true, push: true, email: true, whatsapp: true },
         avatar: avatar || profilePicture,
@@ -673,8 +830,14 @@ export class AgencyController {
       if (personalDetails?.fullName) member.name = personalDetails.fullName;
       if (personalDetails?.email) member.email = personalDetails.email;
       if (personalDetails?.mobile) member.mobile = personalDetails.mobile;
-      if (req.body.status) {
-        member.status = req.body.status;
+      const resolvedStatus = resolveAgencyStatusInput(
+        req.body.status ??
+          req.body.memberStatus ??
+          req.body.active ??
+          req.body.isActive,
+      );
+      if (resolvedStatus) {
+        member.status = resolvedStatus;
       }
 
       const profilePicture = req.body.profilePicture?.[0]?.url;
@@ -812,6 +975,12 @@ export class AgencyController {
         },
         { populate: false },
       );
+      const completion = evaluateAgencyProfileCompletion(updatedAgency);
+      if (updatedAgency?.agentProfileCompleted !== completion.isComplete) {
+        await Agency.findByIdAndUpdate(_id, {
+          agentProfileCompleted: completion.isComplete,
+        });
+      }
 
       const sanitizedDocs = (
         updatedAgency.digiLockerVault?.documents || []
@@ -980,6 +1149,10 @@ export class AgencyController {
       const result = await agencyLeadsService.listLeads({
         agencyId,
         stage: stage as any,
+        productType:
+          typeof req.query?.productType === "string"
+            ? req.query.productType
+            : undefined,
         loanType,
         search,
         page,
@@ -1099,10 +1272,16 @@ export class AgencyController {
 
       const data: any = { ...req.body, avatar: avatar || profilePicture };
       const result = await agencyService.updateById(id || _id, data);
+      const enriched = withAgencyProfileMeta(result);
+      if (result?.agentProfileCompleted !== enriched.agentProfileCompleted) {
+        await Agency.findByIdAndUpdate(id || _id, {
+          agentProfileCompleted: enriched.agentProfileCompleted,
+        });
+      }
 
       return res
         .status(200)
-        .json(new ApiResponse(200, result, "Agency updated successfully"));
+        .json(new ApiResponse(200, enriched, "Agency updated successfully"));
     } catch (error) {
       next(error);
     }
@@ -1179,6 +1358,9 @@ export class AgencyController {
           ...bankDetails,
         };
       }
+      agency.agentProfileCompleted = evaluateAgencyProfileCompletion(
+        agency,
+      ).isComplete;
       await agency.save();
 
       return res

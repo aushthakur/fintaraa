@@ -535,6 +535,12 @@ export interface IUser extends Document {
   cibilRequestPayload?: Record<string, any>;
   cibilPdfLastFetchedAt?: Date;
   cibilPdfReport?: Record<string, any>;
+  experianScore?: number;
+  experianLastFetchedAt?: Date;
+  experianReport?: Record<string, any>;
+  cibilScoreCheckCredits?: number;
+  experianScoreCheckCredits?: number;
+  lastScorePurchaseAt?: Date;
   contactsSyncEnabled?: boolean;
 }
 
@@ -598,6 +604,12 @@ const UserSchema = new Schema<IUser>(
     cibilRequestPayload: { type: Object },
     cibilPdfLastFetchedAt: { type: Date },
     cibilPdfReport: { type: Object },
+    experianScore: { type: Number },
+    experianLastFetchedAt: { type: Date },
+    experianReport: { type: Object },
+    cibilScoreCheckCredits: { type: Number, default: 0 },
+    experianScoreCheckCredits: { type: Number, default: 0 },
+    lastScorePurchaseAt: { type: Date },
     contactsSyncEnabled: { type: Boolean, default: true },
     loginMethods: {
       type: [LoginMethodSchema],
