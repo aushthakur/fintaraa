@@ -4,6 +4,7 @@ import {
   fetchCibilReport,
   fetchCibilReportWithMiddleware,
   fetchEncryptedCibilReportController,
+  searchCustomerCreditScore,
   getCreditScorePricing,
   getCreditScoreWallet,
   purchaseCreditScoreCheck,
@@ -18,6 +19,7 @@ const router = Router();
 
 router.get("/pricing", asyncHandler(getCreditScorePricing));
 router.post("/fetch", asyncHandler(fetchCibilReport));
+router.post("/search", authenticateToken, asyncHandler(searchCustomerCreditScore));
 router.post("/user", authenticateToken, asyncHandler(fetchUserCibilReport));
 router.post(
   "/user/pdf",

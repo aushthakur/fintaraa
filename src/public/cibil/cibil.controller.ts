@@ -49,6 +49,14 @@ const extractScore = (report: any) =>
       report?.cibil_score,
   ) || 0;
 
+const extractCreditReportLink = (report: any) =>
+  report?.data?.credit_report_link ||
+  report?.data?.creditReportLink ||
+  report?.credit_report_link ||
+  report?.creditReportLink ||
+  report?.pdfUrl ||
+  null;
+
 const buildCibilPayloadFromActor = (actor: any) => {
   const kycPersonal = actor?.kycProfile?.personalDetails || {};
   return prepareSurepassCibilPayload({
@@ -441,6 +449,80 @@ export const fetchEncryptedCibilReportController = async (
         report: result.response,
         ...(encryptedScore ? { cibilScore: encryptedScore } : {}),
       }),
+    );
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const searchCustomerCreditScore = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const bureau = normalizeBureau(req.body?.bureau) || "cibil";
+    const payload = prepareSurepassCibilPayload({
+      name:
+        req.body?.apiName ||
+        req.body?.name ||
+        req.body?.customerName ||
+        req.body?.fullName,
+      mobile:
+        req.body?.mobile ||
+        req.body?.mobileNumber ||
+        req.body?.registeredMobileNumber,
+      pan: req.body?.pan || req.body?.panNumber || req.body?.panCard,
+      gender: req.body?.gender || req.body?.sex || "male",
+      consent: req.body?.consent || "Y",
+    });
+
+    const cibilReport = await fetchSurepassCibilReport(payload);
+    const cibilScore = extractScore(cibilReport.data);
+    const pdfReport = await fetchSurepassCibilPdfReport(payload).catch(
+      () => null,
+    );
+    const pdfLink =
+      extractCreditReportLink(pdfReport?.data) ||
+      extractCreditReportLink(cibilReport.data);
+
+    if (bureau === "experian") {
+      const experianScore = deriveExperianScore(
+        `${payload.pan}:${payload.mobile}:${payload.name}`,
+        cibilScore,
+      );
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            bureau,
+            payload,
+            cibilScore,
+            experianScore,
+            report: cibilReport.data,
+            pdfReport: pdfReport?.data || null,
+            pdfUrl: pdfLink,
+            note:
+              "Experian score is indicative until the partner feed is connected.",
+          },
+          "Customer bureau score fetched successfully",
+        ),
+      );
+    }
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          bureau,
+          payload,
+          cibilScore,
+          report: cibilReport.data,
+          pdfReport: pdfReport?.data || null,
+          pdfUrl: pdfLink,
+        },
+        "Customer bureau score fetched successfully",
+      ),
     );
   } catch (error) {
     return next(error);
