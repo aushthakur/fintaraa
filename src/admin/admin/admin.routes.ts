@@ -64,6 +64,13 @@ userRouter
     asyncHandler(AdminController.deleteLanderById)
   );
 
+userRouter.put(
+  "/lander/:id/password",
+  authenticateToken,
+  authorize("admin"),
+  asyncHandler(AdminController.updateLanderPassword)
+);
+
 // ==================== AGENT ROUTES ====================
 // Public route - Agent login (must be before /:id route)
 userRouter.post("/agent/login", asyncHandler(AdminController.loginAgent));
@@ -75,6 +82,18 @@ userRouter.get(
 );
 
 // Admin routes (parameterized routes must come last)
+userRouter.put(
+  "/:id/status",
+  authenticateToken,
+  authorize("admin"),
+  asyncHandler(AdminController.updateAdminStatus)
+);
+userRouter.put(
+  "/:id/password",
+  authenticateToken,
+  authorize("admin"),
+  asyncHandler(AdminController.updateAdminPassword)
+);
 userRouter
   .route("/:id")
   .get(asyncHandler(AdminController.getAdminById)) // GET /:id

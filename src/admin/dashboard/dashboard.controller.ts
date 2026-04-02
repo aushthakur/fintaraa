@@ -12,6 +12,11 @@ import { Contest } from "../../modals/contest.model";
 import { BankProduct } from "../../modals/bankProduct.model";
 import type { DashboardOverviewResponse, TimeSeriesPoint } from "./dashboard.types";
 import type { AdvancedDashboardMetrics } from "./dashboardAdvanced.types";
+import {
+  buildDateRangeInTimeZone,
+  formatDateInTimeZone,
+  DEFAULT_QUERY_TIMEZONE,
+} from "../../utils/helper";
 
 const SUPPORT_TICKET_STATUSES = [
   "open",
@@ -25,46 +30,37 @@ const SUPPORT_TICKET_STATUSES = [
 const roundToTwo = (value: number): number =>
   Number.isFinite(value) ? Math.round(value * 100) / 100 : 0;
 
-const startOfDayUTC = (d: Date) => {
-  const x = new Date(d);
-  x.setUTCHours(0, 0, 0, 0);
-  return x;
+const nextDateKey = (dateKey: string) => {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + 1))
+    .toISOString()
+    .slice(0, 10);
 };
 
-const endOfDayUTC = (d: Date) => {
-  const x = new Date(d);
-  x.setUTCHours(23, 59, 59, 999);
-  return x;
-};
-
-const eachDayUTC = (start: Date, end: Date) => {
-  const days: Date[] = [];
-  let cur = startOfDayUTC(start);
-  const last = startOfDayUTC(end);
-  while (cur.getTime() <= last.getTime()) {
-    days.push(new Date(cur));
-    cur.setUTCDate(cur.getUTCDate() + 1);
+const eachDayKey = (start: Date, end: Date, timeZone: string) => {
+  const days: string[] = [];
+  let cur = formatDateInTimeZone(start, timeZone);
+  const last = formatDateInTimeZone(end, timeZone);
+  while (cur <= last) {
+    days.push(cur);
+    cur = nextDateKey(cur);
   }
   return days;
 };
-
-const toISODate = (d: Date) => d.toISOString().slice(0, 10);
 
 export class DashboardController {
   static async getOverview(req: Request, res: Response, next: NextFunction) {
     try {
       const { startDate, endDate, timezone } = req.query;
-
-      const now = new Date();
-      const end = endOfDayUTC(
-        typeof endDate === "string" && endDate.trim() ? new Date(endDate) : now
-      );
-      const startDefault = new Date(end);
-      startDefault.setUTCDate(startDefault.getUTCDate() - 29);
-      const start = startOfDayUTC(
-        typeof startDate === "string" && startDate.trim()
-          ? new Date(startDate)
-          : startDefault
+      const timeZone =
+        typeof timezone === "string" && timezone.trim()
+          ? timezone.trim()
+          : DEFAULT_QUERY_TIMEZONE;
+      const { start, end } = buildDateRangeInTimeZone(
+        startDate,
+        endDate,
+        30,
+        timeZone,
       );
 
       const startTs = start.getTime();
@@ -76,8 +72,7 @@ export class DashboardController {
         });
       }
 
-      const days = eachDayUTC(start, end);
-      const dateKeys = days.map(toISODate);
+      const dateKeys = eachDayKey(start, end, timeZone);
 
       const [
         usersAgg,
@@ -118,15 +113,16 @@ export class DashboardController {
             },
           },
           {
-            $group: {
-              _id: {
-                $dateToString: {
-                  format: "%Y-%m-%d",
-                  date: "$createdAt",
+              $group: {
+                _id: {
+                  $dateToString: {
+                    format: "%Y-%m-%d",
+                    date: "$createdAt",
+                    timezone: timeZone,
+                  },
                 },
+                count: { $sum: 1 },
               },
-              count: { $sum: 1 },
-            },
           },
         ]),
         LoanQuery.aggregate([
@@ -136,15 +132,16 @@ export class DashboardController {
             },
           },
           {
-            $group: {
-              _id: {
-                $dateToString: {
-                  format: "%Y-%m-%d",
-                  date: "$createdAt",
+              $group: {
+                _id: {
+                  $dateToString: {
+                    format: "%Y-%m-%d",
+                    date: "$createdAt",
+                    timezone: timeZone,
+                  },
                 },
+                count: { $sum: 1 },
               },
-              count: { $sum: 1 },
-            },
           },
         ]),
         InsuranceQuery.aggregate([
@@ -154,15 +151,16 @@ export class DashboardController {
             },
           },
           {
-            $group: {
-              _id: {
-                $dateToString: {
-                  format: "%Y-%m-%d",
-                  date: "$createdAt",
+              $group: {
+                _id: {
+                  $dateToString: {
+                    format: "%Y-%m-%d",
+                    date: "$createdAt",
+                    timezone: timeZone,
+                  },
                 },
+                count: { $sum: 1 },
               },
-              count: { $sum: 1 },
-            },
           },
         ]),
         User.find({})
@@ -357,7 +355,7 @@ export class DashboardController {
         range: {
           startDate: start.toISOString(),
           endDate: end.toISOString(),
-          timezone: typeof timezone === "string" ? timezone : "UTC",
+          timezone: timeZone,
         },
         graphs: {
           newUsers: seriesUsers,
@@ -416,40 +414,22 @@ export class DashboardController {
     try {
       const { startDate, endDate, assigneeId } = req.query;
 
-      const parseDate = (value: unknown, fallback: Date) => {
-        if (typeof value === "string" && value.trim()) {
-          const parsed = new Date(value);
-          if (!Number.isNaN(parsed.getTime())) {
-            return parsed;
-          }
-        }
-        return fallback;
-      };
-
-      const defaultEnd = new Date();
-      const end = parseDate(endDate, defaultEnd);
-      end.setHours(23, 59, 59, 999);
-
-      const defaultStart = new Date(end);
-      defaultStart.setDate(defaultStart.getDate() - 7);
-      defaultStart.setHours(0, 0, 0, 0);
-
-      const start = parseDate(startDate, defaultStart);
-      start.setHours(0, 0, 0, 0);
+      const { start, end } = buildDateRangeInTimeZone(
+        startDate,
+        endDate,
+        8,
+        DEFAULT_QUERY_TIMEZONE,
+      );
 
       if (start > end) {
         const temp = new Date(start);
         start.setTime(end.getTime());
         end.setTime(temp.getTime());
-        start.setHours(0, 0, 0, 0);
-        end.setHours(23, 59, 59, 999);
       }
 
       const duration = Math.max(end.getTime() - start.getTime(), 0);
       const prevEnd = new Date(start.getTime() - 1);
-      prevEnd.setHours(23, 59, 59, 999);
       const prevStart = new Date(prevEnd.getTime() - duration);
-      prevStart.setHours(0, 0, 0, 0);
 
       const buildMatchStage = (rangeStart: Date, rangeEnd: Date) => {
         const match: Record<string, any> = {

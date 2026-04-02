@@ -1239,18 +1239,19 @@ export class UserController {
       await otpDoc.save();
 
       let user: any = await User.findOne({ mobile });
+      const accountExisted = Boolean(user);
 
-      // If user doesn't exist, create one (requires email)
+      // If user doesn't exist, create a minimal account so the verified phone
+      // can continue through the onboarding flow without requesting OTP again.
       if (!user) {
-        if (!email) {
-          return res.status(400).json({
-            success: false,
-            message: "Email is required for new user registration",
-          });
-        }
+        const providedEmail = String(email || "").trim().toLowerCase();
+        const fallbackEmail = `${mobile}@mobile.fintaraa.local`;
+        const nextEmail = providedEmail || fallbackEmail;
 
-        // Check if email is already taken
-        const emailTaken = await User.findOne({ email: email.toLowerCase() });
+        // Check if email is already taken when a real email is provided
+        const emailTaken = providedEmail
+          ? await User.findOne({ email: providedEmail })
+          : null;
         if (emailTaken) {
           return res.status(400).json({
             success: false,
@@ -1262,7 +1263,7 @@ export class UserController {
         const referralCode = await generateReferralCode();
         user = await User.create({
           mobile,
-          email: email.toLowerCase(),
+          email: nextEmail,
           name: name || `User ${mobile.slice(-4)}`,
           role: "user",
           agreedToTerms: true,
@@ -1305,6 +1306,11 @@ export class UserController {
         message: "OTP verified successfully. Login complete.",
         token: accessToken,
         user,
+        accountExisted,
+        needsProfileCompletion:
+          !user?.name ||
+          String(user?.name || "").toLowerCase().startsWith("user ") ||
+          !user?.panCard,
       });
     } catch (error) {
       next(error);

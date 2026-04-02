@@ -18,41 +18,24 @@ import { User } from "../../modals/user.model";
 import { Agency } from "../../modals/agency.model";
 import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
 import Admin from "../../modals/admin.model";
+import {
+  DEFAULT_QUERY_TIMEZONE,
+  buildDateRangeInTimeZone,
+} from "../../utils/helper";
 
 const insuranceQueryService = new CommonService(InsuranceQuery);
-
-const parseDateInput = (value?: any) => {
-  if (!value) return null;
-  const parsed = new Date(String(value));
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-};
-
-const startOfDay = (d: Date) => {
-  const next = new Date(d);
-  next.setHours(0, 0, 0, 0);
-  return next;
-};
-
-const endOfDay = (d: Date) => {
-  const next = new Date(d);
-  next.setHours(23, 59, 59, 999);
-  return next;
-};
 
 const resolveDateRange = (
   startRaw: any,
   endRaw: any,
   days: number = 7,
 ) => {
-  const now = new Date();
-  const end = endOfDay(parseDateInput(endRaw) || now);
-  const startParsed = parseDateInput(startRaw);
-  if (startParsed) {
-    return { start: startOfDay(startParsed), end };
-  }
-  const start = new Date(end);
-  start.setDate(start.getDate() - (days - 1));
-  return { start: startOfDay(start), end };
+  return buildDateRangeInTimeZone(
+    startRaw,
+    endRaw,
+    days,
+    DEFAULT_QUERY_TIMEZONE,
+  );
 };
 
 // Helper function to extract URL from uploaded file object

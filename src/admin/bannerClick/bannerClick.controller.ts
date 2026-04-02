@@ -3,6 +3,10 @@ import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
 import { BannerClick } from "../../modals/bannerClick.model";
 import { AppBanner } from "../../modals/appBanner.model";
+import {
+  DEFAULT_QUERY_TIMEZONE,
+  parseDateInTimeZone,
+} from "../../utils/helper";
 
 interface DateRange {
   start?: Date;
@@ -50,10 +54,18 @@ export class BannerClickController {
       // Date range filter
       const dateRange: DateRange = {};
       if (startDate) {
-        dateRange.start = new Date(startDate as string);
+        dateRange.start = parseDateInTimeZone(
+          startDate,
+          "start",
+          DEFAULT_QUERY_TIMEZONE,
+        ) || undefined;
       }
       if (endDate) {
-        dateRange.end = new Date(endDate as string);
+        dateRange.end = parseDateInTimeZone(
+          endDate,
+          "end",
+          DEFAULT_QUERY_TIMEZONE,
+        ) || undefined;
       }
 
       if (dateRange.start || dateRange.end) {
@@ -129,10 +141,20 @@ export class BannerClickController {
       if (startDate || endDate) {
         matchStage.createdAt = {};
         if (startDate) {
-          (matchStage.createdAt as any).$gte = new Date(startDate as string);
+          const parsedStart = parseDateInTimeZone(
+            startDate,
+            "start",
+            DEFAULT_QUERY_TIMEZONE,
+          );
+          if (parsedStart) (matchStage.createdAt as any).$gte = parsedStart;
         }
         if (endDate) {
-          (matchStage.createdAt as any).$lte = new Date(endDate as string);
+          const parsedEnd = parseDateInTimeZone(
+            endDate,
+            "end",
+            DEFAULT_QUERY_TIMEZONE,
+          );
+          if (parsedEnd) (matchStage.createdAt as any).$lte = parsedEnd;
         }
       }
 

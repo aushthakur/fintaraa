@@ -1,6 +1,15 @@
 import { LoanType } from "../modals/loanquery.model";
 
 const LOAN_TYPE_SET = new Set(Object.values(LoanType));
+const LOAN_TYPE_ALIAS_MAP: Record<string, LoanType> = {
+  two_wheeler_loan: LoanType.VEHICLE_LOAN,
+  used_car_loan: LoanType.VEHICLE_LOAN,
+  agriculture_loan: LoanType.BUSINESS_LOAN,
+  top_up_loan: LoanType.PERSONAL_LOAN,
+  balance_transfer_loan: LoanType.PERSONAL_LOAN,
+  loan_against_car_value: LoanType.LOAN_AGAINST_CAR,
+  construction_loan: LoanType.HOME_LOAN,
+};
 
 const normalizeInput = (value: string) => {
   const withUnderscores = value.replace(/([a-z0-9])([A-Z])/g, "$1_$2");
@@ -17,5 +26,19 @@ export const normalizeLoanType = (value?: string) => {
   if (!raw) return undefined;
   const normalized = normalizeInput(raw);
   if (LOAN_TYPE_SET.has(normalized as LoanType)) return normalized;
-  return undefined;
+  return LOAN_TYPE_ALIAS_MAP[normalized];
+};
+
+export const getLoanTypeMatchValues = (value?: string) => {
+  const resolvedLoanType = normalizeLoanType(value);
+  if (!resolvedLoanType) return [];
+
+  const matchValues = new Set<string>([resolvedLoanType]);
+  Object.entries(LOAN_TYPE_ALIAS_MAP).forEach(([alias, canonical]) => {
+    if (canonical === resolvedLoanType) {
+      matchValues.add(alias);
+    }
+  });
+
+  return Array.from(matchValues);
 };

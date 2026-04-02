@@ -143,6 +143,11 @@ export const config = {
       defaultCountryCode: process.env.INTERAKT_DEFAULT_COUNTRY_CODE || "+91",
       timeoutMs: Number(process.env.INTERAKT_TIMEOUT_MS || 10000),
     },
+    googleTranslate: {
+      apiKey: process.env.GOOGLE_TRANSLATE_API_KEY || "",
+      defaultSourceLanguage:
+        process.env.GOOGLE_TRANSLATE_SOURCE_LANGUAGE || "auto",
+    },
     zapier: {
       signingSecret: process.env.ZAPIER_SIGNING_SECRET || "",
       webhookKey: process.env.ZAPIER_WEBHOOK_KEY || "",

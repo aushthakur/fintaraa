@@ -160,6 +160,41 @@ export class AdminController {
     }
   }
 
+  static async updateAdminPassword(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<any> {
+    try {
+      const { id } = req.params;
+      const password = String(req.body?.password || "").trim();
+
+      if (!password) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Password is required" });
+      }
+
+      const user = await Admin.findById(id);
+      if (!user) {
+        return res
+          .status(404)
+          .json({ success: false, message: "User not found" });
+      }
+
+      user.password = password;
+      user.refreshToken = "";
+      await user.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Password updated successfully",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async getAllAdmins(
     req: Request,
     res: Response,
@@ -179,7 +214,9 @@ export class AdminController {
           $project: {
             _id: 1,
             email: 1,
-            status: 1,
+            status: {
+              $cond: [{ $eq: ["$status", true] }, "active", "inactive"],
+            },
             username: 1,
             name: 1,
             mobile: 1,
@@ -252,7 +289,7 @@ export class AdminController {
       const user = await AdminController.getUserById(userId);
 
       if (!user) {
-        res.status(404).json({ message: "User not found" });
+        res.status(404).json({ message: "User not found or inactive" });
         return; // Returning to prevent further execution
       }
 
@@ -346,7 +383,8 @@ export class AdminController {
    * Get user details by user ID
    */
   static async getUserById(userId: string) {
-    const user = await Admin.findById({ _id: userId, status: true }).populate("role");
+    const user = await Admin.findById(userId).populate("role");
+    if (!user || user.status === false) return null;
     return user;
   }
 
@@ -441,6 +479,7 @@ export class AdminController {
 
     const user: any = await Admin.findOne({ email }).populate("role");
     if (!user) throw new Error("User not found with this email");
+    if (user.status === false) throw new Error("Your account is inactive");
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) throw new Error("Password is incorrect");
@@ -462,6 +501,37 @@ export class AdminController {
       token: accessToken,
       message: "Login successful",
     };
+  }
+
+  static async updateAdminStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<any> {
+    try {
+      const { id } = req.params;
+      const statusValue = AdminController.parseBoolean(req.body?.status, true);
+
+      const user = await Admin.findById(id);
+      if (!user) {
+        return res
+          .status(404)
+          .json({ success: false, message: "User not found" });
+      }
+
+      user.status = statusValue as any;
+      if (!statusValue) {
+        user.refreshToken = "";
+      }
+      await user.save();
+
+      return res.status(200).json({
+        success: true,
+        message: `User ${statusValue ? "activated" : "deactivated"} successfully`,
+      });
+    } catch (error) {
+      next(error);
+    }
   }
 
   // ==================== LANDER CRUD OPERATIONS ====================
@@ -717,6 +787,41 @@ export class AdminController {
         .json(new ApiResponse(200, landerWithoutPassword, "Lander updated successfully"));
     } catch (err) {
       next(err);
+    }
+  }
+
+  static async updateLanderPassword(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<any> {
+    try {
+      const { id } = req.params;
+      const password = String(req.body?.password || "").trim();
+
+      if (!password) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Password is required" });
+      }
+
+      const lander = await Lander.findById(id);
+      if (!lander) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Lander not found" });
+      }
+
+      lander.password = password;
+      lander.refreshToken = "";
+      await lander.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Password updated successfully",
+      });
+    } catch (error) {
+      next(error);
     }
   }
 

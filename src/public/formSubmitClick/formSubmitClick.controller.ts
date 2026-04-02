@@ -6,20 +6,22 @@ import { FormSubmitClick, IFormSubmitClick } from "../../modals/formSubmitClick.
 import { Agency } from "../../modals/agency.model";
 import { User } from "../../modals/user.model";
 import { CommonService } from "../../services/common.services";
+import {
+  DEFAULT_QUERY_TIMEZONE,
+  buildDateRangeInTimeZone,
+} from "../../utils/helper";
 
 const FormSubmitClickService = new CommonService<IFormSubmitClick>(
   FormSubmitClick as any
 );
 
 const buildDateRange = (startDate?: string, endDate?: string) => {
-  const now = new Date();
-  const end = endDate ? new Date(endDate) : now;
-  const start = startDate
-    ? new Date(startDate)
-    : new Date(end.getTime() - 29 * 24 * 60 * 60 * 1000);
-  start.setHours(0, 0, 0, 0);
-  end.setHours(23, 59, 59, 999);
-  return { start, end };
+  return buildDateRangeInTimeZone(
+    startDate,
+    endDate,
+    30,
+    DEFAULT_QUERY_TIMEZONE,
+  );
 };
 
 const asTrimmedString = (value: unknown): string | undefined => {

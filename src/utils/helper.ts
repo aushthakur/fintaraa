@@ -3,6 +3,155 @@ import { toBoolean } from "validator";
 import { deleteFromS3 } from "../config/s3Uploader";
 
 const { ObjectId } = mongoose.Types;
+export const DEFAULT_QUERY_TIMEZONE = "Asia/Kolkata";
+
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const pad2 = (value: number) => String(value).padStart(2, "0");
+
+const getTimeZoneParts = (date: Date, timeZone = DEFAULT_QUERY_TIMEZONE) => {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+
+  const parts = formatter.formatToParts(date).reduce<Record<string, string>>(
+    (acc, part) => {
+      if (part.type !== "literal") acc[part.type] = part.value;
+      return acc;
+    },
+    {},
+  );
+
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+  };
+};
+
+const zonedTimeToUtc = (
+  parts: {
+    year: number;
+    month: number;
+    day: number;
+    hour: number;
+    minute: number;
+    second: number;
+    millisecond?: number;
+  },
+  timeZone = DEFAULT_QUERY_TIMEZONE,
+) => {
+  let utcGuess = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+    parts.millisecond ?? 0,
+  );
+
+  for (let i = 0; i < 2; i += 1) {
+    const zonedParts = getTimeZoneParts(new Date(utcGuess), timeZone);
+    const zonedAsUtc = Date.UTC(
+      zonedParts.year,
+      zonedParts.month - 1,
+      zonedParts.day,
+      zonedParts.hour,
+      zonedParts.minute,
+      zonedParts.second,
+      parts.millisecond ?? 0,
+    );
+    const offset = zonedAsUtc - utcGuess;
+    if (offset === 0) break;
+    utcGuess -= offset;
+  }
+
+  return new Date(utcGuess);
+};
+
+export const formatDateInTimeZone = (
+  date: Date,
+  timeZone = DEFAULT_QUERY_TIMEZONE,
+) => {
+  const parts = getTimeZoneParts(date, timeZone);
+  return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}`;
+};
+
+export const parseDateInTimeZone = (
+  value: unknown,
+  boundary: "start" | "end" = "start",
+  timeZone = DEFAULT_QUERY_TIMEZONE,
+) => {
+  if (value === null || value === undefined || value === "") return null;
+  if (value instanceof Date) return new Date(value);
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  if (DATE_ONLY_PATTERN.test(raw)) {
+    const [year, month, day] = raw.split("-").map(Number);
+    return zonedTimeToUtc(
+      {
+        year,
+        month,
+        day,
+        hour: boundary === "start" ? 0 : 23,
+        minute: boundary === "start" ? 0 : 59,
+        second: boundary === "start" ? 0 : 59,
+        millisecond: boundary === "start" ? 0 : 999,
+      },
+      timeZone,
+    );
+  }
+
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+export const buildDateRangeInTimeZone = (
+  startRaw: unknown,
+  endRaw: unknown,
+  days = 30,
+  timeZone = DEFAULT_QUERY_TIMEZONE,
+) => {
+  const now = new Date();
+  const end =
+    parseDateInTimeZone(endRaw, "end", timeZone) ||
+    parseDateInTimeZone(formatDateInTimeZone(now, timeZone), "end", timeZone) ||
+    now;
+
+  const startParsed = parseDateInTimeZone(startRaw, "start", timeZone);
+  if (startParsed) {
+    return { start: startParsed, end };
+  }
+
+  const endParts = getTimeZoneParts(end, timeZone);
+  const start = zonedTimeToUtc(
+    {
+      year: endParts.year,
+      month: endParts.month,
+      day: endParts.day - (days - 1),
+      hour: 0,
+      minute: 0,
+      second: 0,
+      millisecond: 0,
+    },
+    timeZone,
+  );
+
+  return { start, end };
+};
 
 /**
  * @param {Record<string, any>} query - Query filters with pagination, search, projection, sort
@@ -284,8 +433,8 @@ export const getPipeline = (
 
   if (startDateFilter || endDateFilter) {
     const createdAtRange: any = {};
-    const parsedStart = parseValue(startDateFilter);
-    const parsedEnd = parseValue(endDateFilter);
+    const parsedStart = parseDateInTimeZone(startDateFilter, "start");
+    const parsedEnd = parseDateInTimeZone(endDateFilter, "end");
     if (parsedStart) createdAtRange.$gte = parsedStart;
     if (parsedEnd) createdAtRange.$lte = parsedEnd;
     if (Object.keys(createdAtRange).length > 0) {

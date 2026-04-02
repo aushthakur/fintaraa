@@ -17,7 +17,13 @@ import { Request, Response, NextFunction } from "express";
 import { UserType } from "../../modals/notification.model";
 import { emitSupportMessage } from "../../config/socket.io";
 import { CommonService } from "../../services/common.services";
-import { convertToObjectId, extractImageUrl } from "../../utils/helper";
+import {
+  DEFAULT_QUERY_TIMEZONE,
+  buildDateRangeInTimeZone,
+  convertToObjectId,
+  extractImageUrl,
+  formatDateInTimeZone,
+} from "../../utils/helper";
 import { sendSingleNotification } from "../../services/notification.service";
 import { Types } from "mongoose";
 
@@ -282,11 +288,16 @@ export const createTicket = async (
         );
     }
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0); // set to start of the day
-
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999); // set to end of the day
+    const todayKey = formatDateInTimeZone(
+      new Date(),
+      DEFAULT_QUERY_TIMEZONE,
+    );
+    const { start: todayStart, end: todayEnd } = buildDateRangeInTimeZone(
+      todayKey,
+      todayKey,
+      1,
+      DEFAULT_QUERY_TIMEZONE,
+    );
 
     const result = await Ticket.aggregate([
       {
@@ -346,6 +357,52 @@ export const createTicket = async (
           error?.message || error
         }`,
       );
+    }
+    if (tagList.includes("callback_request")) {
+      try {
+        const admins = await Admin.find({ role: { $in: ["admin", "manager"] } })
+          .select("_id")
+          .lean();
+        const adminIds = admins.map((admin) => admin._id.toString());
+        const callbackContext = {
+          ticketId: ticket._id.toString(),
+          callbackTime: new Date().toLocaleString(),
+        };
+        if (assignment.assigned && (assignment as any).agent?._id) {
+          await sendSingleNotification({
+            type: "ticket-created",
+            toUserId: (assignment as any).agent._id.toString(),
+            toRole: UserType.AGENT,
+            fromUser: { _id: id.toString(), role: resolveNotificationRole(role) },
+            context: callbackContext,
+            direction: "sender",
+          });
+        }
+        await Promise.all(
+          adminIds.map((adminId) =>
+            sendSingleNotification({
+              type: "ticket-created",
+              toUserId: adminId,
+              toRole: UserType.ADMIN,
+              fromUser: { _id: id.toString(), role: resolveNotificationRole(role) },
+              context: callbackContext,
+              direction: "sender",
+            }).catch((error) => {
+              console.log(
+                `[Notification] Failed to send callback ticket to ${adminId}: ${
+                  error?.message || error
+                }`,
+              );
+            }),
+          ),
+        );
+      } catch (error: any) {
+        console.log(
+          `[Notification] Failed to fan out callback ticket: ${
+            error?.message || error
+          }`,
+        );
+      }
     }
 
     return res.status(201).json({
@@ -1214,6 +1271,8 @@ export const updateAgent = async (
     if (typeof updatePayload.password === "string") {
       if (updatePayload.password.trim().length === 0) {
         delete updatePayload.password;
+      } else {
+        updatePayload.refreshToken = "";
       }
     }
     if (typeof updatePayload.password === "undefined") {

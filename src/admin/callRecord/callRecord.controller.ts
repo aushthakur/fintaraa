@@ -6,11 +6,17 @@ import { CallRecord, ICallRecord } from "../../modals/callRecord.model";
 import Agent from "../../modals/agent.model";
 import { sendSingleNotification } from "../../services/notification.service";
 import { UserType } from "../../modals/notification.model";
-import { User } from "../../modals/user.model";
+import { Gender, User, UserStatus } from "../../modals/user.model";
 import { LoanQuery } from "../../modals/loanquery.model";
 import { Agency } from "../../modals/agency.model";
 import Lead, { LeadConnectorType } from "../../modals/lead.model";
 import { leadManagementService } from "../../services/leadManagement.service";
+import { getLoanTypeMatchValues, normalizeLoanType } from "../../utils/loanType";
+import {
+  DEFAULT_QUERY_TIMEZONE,
+  formatDateInTimeZone,
+  parseDateInTimeZone,
+} from "../../utils/helper";
 
 const CallRecordService = new CommonService<ICallRecord>(CallRecord as any);
 
@@ -169,10 +175,19 @@ const getFollowUpBucketFilter = (
   if (!bucket) return null;
 
   const now = new Date();
-  const startOfToday = new Date(now);
-  startOfToday.setHours(0, 0, 0, 0);
-  const endOfToday = new Date(now);
-  endOfToday.setHours(23, 59, 59, 999);
+  const todayKey = formatDateInTimeZone(now, DEFAULT_QUERY_TIMEZONE);
+  const startOfToday = parseDateInTimeZone(
+    todayKey,
+    "start",
+    DEFAULT_QUERY_TIMEZONE,
+  );
+  const endOfToday = parseDateInTimeZone(
+    todayKey,
+    "end",
+    DEFAULT_QUERY_TIMEZONE,
+  );
+
+  if (!startOfToday || !endOfToday) return null;
 
   if (bucket === "today") {
     return {
@@ -206,35 +221,16 @@ const getFollowUpBucketFilter = (
   return null;
 };
 
-// Map productService values to loan types
-const loanProductToLoanType: Record<string, string> = {
-  personal_loan: "personal_loan",
-  instant_loan: "instant_loan",
-  home_loan: "home_loan",
-  business_loan: "business_loan",
-  vehicle_loan: "vehicle_loan",
-  two_wheeler_loan: "two_wheeler_loan",
-  used_car_loan: "used_car_loan",
-  education_loan: "education_loan",
-  agriculture_loan: "agriculture_loan",
-  gold_loan: "gold_loan",
-  renovation_loan: "renovation_loan",
-  loan_against_property: "loan_against_property",
-  loan_against_security: "loan_against_security",
-  working_capital_loan: "working_capital_loan",
-  top_up_loan: "top_up_loan",
-  balance_transfer_loan: "balance_transfer_loan",
-  loan_against_car: "loan_against_car",
-};
-
 // Check if product is a loan type
-const isLoanProduct = (productService: string): boolean => {
-  return !!loanProductToLoanType[productService];
+const isLoanProduct = (productService?: string): boolean => {
+  return !!normalizeLoanType(productService);
 };
 
 // Create loan query from call record data
 const createLoanQueryFromCallRecord = async (
   callRecord: ICallRecord,
+  context?: Record<string, any>,
+  lead?: any,
 ): Promise<any> => {
   try {
     const phoneNumber = callRecord.phoneNumber;
@@ -247,17 +243,76 @@ const createLoanQueryFromCallRecord = async (
         ? normalizedPhone.slice(-10)
         : normalizedPhone;
 
-    // Find user by mobile
-    const user = await User.findOne({
-      mobile: { $regex: searchPhone, $options: "i" },
-    });
-    if (!user) {
-      console.log("[CallRecord] No user found for phone:", phoneNumber);
-      return null;
+    const loanType = normalizeLoanType(callRecord.productService);
+    if (!loanType) return null;
+
+    const normalizedLoanContext = context || {};
+    const contextQueryId = String(
+      normalizedLoanContext.queryId ||
+        normalizedLoanContext.loanQueryId ||
+        normalizedLoanContext.id ||
+        "",
+    ).trim();
+    if (contextQueryId) {
+      const existingById = await LoanQuery.findById(contextQueryId);
+      if (existingById) return existingById;
     }
 
-    const loanType = loanProductToLoanType[callRecord.productService as any];
-    if (!loanType) return null;
+    const existingByContact = await LoanQuery.findOne({
+      loanType,
+      status: { $nin: ["completed", "approved", "cancelled"] },
+      $or: [
+        { mobile: { $regex: searchPhone, $options: "i" } },
+        { mobile: phoneNumber },
+        ...(normalizedLoanContext.email
+          ? [{ email: String(normalizedLoanContext.email).trim().toLowerCase() }]
+          : []),
+      ],
+    });
+    if (existingByContact) return existingByContact;
+
+    const findOrCreateUser = async () => {
+      if (lead?.borrowerProfile) {
+        const borrowerByLead = await User.findById(lead.borrowerProfile);
+        if (borrowerByLead) return borrowerByLead;
+      }
+      if (normalizedLoanContext.customerId) {
+        const customerId = String(normalizedLoanContext.customerId).trim();
+        if (customerId) {
+          const borrowerByContext = await User.findById(customerId);
+          if (borrowerByContext) return borrowerByContext;
+        }
+      }
+
+      const lookup = [
+        { mobile: { $regex: searchPhone, $options: "i" } },
+        { mobile: phoneNumber },
+      ];
+      const existingUser = await User.findOne({ $or: lookup });
+      if (existingUser) return existingUser;
+
+      const fallbackEmail = `${searchPhone || normalizePhoneDigits(phoneNumber)}@lead.auto`;
+      const fallbackName =
+        `${callRecord.firstName || lead?.fullName || ""} ${callRecord.lastName || ""}`.trim() ||
+        `Lead ${searchPhone.slice(-4) || phoneNumber.slice(-4)}`;
+
+      const createdUser = new User({
+        name: fallbackName,
+        email: fallbackEmail,
+        mobile: phoneNumber,
+        role: "user",
+        agreedToTerms: true,
+        privacyPolicyAccepted: true,
+        gender: Gender.PREFER_NOT_TO_SAY,
+        status: UserStatus.PENDING_VERIFICATION,
+      } as any);
+
+      await createdUser.save();
+      console.log("[CallRecord] Created fallback borrower profile for phone:", phoneNumber);
+      return createdUser;
+    };
+
+    const user = await findOrCreateUser();
 
     // Check if loan query already exists for this user and loan type
     const existingQuery = await LoanQuery.findOne({
@@ -275,12 +330,149 @@ const createLoanQueryFromCallRecord = async (
       return existingQuery;
     }
 
+    const firstName =
+      String(normalizedLoanContext.firstName || callRecord.firstName || "")
+        .trim() || "Unknown";
+    const lastName =
+      String(normalizedLoanContext.lastName || callRecord.lastName || "")
+        .trim() || "Lead";
+    const email =
+      String(
+        normalizedLoanContext.email ||
+          callRecord.email ||
+          lead?.email ||
+          `${searchPhone || normalizePhoneDigits(phoneNumber)}@lead.auto`,
+      )
+        .trim()
+        .toLowerCase() || `${searchPhone || normalizePhoneDigits(phoneNumber)}@lead.auto`;
+    const resolvedLoanAmount = Number(
+      normalizedLoanContext.loanAmount ?? callRecord.loanAmount ?? lead?.loanAmount ?? 0,
+    );
+    const resolvedLoanAmountValue = Number.isFinite(resolvedLoanAmount)
+      ? resolvedLoanAmount
+      : 0;
+    const resolvedMobile = String(
+      normalizedLoanContext.mobile || phoneNumber || callRecord.phoneNumber,
+    ).trim();
+    const resolvedCity =
+      String(normalizedLoanContext.city || callRecord.city || lead?.location?.city || "Unknown")
+        .trim() || "Unknown";
+    const resolvedState =
+      String(normalizedLoanContext.state || callRecord.state || lead?.location?.state || "Unknown")
+        .trim() || "Unknown";
+    const resolvedPincode =
+      String(
+        normalizedLoanContext.pincode ||
+          callRecord.pincode ||
+          lead?.location?.pincode ||
+          "000000",
+      ).trim() || "000000";
+    const resolvedStreet =
+      String(
+        normalizedLoanContext.street ||
+          normalizedLoanContext.address ||
+          callRecord.address ||
+          "Not Provided",
+      ).trim() || "Not Provided";
+    const resolvedEmploymentType =
+      String(
+        normalizedLoanContext.employmentType ||
+          lead?.employmentType ||
+          "self_employed",
+      )
+        .trim()
+        .toLowerCase() || "self_employed";
+    const resolvedMonthlyIncome = Number(
+      normalizedLoanContext.monthlyIncome ?? lead?.monthlyIncome ?? resolvedLoanAmountValue,
+    );
+    const resolvedCompanyName =
+      String(
+        normalizedLoanContext.companyName ||
+          lead?.companyName ||
+          callRecord.dataSource ||
+          "Not Provided",
+      ).trim() || "Not Provided";
+    const resolvedOfficeAddress =
+      String(
+        normalizedLoanContext.officeAddress ||
+          [resolvedStreet, resolvedCity, resolvedState]
+            .filter(Boolean)
+            .join(", ") ||
+          "Not Provided",
+      ).trim() || "Not Provided";
+    const resolvedBankName =
+      String(normalizedLoanContext.bankName || "Not Provided").trim() ||
+      "Not Provided";
+    const resolvedAccountType =
+      String(normalizedLoanContext.accountType || "savings")
+        .trim()
+        .toLowerCase() || "savings";
+    const resolvedAccountNumber =
+      String(normalizedLoanContext.accountNumber || "0000000000").trim() ||
+      "0000000000";
+    const resolvedIfscCode =
+      String(normalizedLoanContext.ifscCode || "NA00000000000").trim().toUpperCase() ||
+      "NA00000000000";
+    const resolvedDobRaw =
+      normalizedLoanContext.dateOfBirth ||
+      normalizedLoanContext.dob ||
+      lead?.dateOfBirth ||
+      "1970-01-01";
+    const resolvedDob =
+      resolvedDobRaw instanceof Date
+        ? resolvedDobRaw
+        : new Date(resolvedDobRaw);
+    const resolvedGender =
+      String(normalizedLoanContext.gender || callRecord.gender || Gender.PREFER_NOT_TO_SAY)
+        .trim()
+        .toLowerCase() || Gender.PREFER_NOT_TO_SAY;
+    const resolvedMarriedStatus =
+      String(normalizedLoanContext.marriedStatus || "not_specified")
+        .trim() || "not_specified";
+    const resolvedPan =
+      String(normalizedLoanContext.panNumber || "NA").trim().toUpperCase() ||
+      "NA";
+    const resolvedAadhaar =
+      String(normalizedLoanContext.aadhaarNumber || "NA").trim() || "NA";
+    const resolvedLoanType = loanType;
+
     // Create new loan query
     const loanQueryData: any = {
       customerId: user._id,
-      loanType: loanType,
+      loanType: resolvedLoanType,
       status: "draft",
-      loanAmount: callRecord.loanAmount,
+      loanAmount: resolvedLoanAmountValue,
+      firstName,
+      lastName,
+      dateOfBirth: Number.isNaN(resolvedDob.getTime())
+        ? new Date("1970-01-01")
+        : resolvedDob,
+      gender: resolvedGender,
+      marriedStatus: resolvedMarriedStatus,
+      mobile: resolvedMobile,
+      email,
+      panNumber: resolvedPan,
+      aadhaarNumber: resolvedAadhaar,
+      pincode: resolvedPincode,
+      state: resolvedState,
+      city: resolvedCity,
+      street: resolvedStreet,
+      employmentType: resolvedEmploymentType,
+      companyName: resolvedCompanyName,
+      monthlyIncome:
+        Number.isFinite(resolvedMonthlyIncome) && resolvedMonthlyIncome >= 0
+          ? resolvedMonthlyIncome
+          : 0,
+      officeAddress: resolvedOfficeAddress,
+      bankName: resolvedBankName,
+      accountType:
+        ["savings", "current", "salary"].includes(resolvedAccountType)
+          ? resolvedAccountType
+          : "savings",
+      accountNumber: resolvedAccountNumber,
+      ifscCode: resolvedIfscCode,
+      bankStatementUrl:
+        normalizedLoanContext.bankStatementUrl || callRecord.recordingUrl || "",
       activities: [
         {
           type: "created",
@@ -381,6 +573,7 @@ export class CallRecordController {
 
       if (assigneeId) await notifyAssignee(req, result, assigneeId);
       let finalRecord: any = result;
+      let linkedLead: any = null;
 
       // Auto-attach channel agency + lead when source is provided.
       if (String(result?.dataSource || "").trim()) {
@@ -390,6 +583,24 @@ export class CallRecordController {
         );
         if (linked?.callRecord) {
           finalRecord = linked.callRecord;
+        }
+        if (linked?.lead) {
+          linkedLead = linked.lead;
+        }
+      }
+
+      // Auto-create a loan application for loan products so it appears in the loan section immediately.
+      if (result?.productService && isLoanProduct(result.productService)) {
+        const loanQuery = await createLoanQueryFromCallRecord(
+          finalRecord || result,
+          payload.loanContext,
+          linkedLead,
+        );
+        if (loanQuery) {
+          console.log(
+            "[CallRecord] Loan query ensured during create:",
+            loanQuery._id,
+          );
         }
       }
 
@@ -463,8 +674,14 @@ export class CallRecordController {
       ];
 
       // Handle callback date range and follow-up bucket filters
-      const { callbackStart, callbackEnd, followUpBucket, ...queryParams } =
-        req.query as Record<string, any>;
+      const {
+        callbackStart,
+        callbackEnd,
+        followUpBucket,
+        productService,
+        loanType,
+        ...queryParams
+      } = req.query as Record<string, any>;
 
       const followUpBucketFilter = getFollowUpBucketFilter(followUpBucket);
       if (followUpBucketFilter) {
@@ -475,13 +692,20 @@ export class CallRecordController {
       if (callbackStart || callbackEnd) {
         const callbackDateFilter: any = {};
         if (callbackStart) {
-          callbackDateFilter.$gte = new Date(callbackStart as string);
+          const parsedStart = parseDateInTimeZone(
+            callbackStart,
+            "start",
+            DEFAULT_QUERY_TIMEZONE,
+          );
+          if (parsedStart) callbackDateFilter.$gte = parsedStart;
         }
         if (callbackEnd) {
-          // Set end date to end of day
-          const endDate = new Date(callbackEnd as string);
-          endDate.setHours(23, 59, 59, 999);
-          callbackDateFilter.$lte = endDate;
+          const parsedEnd = parseDateInTimeZone(
+            callbackEnd,
+            "end",
+            DEFAULT_QUERY_TIMEZONE,
+          );
+          if (parsedEnd) callbackDateFilter.$lte = parsedEnd;
         }
         const existingCallbackFilter =
           queryParams.callbackAt && typeof queryParams.callbackAt === "object"
@@ -493,7 +717,40 @@ export class CallRecordController {
         };
       }
 
-      const result = await CallRecordService.getAll(queryParams, lookupStages);
+      const loanTypeMatchValues = getLoanTypeMatchValues(
+        String(loanType || productService || queryParams.productService || ""),
+      );
+
+      const pipelineModifier =
+        loanTypeMatchValues.length > 0
+          ? (pipeline: any[]) => {
+              const next = [...pipeline];
+              const matchStage = {
+                $match: {
+                  $or: [
+                    { productService: { $in: loanTypeMatchValues } },
+                    { "attachedLead.productType": { $in: loanTypeMatchValues } },
+                    { "attachedLead.loanType": { $in: loanTypeMatchValues } },
+                  ],
+                },
+              };
+              const sortIndex = next.findIndex(
+                (stage) => stage && typeof stage === "object" && "$sort" in stage,
+              );
+              if (sortIndex >= 0) {
+                next.splice(sortIndex, 0, matchStage);
+              } else {
+                next.push(matchStage);
+              }
+              return next;
+            }
+          : undefined;
+
+      const result = await CallRecordService.getAll(
+        queryParams,
+        lookupStages,
+        pipelineModifier ? { pipelineModifier } : undefined,
+      );
       return res
         .status(200)
         .json(new ApiResponse(200, result, "Call records fetched"));
