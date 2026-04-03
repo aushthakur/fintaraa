@@ -83,6 +83,8 @@ export const prepareSurepassCibilPayload = (
 
   const panCandidate =
     input.pan || input.panCard || input.panNumber || input.pancard;
+  const name = String(input.name || "").trim();
+  const consent = normalizeConsent(String(input.consent || ""));
 
   if (!mobileCandidate) {
     throw new ApiError(
@@ -95,7 +97,7 @@ export const prepareSurepassCibilPayload = (
     throw new ApiError(400, "PAN number is required to fetch the CIBIL report");
   }
 
-  if (!input.name) {
+  if (!name) {
     throw new ApiError(400, "Full name is required to fetch the CIBIL report");
   }
 
@@ -103,7 +105,7 @@ export const prepareSurepassCibilPayload = (
     throw new ApiError(400, "Gender is required to fetch the CIBIL report");
   }
 
-  if (!input.consent) {
+  if (!consent) {
     throw new ApiError(
       400,
       "Customer consent is required to fetch the CIBIL report",
@@ -125,12 +127,10 @@ export const prepareSurepassCibilPayload = (
     throw new ApiError(400, "Gender must be either 'male' or 'female'");
   }
 
-  const consent = normalizeConsent(String(input.consent));
-
   return {
     mobile,
     pan,
-    name: String(input.name).trim(),
+    name,
     gender,
     consent,
   };

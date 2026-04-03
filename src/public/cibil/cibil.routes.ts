@@ -5,8 +5,11 @@ import {
   fetchCibilReportWithMiddleware,
   fetchEncryptedCibilReportController,
   searchCustomerCreditScore,
+  getBureauScoreHistory,
   getCreditScorePricing,
   getCreditScoreWallet,
+  createBureauScorePaymentOrder,
+  verifyBureauPaymentAndFetch,
   purchaseCreditScoreCheck,
   fetchUserCibilReport,
   fetchUserCibilPdfReport,
@@ -20,6 +23,17 @@ const router = Router();
 router.get("/pricing", asyncHandler(getCreditScorePricing));
 router.post("/fetch", asyncHandler(fetchCibilReport));
 router.post("/search", authenticateToken, asyncHandler(searchCustomerCreditScore));
+router.post(
+  "/payment/order",
+  authenticateToken,
+  asyncHandler(createBureauScorePaymentOrder),
+);
+router.post(
+  "/payment/verify-and-fetch",
+  authenticateToken,
+  asyncHandler(verifyBureauPaymentAndFetch),
+);
+router.get("/history", authenticateToken, asyncHandler(getBureauScoreHistory));
 router.post("/user", authenticateToken, asyncHandler(fetchUserCibilReport));
 router.post(
   "/user/pdf",
