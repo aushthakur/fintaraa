@@ -180,6 +180,34 @@ const resolveDocPasswordKey = () => {
   return null;
 };
 
+const normalizePanCard = (value?: string) =>
+  String(value || "")
+    .trim()
+    .toUpperCase();
+
+const assertPanCardAvailable = async (
+  panCard: string,
+  currentUserId?: string,
+) => {
+  const normalizedPan = normalizePanCard(panCard);
+  if (!normalizedPan) return "";
+
+  const query: Record<string, any> = { panCard: normalizedPan };
+  if (currentUserId) {
+    query._id = { $ne: currentUserId };
+  }
+
+  const linkedUser = await User.findOne(query).select("_id mobile name");
+  if (linkedUser) {
+    throw new ApiError(
+      400,
+      "PAN card already linked with another phone number",
+    );
+  }
+
+  return normalizedPan;
+};
+
 const encryptDocumentPassword = (value?: string) => {
   if (!value) return undefined;
   const key = resolveDocPasswordKey();
@@ -244,6 +272,7 @@ export class UserController {
       const cancelledChequeOrPassbook =
         req?.body?.cancelledChequeOrPassbook?.[0]?.url;
       const avatar = req?.body?.avatar?.[0]?.url;
+      const normalizedPanCard = normalizePanCard(panCard);
 
       if (!email || !mobile || !name) {
         return res
@@ -254,7 +283,7 @@ export class UserController {
       const baseKycDocuments = [
         panCardUrl && {
           docType: "pan_card",
-          number: panCard,
+          number: normalizedPanCard || panCard,
           fileUrl: panCardUrl,
           issuer: "user_uploaded",
         },
@@ -275,7 +304,7 @@ export class UserController {
         reusableAcrossApplications: true,
         personalDetails: {
           fullName: name,
-          panNumber: panCard,
+          panNumber: normalizedPanCard || panCard,
           aadhaarNumber: aadhaarCard,
         },
         documents: baseKycDocuments,
@@ -301,7 +330,7 @@ export class UserController {
         name,
         email,
         mobile,
-        panCard,
+        panCard: normalizedPanCard || panCard,
         panCardUrl,
         aadhaarCard,
         agreedToTerms,
@@ -325,6 +354,12 @@ export class UserController {
 
       // Upsert-on-mobile: if a user with this mobile already exists, update provided fields and return
       const existingByMobile = await User.findOne({ mobile });
+      if (normalizedPanCard) {
+        await assertPanCardAvailable(
+          normalizedPanCard,
+          existingByMobile?._id?.toString(),
+        );
+      }
       if (existingByMobile) {
         // Ensure provided email (if any) is unique across other users
         if (email && email !== existingByMobile.email) {
@@ -341,7 +376,7 @@ export class UserController {
         const updatePayload: any = {};
         if (name) updatePayload.name = name;
         if (email) updatePayload.email = email.toLowerCase();
-        if (panCard) updatePayload.panCard = panCard;
+        if (normalizedPanCard) updatePayload.panCard = normalizedPanCard;
         if (aadhaarCard) updatePayload.aadhaarCard = aadhaarCard;
         if (typeof agreedToTerms === "boolean")
           updatePayload.agreedToTerms = agreedToTerms;
@@ -1194,6 +1229,18 @@ export class UserController {
       }
 
       const data: any = { ...req.body, avatar: avatar || profilePicture };
+      const incomingPan = normalizePanCard(
+        req.body?.panCard ||
+          req.body?.personalDetails?.panNumber ||
+          req.body?.personalDetails?.panCard ||
+          req.body?.panNumber,
+      );
+      if (incomingPan) {
+        data.panCard = await assertPanCardAvailable(
+          incomingPan,
+          (id || _id).toString(),
+        );
+      }
       const result = await userService.updateById(id || _id, data);
       await safeNotify({
         type: "profile-updated",
@@ -1331,6 +1378,15 @@ export class UserController {
         req.body.personalDetails,
         {},
       ) as Record<string, any>;
+      const normalizedPanNumber = personalDetails?.panNumber
+        ? await assertPanCardAvailable(
+            personalDetails.panNumber,
+            _id.toString(),
+          )
+        : "";
+      if (normalizedPanNumber) {
+        personalDetails.panNumber = normalizedPanNumber;
+      }
       const addressDetails = parseJSONSafely(
         req.body.addressDetails,
         null,

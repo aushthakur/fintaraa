@@ -53,7 +53,7 @@ export class CommonService<T extends Document> {
         }
       }
       const result: any = await query.lean();
-      if (!result) throw new Error("Record not found");
+      if (!result) throw new ApiError(404, "Record not found");
 
       if (autoPopulateAll && refPaths.length > 0) {
         const hydrated: Record<string, any> = { ...result };
@@ -206,7 +206,7 @@ export class CommonService<T extends Document> {
         runValidators: options?.runValidators ?? true,
         session: options?.session,
       });
-      if (!updated) throw new Error("Record not found for update");
+      if (!updated) throw new ApiError(404, "Record not found for update");
       if (options?.populate) {
         return this.getById(
           id,

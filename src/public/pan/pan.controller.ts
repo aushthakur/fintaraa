@@ -49,8 +49,52 @@ export class PanController {
           body.data.pan_number = user.panCard;
         }
       }
+      if (!body?.data?.pan_number) {
+        return res
+          .status(404)
+          .json(
+            new ApiError(
+              404,
+              body?.message || "PAN number not found for this mobile number",
+            ),
+          );
+      }
       return res.status(body?.status_code || 200).json(body);
-    } catch (error) {
+    } catch (error: any) {
+      if (axios.isAxiosError(error)) {
+        const upstreamStatus = error.response?.status;
+        const upstreamBody: any = error.response?.data || {};
+        const messageCode = String(
+          upstreamBody?.data?.message_code ||
+            upstreamBody?.message_code ||
+            upstreamBody?.messageCode ||
+            "",
+        ).toLowerCase();
+        const upstreamMessage = String(
+          upstreamBody?.data?.message ||
+            upstreamBody?.message ||
+            error.message ||
+            "",
+        ).toLowerCase();
+
+        if (
+          upstreamStatus === 422 ||
+          messageCode.includes("verification_failed") ||
+          messageCode.includes("not_found") ||
+          upstreamMessage.includes("verification_failed") ||
+          upstreamMessage.includes("not linked") ||
+          upstreamMessage.includes("no pan")
+        ) {
+          return res
+            .status(404)
+            .json(
+              new ApiError(
+                404,
+                "No PAN linked to this mobile number. Please verify the name and mobile number, or continue without PAN if it is not available.",
+              ),
+            );
+        }
+      }
       next(error);
     }
   }
