@@ -1,4 +1,5 @@
 export type TimeSeriesPoint = { date: string; count: number };
+export type AmountSeriesPoint = { date: string; amount: number };
 
 export interface DashboardOverviewResponse {
   range: {
@@ -10,6 +11,8 @@ export interface DashboardOverviewResponse {
     newUsers: TimeSeriesPoint[];
     loanApplications: TimeSeriesPoint[];
     insuranceQueries?: TimeSeriesPoint[];
+    loanAmounts?: AmountSeriesPoint[];
+    insuranceAmounts?: AmountSeriesPoint[];
   };
   advanced?: import("./dashboardAdvanced.types").AdvancedDashboardMetrics;
   top5: {
@@ -39,6 +42,8 @@ export interface DashboardOverviewResponse {
       email: string;
       mobile: string;
       typeOfInsurance: string;
+      annualIncome?: number;
+      applicationAmount?: number;
       status: string;
       createdAt: string;
     }>;

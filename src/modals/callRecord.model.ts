@@ -29,6 +29,18 @@ export interface ICallRecord extends Document {
   emailSend?: boolean;
   createAccount?: boolean;
   comment?: string;
+  contactActionStatus?: string;
+  followUpNotes?: Array<{
+    remark: string;
+    addedBy?: Types.ObjectId;
+    addedAt?: Date;
+  }>;
+  changeHistory?: Array<{
+    summary?: string;
+    diff?: Record<string, any>;
+    changedBy?: Types.ObjectId;
+    changedAt?: Date;
+  }>;
   assignee?: Types.ObjectId;
   assignedBy?: Types.ObjectId;
   assignedAt?: Date;
@@ -72,6 +84,28 @@ const CallRecordSchema = new Schema<ICallRecord>(
     emailSend: { type: Boolean, default: false },
     createAccount: { type: Boolean, default: false },
     comment: { type: String, trim: true },
+    contactActionStatus: { type: String, trim: true },
+    followUpNotes: {
+      type: [
+        {
+          remark: { type: String, trim: true, required: true },
+          addedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+          addedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
+    changeHistory: {
+      type: [
+        {
+          summary: { type: String, trim: true },
+          diff: { type: Schema.Types.Mixed },
+          changedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+          changedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
     assignee: { type: Schema.Types.ObjectId, ref: "Agent" },
     assignedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
     assignedAt: { type: Date },

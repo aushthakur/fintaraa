@@ -10,7 +10,11 @@ import { Banker } from "../../modals/banker.model";
 import { DocumentCatalog } from "../../modals/documentCatalog.model";
 import { Contest } from "../../modals/contest.model";
 import { BankProduct } from "../../modals/bankProduct.model";
-import type { DashboardOverviewResponse, TimeSeriesPoint } from "./dashboard.types";
+import type {
+  AmountSeriesPoint,
+  DashboardOverviewResponse,
+  TimeSeriesPoint,
+} from "./dashboard.types";
 import type { AdvancedDashboardMetrics } from "./dashboardAdvanced.types";
 import {
   buildDateRangeInTimeZone,
@@ -37,6 +41,35 @@ const nextDateKey = (dateKey: string) => {
     .slice(0, 10);
 };
 
+const normalizeStatusFilter = (value: unknown) => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized === "all") return null;
+  return normalized;
+};
+
+const buildStatusMatch = (
+  start: Date,
+  end: Date,
+  statusValue?: string | null,
+) => {
+  const match: Record<string, any> = {
+    createdAt: { $gte: start, $lte: end },
+  };
+
+  if (statusValue) {
+    match.status = statusValue;
+  }
+
+  return match;
+};
+
+const toAmountMap = (rows: Array<{ _id: any; amount: number }>) =>
+  (rows || []).reduce<Record<string, number>>((acc, r) => {
+    if (r?._id) acc[String(r._id)] = r.amount ?? 0;
+    return acc;
+  }, {});
+
 const eachDayKey = (start: Date, end: Date, timeZone: string) => {
   const days: string[] = [];
   let cur = formatDateInTimeZone(start, timeZone);
@@ -51,11 +84,18 @@ const eachDayKey = (start: Date, end: Date, timeZone: string) => {
 export class DashboardController {
   static async getOverview(req: Request, res: Response, next: NextFunction) {
     try {
-      const { startDate, endDate, timezone } = req.query;
+      const { startDate, endDate, timezone, loanStatus, insuranceStatus, status } =
+        req.query;
       const timeZone =
         typeof timezone === "string" && timezone.trim()
           ? timezone.trim()
           : DEFAULT_QUERY_TIMEZONE;
+      const loanStatusFilter = normalizeStatusFilter(
+        typeof loanStatus === "string" ? loanStatus : status,
+      );
+      const insuranceStatusFilter = normalizeStatusFilter(
+        typeof insuranceStatus === "string" ? insuranceStatus : status,
+      );
       const { start, end } = buildDateRangeInTimeZone(
         startDate,
         endDate,
@@ -73,11 +113,28 @@ export class DashboardController {
       }
 
       const dateKeys = eachDayKey(start, end, timeZone);
+      const loanMatch = buildStatusMatch(start, end, loanStatusFilter);
+      const insuranceMatch = buildStatusMatch(start, end, insuranceStatusFilter);
+
+      const loanAmountExpr = { $ifNull: ["$loanAmount", 0] };
+      const insuranceAmountExpr = {
+        $ifNull: [
+          "$policyDetails.sumInsured",
+          {
+            $ifNull: [
+              "$policyDetails.sumAssured",
+              { $ifNull: ["$annualIncome", 0] },
+            ],
+          },
+        ],
+      };
 
       const [
         usersAgg,
         loanAgg,
         insuranceAgg,
+        loanAmountAgg,
+        insuranceAmountAgg,
         topUsers,
         topLoans,
         topInsurance,
@@ -127,9 +184,7 @@ export class DashboardController {
         ]),
         LoanQuery.aggregate([
           {
-            $match: {
-              createdAt: { $gte: start, $lte: end },
-            },
+            $match: loanMatch,
           },
           {
               $group: {
@@ -146,9 +201,7 @@ export class DashboardController {
         ]),
         InsuranceQuery.aggregate([
           {
-            $match: {
-              createdAt: { $gte: start, $lte: end },
-            },
+            $match: insuranceMatch,
           },
           {
               $group: {
@@ -161,6 +214,36 @@ export class DashboardController {
                 },
                 count: { $sum: 1 },
               },
+          },
+        ]),
+        LoanQuery.aggregate([
+          { $match: loanMatch },
+          {
+            $group: {
+              _id: {
+                $dateToString: {
+                  format: "%Y-%m-%d",
+                  date: "$createdAt",
+                  timezone: timeZone,
+                },
+              },
+              amount: { $sum: loanAmountExpr as any },
+            },
+          },
+        ]),
+        InsuranceQuery.aggregate([
+          { $match: insuranceMatch },
+          {
+            $group: {
+              _id: {
+                $dateToString: {
+                  format: "%Y-%m-%d",
+                  date: "$createdAt",
+                  timezone: timeZone,
+                },
+              },
+              amount: { $sum: insuranceAmountExpr as any },
+            },
           },
         ]),
         User.find({})
@@ -168,16 +251,16 @@ export class DashboardController {
           .sort({ createdAt: -1 })
           .limit(5)
           .lean(),
-        LoanQuery.find({})
+        LoanQuery.find(loanMatch)
           .select(
             "firstName lastName email mobile loanAmount loanType status customerId createdAt"
           )
           .sort({ createdAt: -1 })
           .limit(5)
           .lean(),
-        InsuranceQuery.find({})
+        InsuranceQuery.find(insuranceMatch)
           .select(
-            "firstName lastName email mobile typeOfInsurance status customerId createdAt"
+            "firstName lastName email mobile typeOfInsurance status customerId annualIncome policyDetails createdAt"
           )
           .sort({ createdAt: -1 })
           .limit(5)
@@ -185,19 +268,19 @@ export class DashboardController {
 
         // breakdowns
         LoanQuery.aggregate([
-          { $match: { createdAt: { $gte: start, $lte: end } } },
+          { $match: loanMatch },
           { $group: { _id: "$status", count: { $sum: 1 } } },
         ]),
         LoanQuery.aggregate([
-          { $match: { createdAt: { $gte: start, $lte: end } } },
+          { $match: loanMatch },
           { $group: { _id: "$loanType", count: { $sum: 1 } } },
         ]),
         InsuranceQuery.aggregate([
-          { $match: { createdAt: { $gte: start, $lte: end } } },
+          { $match: insuranceMatch },
           { $group: { _id: "$status", count: { $sum: 1 } } },
         ]),
         InsuranceQuery.aggregate([
-          { $match: { createdAt: { $gte: start, $lte: end } } },
+          { $match: insuranceMatch },
           { $group: { _id: "$typeOfInsurance", count: { $sum: 1 } } },
         ]),
         Offer.aggregate([
@@ -283,6 +366,9 @@ export class DashboardController {
         return acc;
       }, {});
 
+      const loanAmountMap = toAmountMap(loanAmountAgg as any);
+      const insuranceAmountMap = toAmountMap(insuranceAmountAgg as any);
+
       const seriesUsers: TimeSeriesPoint[] = dateKeys.map((date) => ({
         date,
         count: usersMap[date] ?? 0,
@@ -296,6 +382,16 @@ export class DashboardController {
       const seriesInsurance: TimeSeriesPoint[] = dateKeys.map((date) => ({
         date,
         count: insuranceMap[date] ?? 0,
+      }));
+
+      const seriesLoanAmounts: AmountSeriesPoint[] = dateKeys.map((date) => ({
+        date,
+        amount: loanAmountMap[date] ?? 0,
+      }));
+
+      const seriesInsuranceAmounts: AmountSeriesPoint[] = dateKeys.map((date) => ({
+        date,
+        amount: insuranceAmountMap[date] ?? 0,
       }));
 
       const toBreakdownMap = (rows: Array<{ _id: any; count: number }>) =>
@@ -361,6 +457,8 @@ export class DashboardController {
           newUsers: seriesUsers,
           loanApplications: seriesLoans,
           insuranceQueries: seriesInsurance,
+          loanAmounts: seriesLoanAmounts,
+          insuranceAmounts: seriesInsuranceAmounts,
         },
         advanced,
         top5: {
@@ -390,6 +488,12 @@ export class DashboardController {
             email: i.email,
             mobile: i.mobile,
             typeOfInsurance: i.typeOfInsurance,
+            annualIncome: i.annualIncome,
+            applicationAmount:
+              i?.policyDetails?.sumInsured ??
+              i?.policyDetails?.sumAssured ??
+              i?.annualIncome ??
+              0,
             status: i.status,
             createdAt: i.createdAt,
           })),

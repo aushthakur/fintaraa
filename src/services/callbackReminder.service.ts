@@ -5,7 +5,7 @@ import { CallRecord, ICallRecord } from "../modals/callRecord.model";
 import { sendSingleNotification } from "../services/notification.service";
 
 const CHECK_INTERVAL_MINUTES = 1;
-const REMINDER_MINUTES_BEFORE = 5;
+const REMINDER_MINUTES_BEFORE = 15;
 
 /**
  * Process callback reminders - sends notifications to agents and admins
@@ -16,10 +16,10 @@ export const processCallbackReminders = async (): Promise<void> => {
     const now = new Date();
     const reminderWindowStart = new Date(
       now.getTime() + (REMINDER_MINUTES_BEFORE - 1) * 60 * 1000,
-    ); // 4 minutes from now
+    );
     const reminderWindowEnd = new Date(
       now.getTime() + (REMINDER_MINUTES_BEFORE + 1) * 60 * 1000,
-    ); // 6 minutes from now
+    );
 
     // Find call records with callbacks in the reminder window that haven't been notified yet
     const callRecords = await CallRecord.find({

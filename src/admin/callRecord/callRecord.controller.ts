@@ -4,6 +4,7 @@ import ApiResponse from "../../utils/ApiResponse";
 import { CommonService } from "../../services/common.services";
 import { CallRecord, ICallRecord } from "../../modals/callRecord.model";
 import Agent from "../../modals/agent.model";
+import Ticket from "../../modals/ticket.model";
 import { sendSingleNotification } from "../../services/notification.service";
 import { UserType } from "../../modals/notification.model";
 import { Gender, User, UserStatus } from "../../modals/user.model";
@@ -31,6 +32,159 @@ const normalizePhoneToLeadFormat = (input?: string): string => {
   if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
   if (digits.length > 10) return `+91${digits.slice(-10)}`;
   return `+${digits}`;
+};
+
+const buildPhoneCandidates = (input?: string): string[] => {
+  const digits = normalizePhoneDigits(input);
+  if (!digits) return [];
+  const last10 = digits.length > 10 ? digits.slice(-10) : digits;
+  return Array.from(
+    new Set([
+      digits,
+      last10,
+      `+91${last10}`,
+      `91${last10}`,
+      `0${last10}`,
+      `+${digits}`,
+    ]),
+  );
+};
+
+const stringifyValue = (value: any): string => {
+  if (value === undefined) return "undefined";
+  if (value === null) return "null";
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+};
+
+const buildChangeDiff = (
+  before: Record<string, any>,
+  after: Record<string, any>,
+  keys: string[],
+) => {
+  const changes: Array<{
+    field: string;
+    before: string;
+    after: string;
+  }> = [];
+
+  for (const key of keys) {
+    const prev = before?.[key];
+    const next = after?.[key];
+    if (stringifyValue(prev) === stringifyValue(next)) continue;
+    changes.push({
+      field: key,
+      before: stringifyValue(prev),
+      after: stringifyValue(next),
+    });
+  }
+
+  return changes;
+};
+
+const enrichCallRecordsWithCustomerContext = async (records: any[]) => {
+  if (!Array.isArray(records) || records.length === 0) return records;
+
+  const candidateSet = new Set<string>();
+  const recordCandidates = new Map<string, string[]>();
+
+  for (const record of records) {
+    const candidates = buildPhoneCandidates(record?.phoneNumber);
+    if (!candidates.length) continue;
+    const recordId = String(record?._id || "");
+    recordCandidates.set(recordId, candidates);
+    candidates.forEach((candidate) => candidateSet.add(candidate));
+  }
+
+  if (candidateSet.size === 0) return records;
+
+  const users = await User.find({
+    mobile: { $in: Array.from(candidateSet) },
+  })
+    .select("_id mobile name email status isMobileVerified createdAt updatedAt")
+    .lean();
+
+  const userLookup = new Map<string, any>();
+  for (const user of users as any[]) {
+    for (const candidate of buildPhoneCandidates(user?.mobile)) {
+      if (!userLookup.has(candidate)) {
+        userLookup.set(candidate, user);
+      }
+    }
+  }
+
+  const userIds = users
+    .map((user: any) => user?._id?.toString?.() || String(user?._id || ""))
+    .filter(Boolean);
+
+  const openTickets = userIds.length
+    ? await Ticket.find({
+        requester: { $in: userIds },
+        status: { $in: ["open", "re_assigned"] },
+      })
+        .select("requester status title dueDate createdAt updatedAt")
+        .lean()
+    : [];
+
+  const openTicketCountByUser = new Map<string, number>();
+  for (const ticket of openTickets as any[]) {
+    const requesterId = String(ticket?.requester || "");
+    if (!requesterId) continue;
+    openTicketCountByUser.set(
+      requesterId,
+      (openTicketCountByUser.get(requesterId) || 0) + 1,
+    );
+  }
+
+  return records.map((record) => {
+    const recordId = String(record?._id || "");
+    const candidates = recordCandidates.get(recordId) || buildPhoneCandidates(record?.phoneNumber);
+    const matchedUser = candidates
+      .map((candidate) => userLookup.get(candidate))
+      .find(Boolean);
+    const matchedUserId = matchedUser?._id?.toString?.() || "";
+    const openTicketCount = matchedUserId
+      ? openTicketCountByUser.get(matchedUserId) || 0
+      : 0;
+
+    return {
+      ...record,
+      openTicketCount,
+      openTicketLabel: openTicketCount
+        ? `${openTicketCount} Open Ticket${openTicketCount === 1 ? "" : "s"}`
+        : "No Open Ticket",
+      customerProfile: matchedUser
+        ? {
+            id: matchedUserId,
+            name:
+              matchedUser.name ||
+              matchedUser.email ||
+              record?.firstName ||
+              "B2C Customer",
+            email: matchedUser.email || "",
+            mobile: matchedUser.mobile || record?.phoneNumber || "",
+            status: matchedUser.status || "active",
+            isMobileVerified: matchedUser.isMobileVerified !== false,
+            registered: true,
+            registrationLabel: "Registered on B2C App",
+            sourceLabel: matchedUser.isMobileVerified !== false
+              ? "Verified B2C App user"
+              : "B2C App user",
+          }
+        : {
+            registered: false,
+            registrationLabel: "Not registered on B2C App",
+            sourceLabel: "No B2C App profile found",
+          },
+    };
+  });
 };
 
 const buildSourceTag = (value?: string): string | null => {
@@ -560,6 +714,10 @@ export class CallRecordController {
         payload.assignmentMode = assignmentMode;
       }
 
+      if (payload.callbackAt) {
+        payload.followUp = true;
+      }
+
       if (adminId) {
         payload.createdBy = adminId;
         payload.updatedBy = adminId;
@@ -604,9 +762,19 @@ export class CallRecordController {
         }
       }
 
+      const [enrichedRecord] = await enrichCallRecordsWithCustomerContext([
+        finalRecord,
+      ]);
+
       return res
         .status(201)
-        .json(new ApiResponse(201, finalRecord, "Call record created"));
+        .json(
+          new ApiResponse(
+            201,
+            enrichedRecord || finalRecord,
+            "Call record created",
+          ),
+        );
     } catch (err) {
       next(err);
     }
@@ -668,6 +836,34 @@ export class CallRecordController {
         {
           $unwind: {
             path: "$assignedBy",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "admins",
+            localField: "createdBy",
+            foreignField: "_id",
+            as: "createdBy",
+          },
+        },
+        {
+          $unwind: {
+            path: "$createdBy",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "admins",
+            localField: "updatedBy",
+            foreignField: "_id",
+            as: "updatedBy",
+          },
+        },
+        {
+          $unwind: {
+            path: "$updatedBy",
             preserveNullAndEmptyArrays: true,
           },
         },
@@ -751,9 +947,17 @@ export class CallRecordController {
         lookupStages,
         pipelineModifier ? { pipelineModifier } : undefined,
       );
+      const enrichedResult = Array.isArray(result)
+        ? await enrichCallRecordsWithCustomerContext(result)
+        : {
+            ...result,
+            result: await enrichCallRecordsWithCustomerContext(
+              Array.isArray((result as any)?.result) ? (result as any).result : [],
+            ),
+          };
       return res
         .status(200)
-        .json(new ApiResponse(200, result, "Call records fetched"));
+        .json(new ApiResponse(200, enrichedResult, "Call records fetched"));
     } catch (err) {
       next(err);
     }
@@ -762,9 +966,18 @@ export class CallRecordController {
   static async getById(req: Request, res: Response, next: NextFunction) {
     try {
       const result = await CallRecordService.getById(req.params.id);
+      const [enrichedRecord] = await enrichCallRecordsWithCustomerContext([
+        result,
+      ]);
       return res
         .status(200)
-        .json(new ApiResponse(200, result, "Call record fetched"));
+        .json(
+          new ApiResponse(
+            200,
+            enrichedRecord || result,
+            "Call record fetched",
+          ),
+        );
     } catch (err) {
       next(err);
     }
@@ -779,16 +992,62 @@ export class CallRecordController {
 
       const previousAssignee = record.assignee?.toString();
       const incomingAssignee = req.body?.assignee;
+      const rawFollowUpNote = String(
+        req.body?.followUpNote ||
+          req.body?.followUpClosingRemark ||
+          req.body?.followUpRemark ||
+          "",
+      ).trim();
+
+      const updateBody = { ...req.body };
+      delete (updateBody as any).followUpNote;
+      delete (updateBody as any).followUpClosingRemark;
+      delete (updateBody as any).followUpRemark;
 
       const updates: any = {
-        ...req.body,
+        ...updateBody,
       };
       if (adminId) updates.updatedBy = adminId;
+
+      if (updates.callbackAt) {
+        updates.followUp = true;
+      }
 
       if (incomingAssignee && incomingAssignee !== previousAssignee) {
         updates.assignedBy = adminId;
         updates.assignedAt = new Date();
         updates.assignmentMode = "manual";
+      }
+
+      const changeKeys = Object.keys(updateBody).filter(
+        (key) => !["assignee", "followUp", "callbackAt"].includes(key),
+      );
+      const changeDiff = buildChangeDiff(
+        record.toObject ? record.toObject() : (record as any),
+        updateBody,
+        changeKeys,
+      );
+      if (changeDiff.length > 0) {
+        updates.$push = {
+          ...(updates.$push || {}),
+          changeHistory: {
+            summary: `Updated ${changeDiff.length} field${changeDiff.length === 1 ? "" : "s"}`,
+            diff: changeDiff,
+            changedBy: adminId,
+            changedAt: new Date(),
+          },
+        };
+      }
+
+      if (rawFollowUpNote) {
+        updates.$push = {
+          ...(updates.$push || {}),
+          followUpNotes: {
+            remark: rawFollowUpNote,
+            addedBy: adminId,
+            addedAt: new Date(),
+          },
+        };
       }
 
       const result = await CallRecordService.updateById(req.params.id, updates);
@@ -839,9 +1098,19 @@ export class CallRecordController {
         );
       }
 
+      const [enrichedRecord] = await enrichCallRecordsWithCustomerContext([
+        finalRecord || result,
+      ]);
+
       return res
         .status(200)
-        .json(new ApiResponse(200, finalRecord || result, "Call record updated"));
+        .json(
+          new ApiResponse(
+            200,
+            enrichedRecord || finalRecord || result,
+            "Call record updated",
+          ),
+        );
     } catch (err) {
       next(err);
     }

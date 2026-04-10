@@ -314,8 +314,8 @@ export const NotificationMessages: Record<string, DualNotificationTemplate> = {
       message: `You set a callback reminder for ${ctx?.phone || "a lead"} at ${ctx?.callbackTime || "the scheduled time"}.`,
     }),
     receiver: (ctx) => ({
-      title: "⏰ Callback in 5 Minutes",
-      message: `Reminder: You have a callback scheduled in 5 minutes for ${ctx?.name || ctx?.phone || "a lead"}${ctx?.product ? ` (${ctx.product})` : ""}.`,
+      title: "⏰ Callback in 15 Minutes",
+      message: `Reminder: You have a callback scheduled in 15 minutes for ${ctx?.name || ctx?.phone || "a lead"}${ctx?.product ? ` (${ctx.product})` : ""}.`,
     }),
   },
 };
