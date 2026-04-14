@@ -42,6 +42,24 @@ const toObjectId = (value: any): Types.ObjectId | null => {
 
 const sameId = (a: any, b: any) => String(a || "") === String(b || "");
 
+const collectAssignedAgentIds = (query: any) => {
+  const ids = new Set<string>();
+  const primaryAgentId = String(
+    query?.assignedAgent?._id || query?.assignedAgent || "",
+  ).trim();
+  if (primaryAgentId) ids.add(primaryAgentId);
+
+  const assignedAgents = Array.isArray(query?.assignedAgents)
+    ? query.assignedAgents
+    : [];
+  for (const agent of assignedAgents) {
+    const agentId = String(agent?._id || agent || "").trim();
+    if (agentId) ids.add(agentId);
+  }
+
+  return Array.from(ids);
+};
+
 const resolveSenderModel = async (role: string, senderId: any) => {
   if (role === "admin") return "Admin";
   if (role === "lander") return "Lander";
@@ -118,7 +136,11 @@ export class LoanQueryChatController {
       if (role === "lander" && query.assignedLander && !sameId(query.assignedLander, actorId)) {
         throw new ApiError(403, "Access denied");
       }
-      if (role === "agent" && query.assignedAgent && !sameId(query.assignedAgent, actorId)) {
+      if (
+        role === "agent" &&
+        collectAssignedAgentIds(query).length > 0 &&
+        !collectAssignedAgentIds(query).includes(String(actorId))
+      ) {
         throw new ApiError(403, "Access denied");
       }
 
@@ -214,11 +236,15 @@ export class LoanQueryChatController {
       const senderModel = await resolveSenderModel(role, senderId);
       const customerId = (query.customerId as any)?._id || query.customerId;
       const assignedAgentId = query.assignedAgent || null;
+      const assignedAgentIds = collectAssignedAgentIds(query);
       const assignedLanderId = query.assignedLander || null;
 
       const participantModels = new Map<string, "User" | "Admin" | "Agent" | "Lander">();
       if (customerId) participantModels.set(String(customerId), "User");
       if (assignedAgentId) participantModels.set(String(assignedAgentId), "Admin");
+      assignedAgentIds.forEach((agentId) =>
+        participantModels.set(String(agentId), "Admin"),
+      );
       if (assignedLanderId) participantModels.set(String(assignedLanderId), "Lander");
 
       let finalReceiverId: any = receiverId;

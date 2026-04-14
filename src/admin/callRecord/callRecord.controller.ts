@@ -747,6 +747,37 @@ export class CallRecordController {
         }
       }
 
+      if (payload.createAccount) {
+        const normalizedMobile = normalizePhoneToLeadFormat(result.phoneNumber);
+        const normalizedEmail = String(result.email || "").trim().toLowerCase();
+        const accountFilter: Record<string, any>[] = [];
+        if (normalizedMobile) {
+          accountFilter.push({ mobile: normalizedMobile });
+          accountFilter.push({ mobile: result.phoneNumber });
+        }
+        if (normalizedEmail) {
+          accountFilter.push({ email: normalizedEmail });
+        }
+        const existingAccount = await User.findOne({
+          $or: accountFilter,
+        });
+        if (!existingAccount) {
+          await User.create({
+            name:
+              `${result.firstName || ""} ${result.lastName || ""}`.trim() ||
+              `Lead ${normalizePhoneDigits(result.phoneNumber).slice(-4)}`,
+            mobile: normalizedMobile || result.phoneNumber,
+            email:
+              normalizedEmail ||
+              `${normalizePhoneDigits(result.phoneNumber)}@lead.auto`,
+            role: "user",
+            status: UserStatus.PENDING_VERIFICATION,
+            agreedToTerms: true,
+            privacyPolicyAccepted: true,
+          } as any);
+        }
+      }
+
       // Auto-create a loan application for loan products so it appears in the loan section immediately.
       if (result?.productService && isLoanProduct(result.productService)) {
         const loanQuery = await createLoanQueryFromCallRecord(
@@ -755,6 +786,15 @@ export class CallRecordController {
           linkedLead,
         );
         if (loanQuery) {
+          await CallRecord.findByIdAndUpdate(
+            finalRecord?._id || result._id,
+            {
+              $set: {
+                loanQueryId: loanQuery._id,
+                loanQueryCreatedAt: loanQuery.createdAt || new Date(),
+              },
+            },
+          );
           console.log(
             "[CallRecord] Loan query ensured during create:",
             loanQuery._id,

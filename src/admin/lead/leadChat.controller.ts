@@ -29,21 +29,21 @@ export class LeadChatController {
       const match: any = {
         leadId: { $exists: true, $ne: null },
         $or: [
-          { senderModel: "User", receiverModel: "Agent" },
-          { senderModel: "Agent", receiverModel: "User" },
+          { senderModel: "User", receiverModel: { $in: ["Agent", "Admin"] } },
+          { senderModel: { $in: ["Agent", "Admin"] }, receiverModel: "User" },
         ],
       };
 
       if (role === "agent" && currentUserId) {
         match.$or = [
           {
-            senderModel: "Agent",
+            senderModel: { $in: ["Agent", "Admin"] },
             receiverModel: "User",
             sender: new Types.ObjectId(String(currentUserId)),
           },
           {
             senderModel: "User",
-            receiverModel: "Agent",
+            receiverModel: { $in: ["Agent", "Admin"] },
             receiver: new Types.ObjectId(String(currentUserId)),
           },
         ];
@@ -93,7 +93,7 @@ export class LeadChatController {
       const userIds = [...new Set(rows.map((r: any) => String(r?._id?.userId)).filter(Boolean))];
       const agentIds = [...new Set(rows.map((r: any) => String(r?._id?.agentId)).filter(Boolean))];
 
-      const [leads, users, agents] = await Promise.all([
+      const [leads, users, agents, admins] = await Promise.all([
         Lead.find({ _id: { $in: leadIds } })
           .select("_id leadRef fullName mobile")
           .lean(),
@@ -103,11 +103,16 @@ export class LeadChatController {
         Agent.find({ _id: { $in: agentIds } })
           .select("_id name email")
           .lean(),
+        Admin.find({ _id: { $in: agentIds } })
+          .select("_id username name email")
+          .lean(),
       ]);
 
       const leadMap = new Map(leads.map((lead: any) => [String(lead._id), lead]));
       const userMap = new Map(users.map((u: any) => [String(u._id), u]));
-      const agentMap = new Map(agents.map((a: any) => [String(a._id), a]));
+      const agentMap = new Map(
+        [...agents, ...admins].map((a: any) => [String(a._id), a]),
+      );
 
       const conversations = rows.map((row: any) => {
         const leadId = String(row?._id?.leadId || "");
@@ -131,7 +136,7 @@ export class LeadChatController {
           },
           agent: {
             _id: agentId,
-            name: agent?.name || "Agent",
+            name: agent?.name || agent?.username || "Agent",
             email: agent?.email || "",
           },
           unreadCount: Number(row?.unreadCount) || 0,

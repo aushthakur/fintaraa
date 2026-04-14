@@ -518,7 +518,13 @@ export const getTicket = async (
 ): Promise<any> => {
   try {
     const { role, _id: userId } = req.user;
-    const result = await ticketService.getById(req.params.id, true);
+    const result = await Ticket.findById(req.params.id)
+      .populate("requester", "fullName name email mobile")
+      .populate("assignee", "name email mobile availability skills")
+      .populate("listingId", "title name productType type")
+      .populate("transactionId", "title name productType type")
+      .populate("relatedTickets", "title status")
+      .lean();
     const requesterId =
       (result as any)?.requester?._id?.toString?.() ||
       result?.requester?.toString?.();
@@ -888,12 +894,12 @@ const createInteractionObject = ({
     timestamp: new Date(),
   };
 
-  if (action === "commented") {
+  if (action === "commented" || action === "internal_note") {
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
     if (!content && !hasAttachments) {
       throw new ApiError(
         400,
-        "Content or attachment is required for 'commented' action",
+        "Content or attachment is required for this interaction",
       );
     }
     if (content) {
@@ -1062,8 +1068,11 @@ export const addInteraction = async (
       receiverType = requesterModel;
     }
 
+    const normalizedAction =
+      action === "status_update" ? "status_changed" : action;
+
     const interaction = createInteractionObject({
-      action,
+      action: normalizedAction,
       content,
       receiver: effectiveReceiver,
       initiator,
@@ -1127,6 +1136,8 @@ const getData = async (id: any, role: any): Promise<any> => {
   let ticketData: any = await Ticket.findById({ _id: id })
     .populate("requester", "fullName name email mobile")
     .populate("assignee", "name email mobile")
+    .populate("listingId", "title name productType type")
+    .populate("transactionId", "title name productType type")
     .populate("relatedTickets", "title status");
 
   if (!ticketData) throw new Error("Ticket Doesn not exist: ");
@@ -1142,6 +1153,7 @@ const getData = async (id: any, role: any): Promise<any> => {
         (isRequester &&
           (initiatorType === "User" || initiatorType === "Agency")) ||
         (!isRequester && initiatorType === "Agent");
+      if (action?.action === "internal_note" && isRequester) return;
       interaction.push({ ...action, isSender });
     });
   }

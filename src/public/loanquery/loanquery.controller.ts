@@ -52,6 +52,16 @@ const getIdString = (value: any): string => {
   return String(value);
 };
 
+const toObjectId = (value: any): Types.ObjectId | null => {
+  const id = getIdString(value);
+  if (!id) return null;
+  try {
+    return new Types.ObjectId(id);
+  } catch {
+    return null;
+  }
+};
+
 const resolveAgencyAccessIds = async (
   userId: any,
   role?: string,
@@ -88,10 +98,7 @@ const canAccessLoanQuery = async (
   }
 
   if (role === "agent") {
-    const assignedAgentId = getIdString(
-      query?.assignedAgent?._id || query?.assignedAgent,
-    );
-    return assignedAgentId === actorId;
+    return isAgentAssignedToQuery(query, actorId);
   }
 
   if (role === "agency" || role === "agency_member") {
@@ -136,6 +143,88 @@ const resolveActivityActorModel = (
   if (role === "agent") return "Agent";
   if (role === "lander") return "Lander";
   return "User";
+};
+
+const collectAssignedAgentIds = (query: any) => {
+  const ids = new Set<string>();
+  const primaryAgentId = getIdString(
+    query?.assignedAgent?._id || query?.assignedAgent,
+  );
+  if (primaryAgentId) ids.add(primaryAgentId);
+
+  const assignedAgents = Array.isArray(query?.assignedAgents)
+    ? query.assignedAgents
+    : [];
+  for (const agent of assignedAgents) {
+    const agentId = getIdString(agent?._id || agent);
+    if (agentId) ids.add(agentId);
+  }
+
+  return Array.from(ids);
+};
+
+const isAgentAssignedToQuery = (query: any, actorId: any) => {
+  const agentId = getIdString(actorId);
+  if (!agentId) return false;
+  return collectAssignedAgentIds(query).includes(agentId);
+};
+
+const enrichActivityActors = async (activities: any[] = []) => {
+  if (!Array.isArray(activities) || activities.length === 0) return activities;
+
+  const actorBuckets = {
+    Admin: new Set<string>(),
+    Agent: new Set<string>(),
+    Lander: new Set<string>(),
+    User: new Set<string>(),
+  } as Record<"Admin" | "Agent" | "Lander" | "User", Set<string>>;
+
+  for (const activity of activities) {
+    const actorId = getIdString(activity?.actor);
+    const actorModel = activity?.actorModel || "User";
+    if (actorId && actorBuckets[actorModel as keyof typeof actorBuckets]) {
+      actorBuckets[actorModel as keyof typeof actorBuckets].add(actorId);
+    }
+  }
+
+  const [admins, agents, landers, users] = await Promise.all([
+    actorBuckets.Admin.size
+      ? Admin.find({ _id: { $in: Array.from(actorBuckets.Admin) } })
+          .select("_id name username email")
+          .lean()
+      : Promise.resolve([]),
+    actorBuckets.Agent.size
+      ? Admin.find({ _id: { $in: Array.from(actorBuckets.Agent) } })
+          .select("_id name username email")
+          .lean()
+      : Promise.resolve([]),
+    actorBuckets.Lander.size
+      ? Lander.find({ _id: { $in: Array.from(actorBuckets.Lander) } })
+          .select("_id name email")
+          .lean()
+      : Promise.resolve([]),
+    actorBuckets.User.size
+      ? User.find({ _id: { $in: Array.from(actorBuckets.User) } })
+          .select("_id name email mobile")
+          .lean()
+      : Promise.resolve([]),
+  ]);
+
+  const lookup = new Map<string, any>();
+  [...admins, ...agents, ...landers, ...users].forEach((actor: any) => {
+    if (!actor?._id) return;
+    lookup.set(String(actor._id), actor);
+  });
+
+  return activities.map((activity) => {
+    const actor = lookup.get(getIdString(activity?.actor));
+    return {
+      ...activity,
+      actorName:
+        actor?.name || actor?.username || actor?.email || activity?.actorName,
+      actorEmail: actor?.email || activity?.actorEmail || "",
+    };
+  });
 };
 
 // Helper function to extract URL from uploaded file object
@@ -765,9 +854,21 @@ export class LoanQueryController {
         if (normalized) req.query.loanType = normalized;
       }
 
-      // For agents, only show queries assigned to them
+      const prependStages: any[] = [];
+
+      // For agents, show queries assigned to them either as primary or secondary assignee
       if (role === "agent" && userId) {
-        req.query.assignedAgent = userId;
+        const agentObjectId = toObjectId(userId);
+        if (agentObjectId) {
+          prependStages.push({
+            $match: {
+              $or: [
+                { assignedAgent: agentObjectId },
+                { assignedAgents: agentObjectId },
+              ],
+            },
+          });
+        }
       }
       // For landers, only show queries assigned to them
       else if (role === "lander" && userId) {
@@ -792,6 +893,14 @@ export class LoanQueryController {
             localField: "assignedAgent",
             foreignField: "_id",
             as: "assignedAgentData",
+          },
+        },
+        {
+          $lookup: {
+            from: "admins",
+            localField: "assignedAgents",
+            foreignField: "_id",
+            as: "assignedAgentsData",
           },
         },
         {
@@ -833,6 +942,22 @@ export class LoanQueryController {
                 else: "$assignedAgent",
               },
             },
+            assignedAgents: {
+              $cond: {
+                if: {
+                  $gt: [
+                    {
+                      $size: {
+                        $ifNull: ["$assignedAgentsData", []],
+                      },
+                    },
+                    0,
+                  ],
+                },
+                then: "$assignedAgentsData",
+                else: { $ifNull: ["$assignedAgents", []] },
+              },
+            },
             assignedLander: {
               $cond: {
                 if: { $ifNull: ["$assignedLanderData", false] },
@@ -850,6 +975,7 @@ export class LoanQueryController {
         {
           $project: {
             assignedAgentData: 0,
+            assignedAgentsData: 0,
             assignedLanderData: 0,
           },
         },
@@ -858,6 +984,11 @@ export class LoanQueryController {
       const loanQueries = await loanQueryService.getAll(
         req.query,
         populateStages,
+        prependStages.length > 0
+          ? {
+              prependStages,
+            }
+          : undefined,
       );
       return res
         .status(200)
@@ -882,24 +1013,31 @@ export class LoanQueryController {
         string
       >;
 
-      if (!loanType) {
-        return res.status(400).json(new ApiError(400, "loanType is required"));
-      }
-
-      const normalizedLoanType = normalizeLoanType(String(loanType));
-      if (!normalizedLoanType) {
+      const normalizedLoanType = loanType
+        ? normalizeLoanType(String(loanType))
+        : "";
+      if (loanType && !normalizedLoanType) {
         return res.status(400).json(new ApiError(400, "Invalid loanType"));
       }
 
       const { start, end } = resolveDateRange(startDate, endDate, 7);
 
       const match: Record<string, any> = {
-        loanType: normalizedLoanType,
         createdAt: { $gte: start, $lte: end },
       };
 
+      if (normalizedLoanType) {
+        match.loanType = normalizedLoanType;
+      }
+
       if (role === "agent" && userId) {
-        match.assignedAgent = userId;
+        const agentObjectId = toObjectId(userId);
+        if (agentObjectId) {
+          match.$or = [
+            { assignedAgent: agentObjectId },
+            { assignedAgents: agentObjectId },
+          ];
+        }
       } else if (role === "lander" && userId) {
         match.assignedLander = userId;
       } else if (role !== "admin" && userId) {
@@ -936,7 +1074,7 @@ export class LoanQueryController {
         new ApiResponse(
           200,
           {
-            loanType: normalizedLoanType,
+            loanType: normalizedLoanType || "all",
             range: {
               startDate: start.toISOString(),
               endDate: end.toISOString(),
@@ -1263,7 +1401,18 @@ export class LoanQueryController {
   static async assignAgent(req: Request, res: Response, next: NextFunction) {
     try {
       const { role } = (req as any).user || {};
-      const { agentId } = req.body;
+      const incomingAgentIds: string[] = Array.isArray(req.body?.agentIds)
+        ? req.body.agentIds
+        : req.body?.agentId
+          ? [req.body.agentId]
+          : [];
+      const selectedAgentIds: string[] = Array.from(
+        new Set(
+          incomingAgentIds
+            .map((value: any) => String(value || "").trim())
+            .filter(Boolean),
+        ),
+      );
 
       if (role !== "admin") {
         return res
@@ -1271,50 +1420,79 @@ export class LoanQueryController {
           .json(new ApiError(403, "Only admin can assign agents"));
       }
 
-      if (!agentId) {
-        return res.status(400).json(new ApiError(400, "Agent ID is required"));
+      if (selectedAgentIds.length === 0) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "At least one agent ID is required"));
       }
 
-      const existingResult = await loanQueryService.getById(
-        req.params.id,
-        true,
-      );
+      if (selectedAgentIds.length > 10) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "You can assign up to 10 agents only"));
+      }
+
+      const existingResult = await LoanQuery.findById(req.params.id)
+        .populate("assignedAgent", "name username email mobile")
+        .populate("assignedAgents", "name username email mobile")
+        .lean();
       if (!existingResult) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
-      const agent = await Admin.findById(agentId).populate("role");
-      if (!agent) {
-        return res.status(404).json(new ApiError(404, "Agent not found"));
+      const agents = await Admin.find({ _id: { $in: selectedAgentIds } })
+        .populate("role")
+        .select("_id name username email mobile role")
+        .lean();
+
+      if (agents.length !== selectedAgentIds.length) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "One or more agents were not found"));
       }
-      if ((agent as any)?.role?.name !== "agent") {
+
+      const invalidAgent = agents.find(
+        (agent: any) => (agent as any)?.role?.name !== "agent",
+      );
+      if (invalidAgent) {
         return res
           .status(400)
           .json(new ApiError(400, "Selected employee is not an agent"));
       }
 
       const actorId = (req as any).user?._id;
-      const previousAgentId = existingResult.assignedAgent;
-      const agentName = (agent as any).name || agent.username || agent.email;
+      const previousAgentIds: string[] = collectAssignedAgentIds(existingResult);
+      const nextAgentIds: string[] = selectedAgentIds;
+      const addedAgentIds: string[] = nextAgentIds.filter(
+        (id) => !previousAgentIds.includes(id),
+      );
+      const removedAgentIds: string[] = previousAgentIds.filter(
+        (id) => !nextAgentIds.includes(id),
+      );
+      const primaryAgentId = nextAgentIds[0];
+      const agentNames: string[] = agents
+        .map((agent: any) => agent?.name || agent?.username || agent?.email)
+        .filter(Boolean);
 
       const updatedResult = await loanQueryService.updateById(
         req.params.id,
         {
-          assignedAgent: agentId,
+          assignedAgent: primaryAgentId,
+          assignedAgents: nextAgentIds,
           $push: {
             activities: {
               type: LoanQueryActivityType.AGENT_ASSIGNED,
-              description: `Agent assigned: ${agentName}${
-                previousAgentId ? " (reassigned)" : ""
+              description: `Agent${nextAgentIds.length > 1 ? "s" : ""} assigned: ${agentNames.join(", ")}${
+                previousAgentIds.length ? " (updated)" : ""
               }`,
               actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
               actorModel: "Admin",
               payload: {
-                agentId,
-                agentName,
-                previousAgentId: previousAgentId
-                  ? String(previousAgentId)
-                  : undefined,
+                agentIds: nextAgentIds,
+                agentNames,
+                previousAgentIds,
+                addedAgentIds,
+                removedAgentIds,
                 mode: "manual",
               },
               createdAt: new Date(),
@@ -1324,19 +1502,23 @@ export class LoanQueryController {
         {
           populate: [
             { path: "assignedAgent", select: "name username email mobile" },
+            {
+              path: "assignedAgents",
+              select: "name username email mobile",
+            },
           ],
         },
       );
 
-      if (
-        previousAgentId &&
-        previousAgentId.toString() !== agentId.toString()
-      ) {
-        await EmployeeAssignmentEngine.adjustEmployeeLoad(previousAgentId, -1);
-      }
-      await EmployeeAssignmentEngine.adjustEmployeeLoad(
-        new Types.ObjectId(agentId),
-        1,
+      await Promise.all(
+        removedAgentIds.map((agentId) =>
+          EmployeeAssignmentEngine.adjustEmployeeLoad(agentId, -1),
+        ),
+      );
+      await Promise.all(
+        addedAgentIds.map((agentId) =>
+          EmployeeAssignmentEngine.adjustEmployeeLoad(agentId, 1),
+        ),
       );
 
       return res
@@ -1363,6 +1545,10 @@ export class LoanQueryController {
         )
         .populate(
           "assignedAgent",
+          "name username email mobile profilePictureUrl",
+        )
+        .populate(
+          "assignedAgents",
           "name username email mobile profilePictureUrl",
         )
         .populate("assignedLander", "name email mobile profilePictureUrl")
@@ -1399,6 +1585,7 @@ export class LoanQueryController {
       const responseData = {
         ...query,
         rcLookup,
+        activities: await enrichActivityActors(query.activities || []),
         commissionRecorded: query.commissionRecorded ?? false,
         commissionRecordedAt: query.commissionRecordedAt ?? null,
         commissionTransactionId: query.commissionTransactionId ?? null,
@@ -1915,13 +2102,13 @@ export class LoanQueryController {
 
       await query.save();
 
-      // Adjust lander load - reduce by 1 as this query is now completed
-      if (query.assignedAgent) {
-        await EmployeeAssignmentEngine.adjustEmployeeLoad(
-          query.assignedAgent,
-          -1,
-        );
-      }
+      // Adjust agent load - reduce by 1 for every assigned agent now that the query is completed
+      const assignedAgentIds = collectAssignedAgentIds(query);
+      await Promise.all(
+        assignedAgentIds.map((agentId) =>
+          EmployeeAssignmentEngine.adjustEmployeeLoad(agentId, -1),
+        ),
+      );
       if (query.assignedLander) {
         console.log(`  📉 Adjusting lander load for ${query.assignedLander}`);
         await LanderAssignmentEngine.adjustLanderLoad(query.assignedLander, -1);

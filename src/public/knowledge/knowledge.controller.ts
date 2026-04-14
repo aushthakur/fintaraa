@@ -30,6 +30,9 @@ export class KnowledgeController {
       else if (lowered === "true") next.isActive = true;
       else if (lowered === "false") next.isActive = false;
     }
+    if (typeof next.type === "string") {
+      next.type = next.type.toLowerCase().trim();
+    }
     if (typeof next.tags === "string") {
       next.tags = next.tags
         .split(",")
@@ -96,10 +99,19 @@ export class KnowledgeController {
   static async create(req: Request, res: Response, next: NextFunction) {
     try {
       const payload = KnowledgeController.normalizePayload(req.body || {});
+      const actor = (req as any).user || {};
       if (!payload.title || !payload.type) {
         return res
           .status(400)
           .json(new ApiError(400, "Title and type are required"));
+      }
+      payload.createdByName = actor?.name || actor?.username || actor?.email;
+      payload.createdByRole = actor?.role?.name || actor?.role || undefined;
+      payload.editedByName = payload.createdByName;
+      payload.editedByRole = payload.createdByRole;
+      payload.editedAt = new Date();
+      if (payload.isActive && !payload.publishedAt) {
+        payload.publishedAt = new Date();
       }
       const item = await Knowledge.create(payload);
       return res
@@ -114,6 +126,13 @@ export class KnowledgeController {
     try {
       const { id } = req.params;
       const payload = KnowledgeController.normalizePayload(req.body || {});
+      const actor = (req as any).user || {};
+      payload.editedByName = actor?.name || actor?.username || actor?.email;
+      payload.editedByRole = actor?.role?.name || actor?.role || undefined;
+      payload.editedAt = new Date();
+      if (payload.isActive && !payload.publishedAt) {
+        payload.publishedAt = new Date();
+      }
       const item = await Knowledge.findByIdAndUpdate(id, payload, {
         new: true,
       });

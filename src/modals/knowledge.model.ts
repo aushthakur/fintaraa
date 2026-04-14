@@ -19,6 +19,11 @@ export interface IKnowledge extends Document {
   tags?: string[];
   isActive: boolean;
   publishedAt?: Date;
+  createdByName?: string;
+  createdByRole?: string;
+  editedByName?: string;
+  editedByRole?: string;
+  editedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -40,6 +45,11 @@ const KnowledgeSchema: Schema<IKnowledge> = new Schema(
     tags: { type: [String], default: [] },
     isActive: { type: Boolean, default: true, index: true },
     publishedAt: { type: Date },
+    createdByName: { type: String, trim: true },
+    createdByRole: { type: String, trim: true },
+    editedByName: { type: String, trim: true },
+    editedByRole: { type: String, trim: true },
+    editedAt: { type: Date },
   },
   { timestamps: true }
 );

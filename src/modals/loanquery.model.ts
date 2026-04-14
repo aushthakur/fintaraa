@@ -236,6 +236,7 @@ export interface ILoanQuery extends Document {
   documents?: Record<string, any>;
 
   assignedAgent?: Types.ObjectId;
+  assignedAgents?: Types.ObjectId[];
   assignedLander?: Types.ObjectId;
   channelAgency?: Types.ObjectId;
   ownerAgency?: Types.ObjectId;
@@ -380,6 +381,13 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
       ref: "Admin",
       index: true,
     },
+    assignedAgents: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "Admin",
+        index: true,
+      },
+    ],
     assignedLander: {
       type: Schema.Types.ObjectId,
       ref: "Lander",

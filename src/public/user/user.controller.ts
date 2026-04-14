@@ -185,6 +185,34 @@ const normalizePanCard = (value?: string) =>
     .trim()
     .toUpperCase();
 
+const normalizeBoolean = (value: any, fallback = true) =>
+  typeof value === "boolean"
+    ? value
+    : typeof value === "string"
+      ? ["true", "1", "yes", "on"].includes(value.trim().toLowerCase())
+      : fallback;
+
+const resolveNotificationPayload = (body: any, existing?: any) => {
+  const current = existing?.notification || {};
+  const bodyNotification = body?.notification || {};
+
+  return {
+    sms: normalizeBoolean(bodyNotification.sms ?? body.sms, current.sms ?? true),
+    push: normalizeBoolean(
+      bodyNotification.push ?? body.push,
+      current.push ?? true,
+    ),
+    email: normalizeBoolean(
+      bodyNotification.email ?? body.emailNotification,
+      current.email ?? true,
+    ),
+    whatsapp: normalizeBoolean(
+      bodyNotification.whatsapp ?? body.whatsapp,
+      current.whatsapp ?? true,
+    ),
+  };
+};
+
 const assertPanCardAvailable = async (
   panCard: string,
   currentUserId?: string,
@@ -342,6 +370,7 @@ export class UserController {
         isMobileVerified: false,
         cancelledChequeOrPassbook,
         kycProfile,
+        notification: resolveNotificationPayload(req.body),
         status:
           role === "user" ? UserStatus.ACTIVE : UserStatus.PENDING_VERIFICATION,
       };
@@ -399,6 +428,10 @@ export class UserController {
             ...digiLockerVault,
           };
         }
+        updatePayload.notification = resolveNotificationPayload(
+          req.body,
+          existingByMobile,
+        );
         let referrer: any = null;
         if (referralInput) {
           referrer = await User.findOne({ referralCode: referralInput });
@@ -1241,6 +1274,7 @@ export class UserController {
           (id || _id).toString(),
         );
       }
+      data.notification = resolveNotificationPayload(req.body, existingUser);
       const result = await userService.updateById(id || _id, data);
       await safeNotify({
         type: "profile-updated",

@@ -178,7 +178,7 @@ type Status =
   | "resolved"
   | "in_progress"
   | "re_assigned";
-type ActionType = "commented" | "status_changed" | "resolved";
+type ActionType = "commented" | "status_changed" | "resolved" | "internal_note";
 type UserType = "User" | "Agent" | "Agency" | "Admin";
 type Tag =
   | (typeof HIGH_PRIORITY_TAGS)[number]
@@ -255,7 +255,7 @@ const InteractionSchema = new Schema<IInteraction>(
     },
     action: {
       type: String,
-      enum: ["commented", "status_changed", "resolved"],
+      enum: ["commented", "status_changed", "resolved", "internal_note"],
       required: true,
     },
     content: {

@@ -47,6 +47,8 @@ export interface ICallRecord extends Document {
   assignmentMode?: "auto" | "manual";
   channelAgency?: Types.ObjectId;
   attachedLead?: Types.ObjectId;
+  loanQueryId?: Types.ObjectId;
+  loanQueryCreatedAt?: Date;
   channelMatchedAt?: Date;
   createdBy?: Types.ObjectId;
   updatedBy?: Types.ObjectId;
@@ -116,6 +118,8 @@ const CallRecordSchema = new Schema<ICallRecord>(
     },
     channelAgency: { type: Schema.Types.ObjectId, ref: "Agency" },
     attachedLead: { type: Schema.Types.ObjectId, ref: "Lead" },
+    loanQueryId: { type: Schema.Types.ObjectId, ref: "LoanQuery" },
+    loanQueryCreatedAt: { type: Date },
     channelMatchedAt: { type: Date },
     createdBy: { type: Schema.Types.ObjectId, ref: "Admin" },
     updatedBy: { type: Schema.Types.ObjectId, ref: "Admin" },

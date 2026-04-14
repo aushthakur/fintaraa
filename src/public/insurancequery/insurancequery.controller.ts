@@ -25,6 +25,16 @@ import {
 
 const insuranceQueryService = new CommonService(InsuranceQuery);
 
+const toObjectId = (value: any) => {
+  const raw = value?._id || value;
+  if (!raw) return null;
+  try {
+    return new Types.ObjectId(String(raw));
+  } catch {
+    return null;
+  }
+};
+
 const resolveDateRange = (
   startRaw: any,
   endRaw: any,
@@ -574,14 +584,11 @@ export class InsuranceQueryController {
         string
       >;
 
-      if (!typeOfInsurance) {
-        return res
-          .status(400)
-          .json(new ApiError(400, "typeOfInsurance is required"));
-      }
-
-      const normalizedType = String(typeOfInsurance).toLowerCase();
+      const normalizedType = typeOfInsurance
+        ? String(typeOfInsurance).toLowerCase()
+        : "";
       if (
+        normalizedType &&
         !Object.values(InsuranceType).includes(
           normalizedType as InsuranceType,
         )
@@ -594,12 +601,20 @@ export class InsuranceQueryController {
       const { start, end } = resolveDateRange(startDate, endDate, 7);
 
       const match: Record<string, any> = {
-        typeOfInsurance: normalizedType,
         createdAt: { $gte: start, $lte: end },
       };
 
+      if (normalizedType) {
+        match.typeOfInsurance = normalizedType;
+      }
+
       if (role === "agent" && userId) {
-        match.assignedAgent = userId;
+        const agentObjectId = toObjectId(userId);
+        match.$or = [
+          ...(agentObjectId
+            ? [{ assignedAgent: agentObjectId }, { assignedAgents: agentObjectId }]
+            : []),
+        ];
       } else if (role === "lander" && userId) {
         match.assignedLander = userId;
       } else if (role !== "admin" && userId) {
@@ -629,7 +644,7 @@ export class InsuranceQueryController {
         new ApiResponse(
           200,
           {
-            typeOfInsurance: normalizedType,
+            typeOfInsurance: normalizedType || "all",
             range: {
               startDate: start.toISOString(),
               endDate: end.toISOString(),
