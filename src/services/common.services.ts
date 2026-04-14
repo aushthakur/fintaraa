@@ -208,10 +208,17 @@ export class CommonService<T extends Document> {
       });
       if (!updated) throw new ApiError(404, "Record not found for update");
       if (options?.populate) {
-        return this.getById(
-          id,
-          options.populate === true ? true : options.populate,
-        );
+        if (options.populate === true) {
+          const refPaths = Object.keys(this.model.schema.paths).filter(
+            (key) => (this.model.schema.paths[key] as any)?.options?.ref,
+          );
+          if (refPaths.length > 0) {
+            await updated.populate(refPaths);
+          }
+          return updated;
+        }
+        await updated.populate(options.populate as PopulateOptions | Array<string | PopulateOptions>);
+        return updated;
       }
       return updated;
     } catch (error) {
