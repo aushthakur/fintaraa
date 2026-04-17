@@ -103,15 +103,28 @@ export class CommonService<T extends Document> {
         allowDiskUse: true,
       };
 
-      const aggregate = this.model.aggregate(pipeline);
-      if (Object.keys(aggregateOptions).length > 0) {
-        aggregate.option(aggregateOptions);
-      }
-      if (aggregateOptions.allowDiskUse !== false) {
-        aggregate.allowDiskUse(true);
-      }
+      const runAggregate = async (stages: any[]) => {
+        const aggregate = this.model.aggregate(stages);
+        if (Object.keys(aggregateOptions).length > 0) {
+          aggregate.option(aggregateOptions);
+        }
+        if (aggregateOptions.allowDiskUse !== false) {
+          aggregate.allowDiskUse(true);
+        }
+        return aggregate.exec();
+      };
 
-      const result = await aggregate.exec();
+      const countPipeline = meta?.countPipeline;
+      const shouldCountCursorTotal =
+        Boolean(usePagination && meta?.useCursor) &&
+        Array.isArray(countPipeline) &&
+        countPipeline.length > 0;
+
+      const dataPromise = runAggregate(pipeline);
+      const countPromise = shouldCountCursorTotal
+        ? runAggregate(countPipeline)
+        : null;
+      const result = await dataPromise;
 
       if (usePagination) {
         let data: any[] = [];
@@ -120,6 +133,8 @@ export class CommonService<T extends Document> {
 
         if (meta?.useCursor) {
           const cursorLimit = meta.limit ?? limit;
+          const countResult = countPromise ? await countPromise : [];
+
           const hasMore = result.length > cursorLimit;
           data = hasMore ? result.slice(0, cursorLimit) : result;
 
@@ -151,20 +166,7 @@ export class CommonService<T extends Document> {
             nextCursor = buildCursor(data[data.length - 1]);
           }
 
-          const countPipeline = meta?.countPipeline;
-          if (Array.isArray(countPipeline) && countPipeline.length > 0) {
-            const countAgg = this.model.aggregate(countPipeline);
-            if (Object.keys(aggregateOptions).length > 0) {
-              countAgg.option(aggregateOptions);
-            }
-            if (aggregateOptions.allowDiskUse !== false) {
-              countAgg.allowDiskUse(true);
-            }
-            const countResult = await countAgg.exec();
-            totalItems = countResult?.[0]?.total || 0;
-          } else {
-            totalItems = result.length;
-          }
+          totalItems = countResult?.[0]?.total || result.length;
         } else {
           data = result?.[0]?.data || [];
           totalItems = result?.[0]?.total;
@@ -217,7 +219,9 @@ export class CommonService<T extends Document> {
           }
           return updated;
         }
-        await updated.populate(options.populate as PopulateOptions | Array<string | PopulateOptions>);
+        await updated.populate(
+          options.populate as PopulateOptions | Array<string | PopulateOptions>,
+        );
         return updated;
       }
       return updated;
