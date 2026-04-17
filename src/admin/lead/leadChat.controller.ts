@@ -8,6 +8,7 @@ import Admin from "../../modals/admin.model";
 import Agent from "../../modals/agent.model";
 import { User } from "../../modals/user.model";
 import { Types } from "mongoose";
+import { decryptQueryMessageText } from "../../utils/queryChatCrypto";
 
 export class LeadChatController {
   /**
@@ -55,10 +56,31 @@ export class LeadChatController {
         {
           $addFields: {
             userId: {
-              $cond: [{ $eq: ["$senderModel", "User"] }, "$sender", "$receiver"],
+              $cond: [
+                { $eq: ["$senderModel", "User"] },
+                "$sender",
+                {
+                  $cond: [
+                    { $eq: ["$receiverModel", "User"] },
+                    "$receiver",
+                    null,
+                  ],
+                },
+              ],
             },
-            agentId: {
-              $cond: [{ $eq: ["$senderModel", "Agent"] }, "$sender", "$receiver"],
+            staffId: {
+              $cond: [
+                { $eq: ["$senderModel", "User"] },
+                "$receiver",
+                "$sender",
+              ],
+            },
+            staffModel: {
+              $cond: [
+                { $eq: ["$senderModel", "User"] },
+                "$receiverModel",
+                "$senderModel",
+              ],
             },
           },
         },
@@ -67,7 +89,8 @@ export class LeadChatController {
             _id: {
               leadId: "$leadId",
               userId: "$userId",
-              agentId: "$agentId",
+              staffId: "$staffId",
+              staffModel: "$staffModel",
             },
             lastMessage: { $first: "$$ROOT" },
             unreadCount: {
@@ -91,7 +114,7 @@ export class LeadChatController {
 
       const leadIds = [...new Set(rows.map((r: any) => String(r?._id?.leadId)).filter(Boolean))];
       const userIds = [...new Set(rows.map((r: any) => String(r?._id?.userId)).filter(Boolean))];
-      const agentIds = [...new Set(rows.map((r: any) => String(r?._id?.agentId)).filter(Boolean))];
+      const staffIds = [...new Set(rows.map((r: any) => String(r?._id?.staffId)).filter(Boolean))];
 
       const [leads, users, agents, admins] = await Promise.all([
         Lead.find({ _id: { $in: leadIds } })
@@ -100,10 +123,10 @@ export class LeadChatController {
         User.find({ _id: { $in: userIds } })
           .select("_id name email mobile")
           .lean(),
-        Agent.find({ _id: { $in: agentIds } })
+        Agent.find({ _id: { $in: staffIds } })
           .select("_id name email")
           .lean(),
-        Admin.find({ _id: { $in: agentIds } })
+        Admin.find({ _id: { $in: staffIds } })
           .select("_id username name email")
           .lean(),
       ]);
@@ -117,14 +140,15 @@ export class LeadChatController {
       const conversations = rows.map((row: any) => {
         const leadId = String(row?._id?.leadId || "");
         const userId = String(row?._id?.userId || "");
-        const agentId = String(row?._id?.agentId || "");
+        const staffId = String(row?._id?.staffId || "");
+        const staffModel = String(row?._id?.staffModel || "");
         const lead = leadMap.get(leadId);
         const user = userMap.get(userId);
-        const agent = agentMap.get(agentId);
+        const agent = agentMap.get(staffId);
         const msg = row?.lastMessage || {};
 
         return {
-          _id: `${leadId}:${userId}:${agentId}`,
+          _id: `${leadId}:${userId}:${staffId}:${staffModel}`,
           leadId,
           leadRef: lead?.leadRef || leadId.slice(-8),
           leadName: lead?.fullName || "Lead",
@@ -134,11 +158,14 @@ export class LeadChatController {
             email: user?.email || "",
             mobile: user?.mobile || "",
           },
-          agent: {
-            _id: agentId,
-            name: agent?.name || agent?.username || "Agent",
-            email: agent?.email || "",
-          },
+          agent: staffId
+            ? {
+                _id: staffId,
+                name: agent?.name || agent?.username || "Agent",
+                email: agent?.email || "",
+                role: staffModel === "Admin" ? "Admin" : "Agent",
+              }
+            : undefined,
           unreadCount: Number(row?.unreadCount) || 0,
           lastMessage: {
             _id: String(msg?._id || ""),
@@ -275,7 +302,7 @@ export class LeadChatController {
 
           return {
             _id: msg._id.toString(),
-            text: msg.text,
+            text: decryptQueryMessageText(msg.text || "") || msg.text,
             sender: senderData,
             receiver: receiverData,
             status: msg.status,
@@ -484,7 +511,7 @@ export class LeadChatController {
 
       const serializedMessage = {
         _id: messageId,
-        text: message.text,
+        text: decryptQueryMessageText(message.text || "") || message.text,
         sender: senderData,
         receiver: receiverData,
         status: message.status,

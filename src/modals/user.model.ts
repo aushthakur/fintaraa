@@ -25,7 +25,7 @@ const CoordinatesSchema = new Schema(
     latitude: { type: Number },
     longitude: { type: Number },
   },
-  { _id: false }
+  { _id: false },
 );
 
 export enum PropertyOwnerType {
@@ -78,7 +78,7 @@ export const BankDetailsSchema = new Schema(
     cancelledChequeUrl: { type: String, trim: true },
     verified: { type: Boolean, default: false },
   },
-  { _id: false }
+  { _id: false },
 );
 
 export const AddressSchema = new Schema(
@@ -92,7 +92,7 @@ export const AddressSchema = new Schema(
     coordinates: { type: CoordinatesSchema, required: false },
     label: { type: String, enum: ["home", "office"], required: false },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const EmergencyContactSchema = new Schema(
@@ -103,7 +103,7 @@ const EmergencyContactSchema = new Schema(
     relationship: { type: String },
     address: { type: AddressSchema },
   },
-  { _id: false }
+  { _id: false },
 );
 
 export interface IDocumentRecord {
@@ -128,7 +128,7 @@ export const DocumentSchema = new Schema(
     verified: { type: Boolean, default: false },
     referenceId: { type: String, trim: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 export interface ILoginMethod {
@@ -151,7 +151,7 @@ export const LoginMethodSchema = new Schema(
     lastUsedAt: { type: Date },
     deviceLimit: { type: Number, default: 3 },
   },
-  { _id: false }
+  { _id: false },
 );
 
 export interface IDeviceAuth {
@@ -172,7 +172,7 @@ const DeviceAuthSchema = new Schema(
     biometricEnabled: { type: Boolean, default: false },
     pushToken: { type: String },
   },
-  { _id: false }
+  { _id: false },
 );
 
 export interface ISecurityPreferences {
@@ -198,7 +198,7 @@ export const SecurityPreferencesSchema = new Schema(
     trustedDevices: { type: [DeviceAuthSchema], default: [] },
     lastMfaChallengeAt: { type: Date },
   },
-  { _id: false }
+  { _id: false },
 );
 
 export interface IEmploymentDetails {
@@ -248,31 +248,31 @@ const EmploymentDetailsSchema = new Schema(
       enum: Object.values(EmploymentType),
     },
     startDate: { type: Date },
-  monthlyIncome: { type: Number },
-  annualIncome: { type: Number },
-  annualTurnover: { type: Number },
-  businessIncome: { type: Number },
-  taxId: { type: String, trim: true },
-  tenure: { type: String, trim: true },
-  industry: { type: String, trim: true },
-  workEmail: { type: String, trim: true },
-  workPhone: { type: String, trim: true },
-  businessEmail: { type: String, trim: true },
-  businessPhone: { type: String, trim: true },
-  businessAddress: { type: String, trim: true },
-  officeCity: { type: String, trim: true },
-  officeState: { type: String, trim: true },
-  officePinCode: { type: String, trim: true },
-  salaryAccountBank: { type: String, trim: true },
-  employmentStatus: { type: String, trim: true },
-  businessRegistrationType: { type: String, trim: true },
-  gstNumber: { type: String, trim: true },
-  numberOfEmployees: { type: Number },
-  licenseNumber: { type: String, trim: true },
-  website: { type: String, trim: true },
-  companyType: { type: String, trim: true },
-  gstTurnover: { type: String, trim: true },
-  employerName: { type: String, trim: true },
+    monthlyIncome: { type: Number },
+    annualIncome: { type: Number },
+    annualTurnover: { type: Number },
+    businessIncome: { type: Number },
+    taxId: { type: String, trim: true },
+    tenure: { type: String, trim: true },
+    industry: { type: String, trim: true },
+    workEmail: { type: String, trim: true },
+    workPhone: { type: String, trim: true },
+    businessEmail: { type: String, trim: true },
+    businessPhone: { type: String, trim: true },
+    businessAddress: { type: String, trim: true },
+    officeCity: { type: String, trim: true },
+    officeState: { type: String, trim: true },
+    officePinCode: { type: String, trim: true },
+    salaryAccountBank: { type: String, trim: true },
+    employmentStatus: { type: String, trim: true },
+    businessRegistrationType: { type: String, trim: true },
+    gstNumber: { type: String, trim: true },
+    numberOfEmployees: { type: Number },
+    licenseNumber: { type: String, trim: true },
+    website: { type: String, trim: true },
+    companyType: { type: String, trim: true },
+    gstTurnover: { type: String, trim: true },
+    employerName: { type: String, trim: true },
     employerType: { type: String, trim: true },
     businessType: { type: String, trim: true },
     organizationId: { type: String, trim: true },
@@ -284,7 +284,7 @@ const EmploymentDetailsSchema = new Schema(
     propertyType: { type: String, trim: true },
     emiPaid: { type: String, trim: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 export interface IFinancialDetails {
@@ -322,7 +322,7 @@ const FinancialDetailsSchema = new Schema(
       },
     ],
   },
-  { _id: false }
+  { _id: false },
 );
 
 export interface IKycProfile {
@@ -401,7 +401,7 @@ export const KycProfileSchema = new Schema(
       notes: { type: String },
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 export interface IDigiLockerVault {
@@ -428,7 +428,7 @@ export const DigiLockerVaultSchema = new Schema(
       default: [],
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 export interface ILoanCreditProfile {
@@ -477,13 +477,13 @@ const LoanCreditProfileSchema = new Schema(
     ],
     reusableProfileReferenceId: { type: String },
   },
-  { _id: false }
+  { _id: false },
 );
 
 export interface IUser extends Document {
   name: string;
   role: string;
-  email: string;
+  email?: string;
   mobile: string;
   gender?: Gender;
   avatar?: string;
@@ -578,7 +578,7 @@ const UserSchema = new Schema<IUser>(
       type: String,
       index: true,
       unique: true,
-      required: true,
+      sparse: true,
       lowercase: true,
     },
     gender: {
@@ -593,11 +593,11 @@ const UserSchema = new Schema<IUser>(
       default: UserStatus.PENDING_VERIFICATION,
     },
 
+    cancelledChequeOrPassbook: { type: String, default: null },
     panCard: { type: String, unique: true, sparse: true, trim: true },
     panCardUrl: { type: String, unique: true, sparse: true, trim: true },
     aadhaarCard: { type: String, unique: true, sparse: true, trim: true },
     aadhaarCardUrl: { type: String, unique: true, sparse: true, trim: true },
-    cancelledChequeOrPassbook: { type: String, default: null },
     cibilScore: { type: Number },
     cibilLastFetchedAt: { type: Date },
     cibilReport: { type: Object },
@@ -639,7 +639,7 @@ const UserSchema = new Schema<IUser>(
       default: {},
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 UserSchema.index({ email: 1, status: 1 });
@@ -664,7 +664,7 @@ UserSchema.pre("save", async function (next) {
         upsert: true,
         setDefaultsOnInsert: true,
         ...(session ? { session } : {}),
-      }
+      },
     );
     user.customerId = `FINT${counter.seq}`;
   }
@@ -678,7 +678,7 @@ UserSchema.pre("save", async function (next) {
 
 // ✅ Compare Password
 UserSchema.methods.comparePassword = async function (
-  candidatePassword: string
+  candidatePassword: string,
 ): Promise<boolean> {
   return await bcrypt.compare(candidatePassword, this.password);
 };

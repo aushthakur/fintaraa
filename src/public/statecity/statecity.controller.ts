@@ -3,14 +3,12 @@ import ApiResponse from "../../utils/ApiResponse";
 import { NextFunction, Request, Response } from "express";
 import { CommonService } from "../../services/common.services";
 import { indianCountries, indianStates, region } from "../../config/data";
-import { City, Country, PropertyCity, State } from "../../modals/statecity.model";
+import { City, Country, State } from "../../modals/statecity.model";
 import mongoose from "mongoose";
-import { extractImageUrl } from "../../utils/helper";
 
 const cityService = new CommonService(City);
 const stateService = new CommonService(State);
 const countryService = new CommonService(Country);
-const propertyCityService = new CommonService(PropertyCity);
 
 export class StateCityController {
   static async createStateCity(
@@ -437,169 +435,6 @@ export class StateCityController {
   ) {
     try {
       const result = await cityService.deleteById(req.params.id);
-      if (!result)
-        return res
-          .status(404)
-          .json(new ApiError(404, "Failed to delete city"));
-      return res
-        .status(200)
-        .json(new ApiResponse(200, result, "Deleted successfully"));
-    } catch (err) {
-      next(err);
-    }
-  }
-
-  static async getAllPropertyCity(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
-    try {
-      const pipeline = [
-        {
-          $lookup: {
-            from: "cities",
-            localField: "cityId",
-            foreignField: "_id",
-            as: "cityData",
-          },
-        },
-        { $unwind: "$cityData" },
-
-        // Lookup state info from city
-        {
-          $lookup: {
-            from: "states",
-            localField: "cityData.stateId",
-            foreignField: "_id",
-            as: "stateData",
-          },
-        },
-        { $unwind: "$stateData" },
-
-        // Lookup country info from state
-        {
-          $lookup: {
-            from: "countries",
-            localField: "stateData.countryId",
-            foreignField: "_id",
-            as: "countryData",
-          },
-        },
-        { $unwind: "$countryData" },
-
-        // Final projection
-        {
-          $project: {
-            _id: 1,
-            image: 1,
-            isActive: 1,
-            createdAt: 1,
-            updatedAt: 1,
-            cityName: "$cityData.name",
-            stateName: "$stateData.name",
-            countryName: "$countryData.name",
-          },
-        },
-      ];
-      const cities = await propertyCityService.getAll(req.query, pipeline);
-      return res
-        .status(200)
-        .json(new ApiResponse(200, cities, "Cities fetched successfully"));
-    } catch (err) {
-      next(err);
-    }
-  }
-
-  static async createProperty(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
-    try {
-      const image = req?.body?.image?.[0]?.url;
-      if (!image)
-        return res
-          .status(403)
-          .json(new ApiError(403, "Banner Image is Required."));
-
-      const result = await propertyCityService.create({ ...req.body, image });
-      if (!result)
-        return res
-          .status(400)
-          .json(new ApiError(400, "Failed to create city"));
-      return res
-        .status(201)
-        .json(new ApiResponse(201, result, "Created successfully"));
-    } catch (err) {
-      next(err);
-    }
-  }
-
-  static async getPropertyById(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
-    try {
-      const { role } = (req as any).user;
-      const result = await propertyCityService.getById(req.params.id, role !== "admin");
-      if (!result)
-        return res
-          .status(404)
-          .json(new ApiError(404, "city not found"));
-      return res
-        .status(200)
-        .json(new ApiResponse(200, result, "Data fetched successfully"));
-    } catch (err) {
-      next(err);
-    }
-  }
-
-  static async updatePropertyById(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
-    try {
-      const id = req.params.id;
-      const image = req?.body?.image?.[0]?.url;
-      const record = await propertyCityService.getById(id);
-      if (!record) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Job Requirement (On Demand) not found."));
-      }
-
-      let imageUrl;
-      if (req?.body?.image && record.image)
-        imageUrl = await extractImageUrl(
-          req?.body?.image,
-          record.image as string
-        );
-      const result = await propertyCityService.updateById(req.params.id, {
-        ...req.body,
-        image: imageUrl || image,
-      });
-      if (!result)
-        return res
-          .status(404)
-          .json(new ApiError(404, "Failed to update city"));
-      return res
-        .status(200)
-        .json(new ApiResponse(200, result, "Updated successfully"));
-    } catch (err) {
-      next(err);
-    }
-  }
-
-  static async deletePropertyById(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
-    try {
-      const result = await propertyCityService.deleteById(req.params.id);
       if (!result)
         return res
           .status(404)

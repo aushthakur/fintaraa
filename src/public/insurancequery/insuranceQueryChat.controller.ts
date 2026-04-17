@@ -217,11 +217,11 @@ export class InsuranceQueryChatController {
       let receiverModel: "User" | "Admin" | "Agent" | "Lander" = "User";
 
       const requestedReceiver = receiverId ? String(receiverId) : "";
-      if (requestedReceiver && participantModels.has(requestedReceiver)) {
-        finalReceiverId = requestedReceiver;
-        receiverModel = participantModels.get(requestedReceiver)!;
-      } else if (senderModel === "User") {
-        if (assignedAgentId) {
+      if (senderModel === "User") {
+        if (requestedReceiver && participantModels.has(requestedReceiver)) {
+          finalReceiverId = requestedReceiver;
+          receiverModel = participantModels.get(requestedReceiver)!;
+        } else if (assignedAgentId) {
           finalReceiverId = assignedAgentId;
           receiverModel = "Admin";
         } else if (assignedLanderId) {
@@ -284,6 +284,7 @@ export class InsuranceQueryChatController {
       const io = app?.get("socketio");
       if (io) {
         io.emit("queryMessage", {
+          kind: "insurance",
           queryId,
           message: populatedMessage,
         });

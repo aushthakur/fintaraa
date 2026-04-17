@@ -125,6 +125,75 @@ export const authorize =
     return next();
   };
 
+const normalizePermissionText = (value?: string) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+
+const hasModulePermission = (permissions: any[] = [], moduleName: string) => {
+  const normalizedModule = normalizePermissionText(moduleName);
+  if (!normalizedModule) return false;
+
+  return permissions.some((permission) => {
+    const permissionModule = normalizePermissionText(permission?.module);
+    if (permissionModule !== normalizedModule) return false;
+    const access = permission?.access || {};
+    return Object.values(access).some(Boolean);
+  });
+};
+
+const resolvePermissionScope = async (userId: string) => {
+  const [admin, agent, lander, agency] = await Promise.all([
+    Admin.findById(userId).populate("role").lean().catch(() => null),
+    Agent.findById(userId).populate("role").lean().catch(() => null),
+    Lander.findById(userId).populate("role").lean().catch(() => null),
+    Agency.findById(userId).populate("role").lean().catch(() => null),
+  ]);
+
+  return admin || agent || lander || agency || null;
+};
+
+export const authorizePermission =
+  (...moduleNames: string[]): RequestHandler =>
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const user = (req as AuthenticatedRequest).user;
+
+    if (!user) {
+      res.status(401).json({
+        success: false,
+        status: 401,
+        message: "Unauthorized. Please log in.",
+      });
+      return;
+    }
+
+    if (user.role === "admin") {
+      return next();
+    }
+
+    if (moduleNames.length === 0) {
+      return next();
+    }
+
+    const scope = await resolvePermissionScope(user._id);
+    const permissions = (scope as any)?.role?.permissions || [];
+    const allowed = moduleNames.some((moduleName) =>
+      hasModulePermission(permissions, moduleName),
+    );
+
+    if (allowed) {
+      return next();
+    }
+
+    res.status(403).json({
+      success: false,
+      status: 403,
+      message: `Forbidden: You do not have permission to access ${moduleNames.join(", ")}.`,
+      allowedModules: moduleNames,
+    });
+  };
+
 const getUserByRole = async (role: Role, id: string) => {
   if (role === "agent") {
     const employee = await Admin.findById(id).populate("role");

@@ -66,6 +66,7 @@ router.post(
   asyncHandler(LoanQueryController.createQuery),
 );
 router.get("/stats", asyncHandler(LoanQueryController.getStats));
+router.get("/sidebar-counts", asyncHandler(LoanQueryController.getSidebarCounts));
 router.get("/", asyncHandler(LoanQueryController.getAllQueries));
 router.get("/:id", asyncHandler(LoanQueryController.getQueryById));
 router.put(
@@ -109,6 +110,10 @@ router.patch(
   asyncHandler(LoanQueryController.assignLander),
 );
 router.patch(
+  "/:id/assign-agent",
+  asyncHandler(LoanQueryController.assignAgent),
+);
+router.post(
   "/:id/assign-agent",
   asyncHandler(LoanQueryController.assignAgent),
 );

@@ -49,8 +49,13 @@ export enum ApplicationStatus {
   DISBURSED = "disbursed",
   CONNECTED = "connected",
   NOT_INTERESTED = "not_interested",
+  INTERESTED = "interested",
+  QUALIFIED = "qualified",
+  ALREADY_APPLIED_ELSEWHERE = "already_applied_elsewhere",
+  FOLLOW_UP_SCHEDULED = "follow_up_scheduled",
   FOLLOW_UP_REQUIRED = "follow_up_required",
   BASIC_DETAILS = "basic_details",
+  BASIC_DETAILS_COLLECTED = "basic_details_collected",
   COLLECTED = "collected",
   ELIGIBLE = "eligible",
   NOT_ELIGIBLE = "not_eligible",
@@ -59,6 +64,11 @@ export enum ApplicationStatus {
   DOCUMENTS_RECEIVED = "documents_received",
   DOCUMENTS_VERIFIED = "documents_verified",
   DOCUMENTS_REJECTED = "documents_rejected",
+  DOCUMENTS_PENDING = "documents_pending",
+  APPLICATION_IN_PROGRESS = "application_in_progress",
+  DROPPED_LOST = "dropped_lost",
+  DUPLICATE = "duplicate",
+  LOGIN_DONE = "login_done",
   SUBMITTED_TO_BANK_NBFC = "submitted_to_bank_nbfc",
   MULTIPLE_BANKS_APPLIED = "multiple_banks_applied",
   BANK_QUERY_RAISED = "bank_query_raised",
@@ -72,6 +82,7 @@ export enum ApplicationStatus {
   DISBURSED_PARTIAL_FULL = "disbursed_partial_full",
   COMPLETED_SUCCESS = "completed_success",
   CANCELLED_BY_CUSTOMER = "cancelled_by_customer",
+  FUTURE_FOLLOW_UP = "future_follow_up",
 }
 
 // Allowed fields mapping based on insurance type

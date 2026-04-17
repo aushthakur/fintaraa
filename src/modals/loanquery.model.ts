@@ -198,7 +198,7 @@ export interface ILoanQuery extends Document {
   marriedStatus: string;
   mobile: string;
   isMobileVerified: boolean;
-  email: string;
+  email?: string;
   isEmailVerified: boolean;
   panNumber: string;
   aadhaarNumber: string;
@@ -276,10 +276,10 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     isMobileVerified: { type: Boolean, default: false },
     email: {
       type: String,
-      required: true,
       lowercase: true,
       trim: true,
       index: true,
+      default: "",
     },
     isEmailVerified: { type: Boolean, default: false },
     panNumber: { type: String, required: true, trim: true, uppercase: true },

@@ -6,6 +6,8 @@ const { ObjectId } = mongoose.Types;
 export const DEFAULT_QUERY_TIMEZONE = "Asia/Kolkata";
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const DATETIME_LOCAL_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/;
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
 
@@ -110,6 +112,24 @@ export const parseDateInTimeZone = (
         minute: boundary === "start" ? 0 : 59,
         second: boundary === "start" ? 0 : 59,
         millisecond: boundary === "start" ? 0 : 999,
+      },
+      timeZone,
+    );
+  }
+
+  if (DATETIME_LOCAL_PATTERN.test(raw)) {
+    const [datePart, timePart] = raw.split("T");
+    const [year, month, day] = datePart.split("-").map(Number);
+    const [hour, minute, second = "00"] = timePart.split(":");
+    return zonedTimeToUtc(
+      {
+        year,
+        month,
+        day,
+        hour: Number(hour),
+        minute: Number(minute),
+        second: Number(second),
+        millisecond: boundary === "end" ? 999 : 0,
       },
       timeZone,
     );

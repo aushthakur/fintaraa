@@ -30,6 +30,19 @@ export interface ICallRecord extends Document {
   createAccount?: boolean;
   comment?: string;
   contactActionStatus?: string;
+  followUpHistory?: Array<{
+    openedBy?: Types.ObjectId;
+    closedBy?: Types.ObjectId;
+    openedByName?: string;
+    closedByName?: string;
+    openedAt?: Date;
+    closedAt?: Date;
+    openingRemark?: string;
+    closingRemark?: string;
+    assignedTo?: Types.ObjectId;
+    assignedToName?: string;
+    callbackAt?: Date;
+  }>;
   followUpNotes?: Array<{
     remark: string;
     addedBy?: Types.ObjectId;
@@ -42,6 +55,7 @@ export interface ICallRecord extends Document {
     changedAt?: Date;
   }>;
   assignee?: Types.ObjectId;
+  assignees?: Types.ObjectId[];
   assignedBy?: Types.ObjectId;
   assignedAt?: Date;
   assignmentMode?: "auto" | "manual";
@@ -87,6 +101,24 @@ const CallRecordSchema = new Schema<ICallRecord>(
     createAccount: { type: Boolean, default: false },
     comment: { type: String, trim: true },
     contactActionStatus: { type: String, trim: true },
+    followUpHistory: {
+      type: [
+        {
+          openedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+          closedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+          openedByName: { type: String, trim: true },
+          closedByName: { type: String, trim: true },
+          openedAt: { type: Date, default: Date.now },
+          closedAt: { type: Date },
+          openingRemark: { type: String, trim: true },
+          closingRemark: { type: String, trim: true },
+          assignedTo: { type: Schema.Types.ObjectId, ref: "Admin" },
+          assignedToName: { type: String, trim: true },
+          callbackAt: { type: Date },
+        },
+      ],
+      default: [],
+    },
     followUpNotes: {
       type: [
         {
@@ -108,7 +140,8 @@ const CallRecordSchema = new Schema<ICallRecord>(
       ],
       default: [],
     },
-    assignee: { type: Schema.Types.ObjectId, ref: "Agent" },
+    assignee: { type: Schema.Types.ObjectId, ref: "Admin" },
+    assignees: [{ type: Schema.Types.ObjectId, ref: "Admin" }],
     assignedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
     assignedAt: { type: Date },
     assignmentMode: {
@@ -116,8 +149,8 @@ const CallRecordSchema = new Schema<ICallRecord>(
       enum: ["auto", "manual"],
       default: "auto",
     },
-    channelAgency: { type: Schema.Types.ObjectId, ref: "Agency" },
     attachedLead: { type: Schema.Types.ObjectId, ref: "Lead" },
+    channelAgency: { type: Schema.Types.ObjectId, ref: "Agency" },
     loanQueryId: { type: Schema.Types.ObjectId, ref: "LoanQuery" },
     loanQueryCreatedAt: { type: Date },
     channelMatchedAt: { type: Date },
@@ -127,10 +160,11 @@ const CallRecordSchema = new Schema<ICallRecord>(
   { timestamps: true },
 );
 
-CallRecordSchema.index({ phoneNumber: 1, createdAt: -1 });
 CallRecordSchema.index({ assignee: 1, assignedAt: -1 });
-CallRecordSchema.index({ channelAgency: 1, updatedAt: -1 });
+CallRecordSchema.index({ assignees: 1, assignedAt: -1 });
+CallRecordSchema.index({ phoneNumber: 1, createdAt: -1 });
 CallRecordSchema.index({ attachedLead: 1, updatedAt: -1 });
+CallRecordSchema.index({ channelAgency: 1, updatedAt: -1 });
 
 export const CallRecord = mongoose.model<ICallRecord>(
   "CallRecord",

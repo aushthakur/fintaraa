@@ -2,10 +2,45 @@ import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
 import { Request, Response, NextFunction } from "express";
 import { Message } from "../../modals/message.model";
+import Lead from "../../modals/lead.model";
+import { LoanQuery } from "../../modals/loanquery.model";
+import { InsuranceQuery } from "../../modals/insurancequery.model";
+import { User } from "../../modals/user.model";
 import Admin from "../../modals/admin.model";
 import Agent from "../../modals/agent.model";
 import Lander from "../../modals/lander.model";
 import { Types } from "mongoose";
+import { decryptQueryMessageText } from "../../utils/queryChatCrypto";
+
+const buildUnreadChatMatch = (userId: any, role?: string) => {
+  const objectId = userId ? new Types.ObjectId(String(userId)) : null;
+  if (!objectId) return { _id: null };
+
+  if (role === "admin") {
+    return {
+      receiver: objectId,
+      status: { $ne: "read" },
+      senderModel: { $in: ["Agent", "Lander", "User"] },
+      receiverModel: { $in: ["Admin", "User"] },
+    };
+  }
+
+  if (role === "agent") {
+    return {
+      receiver: objectId,
+      status: { $ne: "read" },
+      senderModel: { $in: ["Admin", "User"] },
+      receiverModel: { $in: ["Agent", "User"] },
+    };
+  }
+
+  return {
+    receiver: objectId,
+    status: { $ne: "read" },
+    senderModel: { $in: ["Admin", "User"] },
+    receiverModel: { $in: ["Lander", "User"] },
+  };
+};
 
 export class AdminAgentChatController {
   /**
@@ -25,205 +60,436 @@ export class AdminAgentChatController {
         throw new ApiError(403, "Access denied. Only admins, agents, and landers can access this chat.");
       }
 
-      let conversations: any[] = [];
+      const currentObjectId = new Types.ObjectId(String(currentUserId));
 
-      if (role === "admin") {
-        // Admin sees all agents and landers
-        const agents = await Agent.find({})
-          .select("_id name email profilePictureUrl availability")
-          .lean();
+      const rows = await Message.aggregate([
+        {
+          $match: {
+            $or: [{ sender: currentObjectId }, { receiver: currentObjectId }],
+          },
+        },
+        { $sort: { createdAt: -1 } },
+        {
+          $addFields: {
+            threadKind: {
+              $switch: {
+                branches: [
+                  { case: { $ne: ["$leadId", null] }, then: "lead" },
+                  { case: { $ne: ["$loanQueryId", null] }, then: "loan" },
+                  { case: { $ne: ["$insuranceQueryId", null] }, then: "insurance" },
+                ],
+                default: "internal",
+              },
+            },
+            otherParticipantId: {
+              $cond: [{ $eq: ["$sender", currentObjectId] }, "$receiver", "$sender"],
+            },
+            otherParticipantModel: {
+              $cond: [{ $eq: ["$sender", currentObjectId] }, "$receiverModel", "$senderModel"],
+            },
+            threadId: {
+              $switch: {
+                branches: [
+                  {
+                    case: { $ne: ["$leadId", null] },
+                    then: { $toString: "$leadId" },
+                  },
+                  {
+                    case: { $ne: ["$loanQueryId", null] },
+                    then: { $toString: "$loanQueryId" },
+                  },
+                  {
+                    case: { $ne: ["$insuranceQueryId", null] },
+                    then: { $toString: "$insuranceQueryId" },
+                  },
+                ],
+                default: {
+                  $concat: [
+                    { $toString: "$otherParticipantId" },
+                    ":",
+                    { $ifNull: ["$otherParticipantModel", "Unknown"] },
+                  ],
+                },
+              },
+            },
+            isUnread: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$receiver", currentObjectId] },
+                    { $ne: ["$status", "read"] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              kind: "$threadKind",
+              threadId: "$threadId",
+              participantId: "$otherParticipantId",
+              participantModel: "$otherParticipantModel",
+            },
+            lastMessage: { $first: "$$ROOT" },
+            unreadCount: { $sum: "$isUnread" },
+          },
+        },
+        { $sort: { "lastMessage.createdAt": -1 } },
+      ]);
 
-        const landers = await Lander.find({})
-          .select("_id name email profilePictureUrl availability")
-          .lean();
+      const isValidObjectIdString = (value: any) => {
+        const normalized = String(value || "").trim();
+        return (
+          normalized &&
+          normalized !== "null" &&
+          normalized !== "undefined" &&
+          Types.ObjectId.isValid(normalized)
+        );
+      };
 
-        // Get conversations with agents
-        for (const agent of agents) {
-          const lastMessage = await Message.findOne({
-            $or: [
-              { sender: currentUserId, receiver: agent._id },
-              { sender: agent._id, receiver: currentUserId },
-            ],
-            senderModel: { $in: ["Admin", "Agent", "Lander"] },
-            receiverModel: { $in: ["Admin", "Agent", "Lander"] },
-            leadId: { $exists: false },
-          })
-            .sort({ createdAt: -1 })
-            .lean();
+      const leadIds = [...new Set(
+        rows
+          .filter((r: any) => r?._id?.kind === "lead")
+          .map((r: any) => String(r?._id?.threadId || "").trim())
+          .filter(isValidObjectIdString),
+      )];
+      const loanIds = [...new Set(
+        rows
+          .filter((r: any) => r?._id?.kind === "loan")
+          .map((r: any) => String(r?._id?.threadId || "").trim())
+          .filter(isValidObjectIdString),
+      )];
+      const insuranceIds = [...new Set(
+        rows
+          .filter((r: any) => r?._id?.kind === "insurance")
+          .map((r: any) => String(r?._id?.threadId || "").trim())
+          .filter(isValidObjectIdString),
+      )];
+      const leadParticipantIds = [...new Set(
+        rows
+          .filter((r: any) => r?._id?.kind === "lead")
+          .map((r: any) => String(r?._id?.participantId || "").trim())
+          .filter(isValidObjectIdString),
+      )];
+      const loanParticipantIds = [...new Set(
+        rows
+          .filter((r: any) => r?._id?.kind === "loan")
+          .map((r: any) => String(r?._id?.participantId || "").trim())
+          .filter(isValidObjectIdString),
+      )];
+      const insuranceParticipantIds = [...new Set(
+        rows
+          .filter((r: any) => r?._id?.kind === "insurance")
+          .map((r: any) => String(r?._id?.participantId || "").trim())
+          .filter(isValidObjectIdString),
+      )];
+      const leadCustomerIds: string[] = [];
+      const loanCustomerIds: string[] = [];
+      const insuranceCustomerIds: string[] = [];
+      const internalParticipantIds = [...new Set(rows.filter((r: any) => r?._id?.kind === "internal").map((r: any) => String(r?._id?.participantId)).filter(Boolean))];
 
-          const unreadCount = await Message.countDocuments({
-            sender: agent._id,
-            receiver: currentUserId,
-            status: { $ne: "read" },
-            senderModel: "Agent",
-            receiverModel: "Admin",
-            leadId: { $exists: false },
-          });
+      const [leads, loanQueries, insuranceQueries] = await Promise.all([
+        Lead.find({ _id: { $in: leadIds } })
+          .select("_id leadRef fullName mobile borrowerProfile")
+          .lean(),
+        LoanQuery.find({ _id: { $in: loanIds } })
+          .select("_id loanId firstName lastName mobile loanType customerId")
+          .lean(),
+        InsuranceQuery.find({ _id: { $in: insuranceIds } })
+          .select("_id firstName lastName mobile typeOfInsurance customerId")
+          .lean(),
+      ]);
 
-          conversations.push({
-            _id: agent._id,
-            name: agent.name,
-            email: agent.email,
-            profilePictureUrl: agent.profilePictureUrl,
-            availability: agent.availability,
-            type: "agent",
-            lastMessage: lastMessage
-              ? {
-                  text: lastMessage.text,
-                  createdAt: lastMessage.createdAt,
-                  sender: lastMessage.sender.toString(),
-                }
-              : null,
-            unreadCount,
-          });
-        }
-
-        // Get conversations with landers
-        for (const lander of landers) {
-          const lastMessage = await Message.findOne({
-            $or: [
-              { sender: currentUserId, receiver: lander._id },
-              { sender: lander._id, receiver: currentUserId },
-            ],
-            senderModel: { $in: ["Admin", "Agent", "Lander"] },
-            receiverModel: { $in: ["Admin", "Agent", "Lander"] },
-            leadId: { $exists: false },
-          })
-            .sort({ createdAt: -1 })
-            .lean();
-
-          const unreadCount = await Message.countDocuments({
-            sender: lander._id,
-            receiver: currentUserId,
-            status: { $ne: "read" },
-            senderModel: "Lander",
-            receiverModel: "Admin",
-            leadId: { $exists: false },
-          });
-
-          conversations.push({
-            _id: lander._id,
-            name: lander.name,
-            email: lander.email,
-            profilePictureUrl: lander.profilePictureUrl,
-            availability: lander.availability,
-            type: "lander",
-            lastMessage: lastMessage
-              ? {
-                  text: lastMessage.text,
-                  createdAt: lastMessage.createdAt,
-                  sender: lastMessage.sender.toString(),
-                }
-              : null,
-            unreadCount,
-          });
-        }
-      } else if (role === "lander") {
-        // Lander sees all admins
-        const admins = await Admin.find({})
-          .populate("role", "name")
-          .select("_id email username")
-          .lean();
-
-        for (const admin of admins) {
-          const lastMessage = await Message.findOne({
-            $or: [
-              { sender: currentUserId, receiver: admin._id },
-              { sender: admin._id, receiver: currentUserId },
-            ],
-            senderModel: { $in: ["Admin", "Agent", "Lander"] },
-            receiverModel: { $in: ["Admin", "Agent", "Lander"] },
-            leadId: { $exists: false },
-          })
-            .sort({ createdAt: -1 })
-            .lean();
-
-          const unreadCount = await Message.countDocuments({
-            sender: admin._id,
-            receiver: currentUserId,
-            status: { $ne: "read" },
-            senderModel: "Admin",
-            receiverModel: "Lander",
-            leadId: { $exists: false },
-          });
-
-          conversations.push({
-            _id: admin._id,
-            name: admin.username,
-            email: admin.email,
-            type: "admin",
-            lastMessage: lastMessage
-              ? {
-                  text: lastMessage.text,
-                  createdAt: lastMessage.createdAt,
-                  sender: lastMessage.sender.toString(),
-                }
-              : null,
-            unreadCount,
-          });
-        }
-      } else {
-        // Agent sees all admins
-        const admins = await Admin.find({})
-          .populate("role", "name")
-          .select("_id email username")
-          .lean();
-
-        for (const admin of admins) {
-          const lastMessage = await Message.findOne({
-            $or: [
-              { sender: currentUserId, receiver: admin._id },
-              { sender: admin._id, receiver: currentUserId },
-            ],
-            senderModel: { $in: ["Admin", "Agent", "Lander"] },
-            receiverModel: { $in: ["Admin", "Agent", "Lander"] },
-            leadId: { $exists: false },
-          })
-            .sort({ createdAt: -1 })
-            .lean();
-
-          const unreadCount = await Message.countDocuments({
-            sender: admin._id,
-            receiver: currentUserId,
-            status: { $ne: "read" },
-            senderModel: "Admin",
-            receiverModel: "Agent",
-            leadId: { $exists: false },
-          });
-
-          conversations.push({
-            _id: admin._id,
-            name: admin.username,
-            email: admin.email,
-            type: "admin",
-            lastMessage: lastMessage
-              ? {
-                  text: lastMessage.text,
-                  createdAt: lastMessage.createdAt,
-                  sender: lastMessage.sender.toString(),
-                }
-              : null,
-            unreadCount,
-          });
-        }
+      for (const lead of leads as any[]) {
+        const customerId = String(lead?.borrowerProfile || "");
+        if (customerId) leadCustomerIds.push(customerId);
+      }
+      for (const query of loanQueries as any[]) {
+        const customerId = String(query?.customerId || "");
+        if (customerId) loanCustomerIds.push(customerId);
+      }
+      for (const query of insuranceQueries as any[]) {
+        const customerId = String(query?.customerId || "");
+        if (customerId) insuranceCustomerIds.push(customerId);
       }
 
-      // Sort by last message time (most recent first)
-      conversations.sort((a, b) => {
-        if (!a.lastMessage && !b.lastMessage) return 0;
-        if (!a.lastMessage) return 1;
-        if (!b.lastMessage) return -1;
+      const customerIds = [...new Set([
+        ...leadCustomerIds,
+        ...loanCustomerIds,
+        ...insuranceCustomerIds,
+        ...leadParticipantIds,
+        ...loanParticipantIds,
+        ...insuranceParticipantIds,
+      ].filter(Boolean))];
+
+      const [users, admins, agents, landers] = await Promise.all([
+        User.find({ _id: { $in: customerIds } })
+          .select("_id name firstName lastName email mobile profilePictureUrl")
+          .lean(),
+        Admin.find({ _id: { $in: internalParticipantIds } })
+          .select("_id username name email profilePictureUrl")
+          .lean(),
+        Agent.find({ _id: { $in: internalParticipantIds } })
+          .select("_id name email profilePictureUrl availability")
+          .lean(),
+        Lander.find({ _id: { $in: internalParticipantIds } })
+          .select("_id name email profilePictureUrl availability")
+          .lean(),
+      ]);
+
+      const leadMap = new Map<string, any>(
+        (leads as any[]).map((item: any) => [String(item._id), item] as [string, any]),
+      );
+      const loanMap = new Map<string, any>(
+        (loanQueries as any[]).map((item: any) => [String(item._id), item] as [string, any]),
+      );
+      const insuranceMap = new Map<string, any>(
+        (insuranceQueries as any[]).map((item: any) => [String(item._id), item] as [string, any]),
+      );
+      const userMap = new Map<string, any>(
+        (users as any[]).map((item: any) => [String(item._id), item] as [string, any]),
+      );
+      const staffEntries: [string, any][] = [
+        ...(admins as any[]).map((item: any) => [String(item._id), { ...item, role: "Admin" }] as [string, any]),
+        ...(agents as any[]).map((item: any) => [String(item._id), { ...item, role: "Agent" }] as [string, any]),
+        ...(landers as any[]).map((item: any) => [String(item._id), { ...item, role: "Lander" }] as [string, any]),
+      ];
+      const staffMap = new Map<string, any>(staffEntries);
+
+      const conversations = rows.map((row: any) => {
+        const kind = String(row?._id?.kind || "internal");
+        const threadId = String(row?._id?.threadId || "");
+        const participantId = String(row?._id?.participantId || "");
+        const participantModel = String(row?._id?.participantModel || "");
+        const msg = row?.lastMessage || {};
+        const unreadCount = Number(row?.unreadCount) || 0;
+        const decodedText = decryptQueryMessageText(String(msg?.text || "")) || String(msg?.text || "");
+
+        if (kind === "lead") {
+          const lead = leadMap.get(threadId);
+          const customer = userMap.get(String(lead?.borrowerProfile || participantId));
+          const customerName = String(
+            customer?.name ||
+            [customer?.firstName, customer?.lastName].filter(Boolean).join(" ") ||
+            lead?.fullName ||
+            "Customer",
+          ).trim();
+          const leadRef = String(lead?.leadRef || "").trim();
+          const hasLeadRef = Boolean(leadRef);
+
+          return {
+            _id: `lead:${threadId}:${participantId}`,
+            kind: "lead",
+            title: customerName,
+            subtitle: hasLeadRef
+              ? `Lead #${leadRef} · ${lead?.mobile || customer?.mobile || ""}`.trim()
+              : `${lead?.mobile || customer?.mobile || ""}`.trim(),
+            unreadCount,
+            leadId: isValidObjectIdString(threadId) ? threadId : undefined,
+            leadRef: hasLeadRef ? leadRef : undefined,
+            leadName: lead?.fullName || customerName,
+            receiverId: String(customer?._id || participantId || ""),
+            receiverModel: "User",
+            user: customer
+              ? {
+                  _id: String(customer._id),
+                  name: customerName,
+                  email: customer.email,
+                  mobile: customer.mobile,
+                  profilePictureUrl: customer.profilePictureUrl,
+                  role: "User",
+                }
+              : undefined,
+            agent: {
+              _id: String(currentUserId),
+              name: "You",
+              role: role === "admin" ? "Admin" : role === "lander" ? "Lander" : "Agent",
+            },
+            lastMessage: {
+              _id: String(msg?._id || ""),
+              text: decodedText,
+              createdAt: msg?.createdAt,
+              senderModel: msg?.senderModel,
+              attachmentsCount: Array.isArray(msg?.attachments) ? msg.attachments.length : 0,
+            },
+          };
+        }
+
+        if (kind === "loan") {
+          const query = loanMap.get(threadId);
+          const customer = userMap.get(String(query?.customerId || participantId));
+          const customerName = String(
+            customer?.name ||
+            [query?.firstName, query?.lastName].filter(Boolean).join(" ") ||
+            "Customer",
+          ).trim();
+          const loanId = String(query?.loanId || "").trim();
+
+          return {
+            _id: `loan:${threadId}:${participantId}`,
+            kind: "loan",
+            title: customerName,
+            subtitle: loanId
+              ? `Loan #${loanId} · ${query?.loanType || "Loan"}`
+              : `${query?.loanType || "Loan"}`,
+            unreadCount,
+            loanQueryId: threadId,
+            receiverId: String(customer?._id || participantId || ""),
+            receiverModel: "User",
+            user: customer
+              ? {
+                  _id: String(customer._id),
+                  name: customerName,
+                  email: customer.email,
+                  mobile: customer.mobile,
+                  profilePictureUrl: customer.profilePictureUrl,
+                  role: "User",
+                }
+              : undefined,
+            agent: {
+              _id: String(currentUserId),
+              name: "You",
+              role: role === "admin" ? "Admin" : role === "lander" ? "Lander" : "Agent",
+            },
+            lastMessage: {
+              _id: String(msg?._id || ""),
+              text: decodedText,
+              createdAt: msg?.createdAt,
+              senderModel: msg?.senderModel,
+              attachmentsCount: Array.isArray(msg?.attachments) ? msg.attachments.length : 0,
+            },
+          };
+        }
+
+        if (kind === "insurance") {
+          const query = insuranceMap.get(threadId);
+          const customer = userMap.get(String(query?.customerId || participantId));
+          const customerName = String(
+            customer?.name ||
+            [query?.firstName, query?.lastName].filter(Boolean).join(" ") ||
+            "Customer",
+          ).trim();
+          const insuranceLabel = String(query?.typeOfInsurance || "").trim();
+
+          return {
+            _id: `insurance:${threadId}:${participantId}`,
+            kind: "insurance",
+            title: customerName,
+            subtitle: insuranceLabel
+              ? `Insurance · ${insuranceLabel}`
+              : "Insurance application",
+            unreadCount,
+            insuranceQueryId: threadId,
+            receiverId: String(customer?._id || participantId || ""),
+            receiverModel: "User",
+            user: customer
+              ? {
+                  _id: String(customer._id),
+                  name: customerName,
+                  email: customer.email,
+                  mobile: customer.mobile,
+                  profilePictureUrl: customer.profilePictureUrl,
+                  role: "User",
+                }
+              : undefined,
+            agent: {
+              _id: String(currentUserId),
+              name: "You",
+              role: role === "admin" ? "Admin" : role === "lander" ? "Lander" : "Agent",
+            },
+            lastMessage: {
+              _id: String(msg?._id || ""),
+              text: decodedText,
+              createdAt: msg?.createdAt,
+              senderModel: msg?.senderModel,
+              attachmentsCount: Array.isArray(msg?.attachments) ? msg.attachments.length : 0,
+            },
+          };
+        }
+
+        const staff = staffMap.get(participantId) as any;
+        const staffRole = String(staff?.role || participantModel || "Staff");
+        const staffName = String(staff?.name || staff?.username || "Conversation");
+
+        return {
+          _id: `internal:${participantId}:${participantModel}`,
+          kind: "internal",
+          title: staffName,
+          subtitle: `${staffRole} chat`,
+          unreadCount,
+          receiverId: participantId,
+          receiverModel:
+            participantModel === "Agent"
+              ? "Agent"
+              : participantModel === "Lander"
+                ? "Lander"
+                : "Admin",
+          peer: {
+            _id: participantId,
+            name: staffName,
+            email: staff?.email,
+            profilePictureUrl: staff?.profilePictureUrl,
+            role:
+              participantModel === "Agent"
+                ? "Agent"
+                : participantModel === "Lander"
+                  ? "Lander"
+                  : "Admin",
+          },
+          lastMessage: {
+            _id: String(msg?._id || ""),
+            text: decodedText,
+            createdAt: msg?.createdAt,
+            senderModel: msg?.senderModel,
+            attachmentsCount: Array.isArray(msg?.attachments) ? msg.attachments.length : 0,
+          },
+        };
+      });
+
+      const sortedConversations = conversations.sort((a, b) => {
+        const unreadDelta = (b.unreadCount || 0) - (a.unreadCount || 0);
+        if (unreadDelta !== 0) return unreadDelta;
         return (
-          new Date(b.lastMessage.createdAt).getTime() -
-          new Date(a.lastMessage.createdAt).getTime()
+          new Date(b.lastMessage?.createdAt || 0).getTime() -
+          new Date(a.lastMessage?.createdAt || 0).getTime()
         );
       });
 
       res
         .status(200)
         .json(
-          new ApiResponse(200, conversations, "Conversations fetched successfully")
+          new ApiResponse(200, sortedConversations, "Conversations fetched successfully")
         );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getSidebarCounts(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const currentUserId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+
+      if (!role || (role !== "admin" && role !== "agent" && role !== "lander")) {
+        throw new ApiError(403, "Access denied. Only admins, agents, and landers can access this chat.");
+      }
+
+      const unread = await Message.countDocuments({
+        receiver: new Types.ObjectId(String(currentUserId)),
+        status: { $ne: "read" },
+      });
+
+      res
+        .status(200)
+        .json(new ApiResponse(200, { unread }, "Chat sidebar counts fetched successfully"));
     } catch (error) {
       next(error);
     }
@@ -253,12 +519,15 @@ export class AdminAgentChatController {
       // Verify receiver exists and is valid
       let receiver: any = null;
       if (role === "admin") {
-        // Admin can chat with agents or landers
+        // Admin can chat with agents, landers, or users
         receiver = await Agent.findById(receiverId).select("_id name email profilePictureUrl").lean();
         if (!receiver) {
           receiver = await Lander.findById(receiverId).select("_id name email profilePictureUrl").lean();
           if (!receiver) {
-            throw new ApiError(404, "Agent or Lander not found");
+            receiver = await User.findById(receiverId).select("_id name email avatar").lean();
+          }
+          if (!receiver) {
+            throw new ApiError(404, "Agent, Lander, or User not found");
           }
         }
       } else if (role === "lander") {
@@ -268,10 +537,13 @@ export class AdminAgentChatController {
           throw new ApiError(404, "Admin not found");
         }
       } else {
-        // Agent can chat with admins
+        // Agent can chat with admins or users
         receiver = await Admin.findById(receiverId).select("_id email username").lean();
         if (!receiver) {
-          throw new ApiError(404, "Admin not found");
+          receiver = await User.findById(receiverId).select("_id name email avatar").lean();
+          if (!receiver) {
+            throw new ApiError(404, "Admin or User not found");
+          }
         }
       }
 
@@ -281,9 +553,8 @@ export class AdminAgentChatController {
           { sender: currentUserId, receiver: receiverId },
           { sender: receiverId, receiver: currentUserId },
         ],
-        senderModel: { $in: ["Admin", "Agent", "Lander"] },
-        receiverModel: { $in: ["Admin", "Agent", "Lander"] },
-        leadId: { $exists: false },
+        senderModel: { $in: ["Admin", "Agent", "Lander", "User"] },
+        receiverModel: { $in: ["Admin", "Agent", "Lander", "User"] },
       })
         .sort({ createdAt: 1 })
         .lean();
@@ -294,7 +565,6 @@ export class AdminAgentChatController {
           sender: receiverId,
           receiver: currentUserId,
           status: { $ne: "read" },
-          leadId: { $exists: false },
         },
         {
           status: "read",
@@ -370,11 +640,21 @@ export class AdminAgentChatController {
                 profilePictureUrl: lander.profilePictureUrl,
               };
             }
+          } else if (msg.receiverModel === "User") {
+            const user = await User.findById(msg.receiver).select("_id name email avatar").lean();
+            if (user) {
+              receiverData = {
+                _id: user._id.toString(),
+                name: user.name,
+                email: user.email,
+                profilePictureUrl: (user as any).avatar,
+              };
+            }
           }
 
           return {
             _id: msg._id.toString(),
-            text: msg.text,
+            text: decryptQueryMessageText(msg.text || "") || msg.text,
             sender: senderData,
             receiver: receiverData,
             status: msg.status,
@@ -398,7 +678,7 @@ export class AdminAgentChatController {
               _id: receiver._id.toString(),
               name: receiver.name || receiver.username,
               email: receiver.email,
-              profilePictureUrl: receiver.profilePictureUrl,
+              profilePictureUrl: (receiver as any).avatar,
             },
           }, "Messages fetched successfully")
         );
@@ -434,9 +714,9 @@ export class AdminAgentChatController {
       }
 
       // Verify receiver exists and is valid
-      let receiverModel: "Admin" | "Agent" | "Lander" = "Admin";
+      let receiverModel: "Admin" | "Agent" | "Lander" | "User" = "Admin";
       if (role === "admin") {
-        // Admin can send to agents or landers
+        // Admin can send to agents, landers, or users
         const agent = await Agent.findById(receiverId);
         if (agent) {
           receiverModel = "Agent";
@@ -445,7 +725,12 @@ export class AdminAgentChatController {
           if (lander) {
             receiverModel = "Lander";
           } else {
-            throw new ApiError(404, "Agent or Lander not found");
+            const customer = await User.findById(receiverId);
+            if (customer) {
+              receiverModel = "User";
+            } else {
+              throw new ApiError(404, "Agent, Lander, or User not found");
+            }
           }
         }
       } else if (role === "lander") {
@@ -458,10 +743,15 @@ export class AdminAgentChatController {
       } else {
         // Agent can send to admins
         const admin = await Admin.findById(receiverId);
-        if (!admin) {
-          throw new ApiError(404, "Admin not found");
+        if (admin) {
+          receiverModel = "Admin";
+        } else {
+          const customer = await User.findById(receiverId);
+          if (!customer) {
+            throw new ApiError(404, "Admin or User not found");
+          }
+          receiverModel = "User";
         }
-        receiverModel = "Admin";
       }
 
       const senderModel = role === "admin" ? "Admin" : role === "lander" ? "Lander" : "Agent";
@@ -559,6 +849,16 @@ export class AdminAgentChatController {
             profilePictureUrl: agent.profilePictureUrl,
           };
         }
+      } else if (receiverModel === "User") {
+        const user = await User.findById(receiverId).select("_id name email avatar").lean();
+        if (user) {
+          receiverData = {
+            _id: user._id.toString(),
+            name: user.name,
+            email: user.email,
+            profilePictureUrl: (user as any).avatar,
+          };
+        }
       } else if (receiverModel === "Lander") {
         const lander = await Lander.findById(receiverId).select("_id name email profilePictureUrl").lean();
         if (lander) {
@@ -577,7 +877,7 @@ export class AdminAgentChatController {
 
       const serializedMessage = {
         _id: messageId,
-        text: message.text,
+        text: decryptQueryMessageText(message.text || "") || message.text,
         sender: senderData,
         receiver: receiverData,
         status: message.status,
@@ -595,9 +895,9 @@ export class AdminAgentChatController {
       const io = app?.get("socketio");
       if (io) {
         io.emit("adminAgentMessage", {
-          message: serializedMessage,
-          receiverId,
-        });
+        message: serializedMessage,
+        receiverId,
+      });
       }
 
       res
@@ -634,9 +934,8 @@ export class AdminAgentChatController {
           sender: receiverId,
           receiver: currentUserId,
           status: { $ne: "read" },
-          senderModel: { $in: ["Admin", "Agent"] },
-          receiverModel: { $in: ["Admin", "Agent"] },
-          leadId: { $exists: false },
+          senderModel: { $in: ["Admin", "Agent", "Lander", "User"] },
+          receiverModel: { $in: ["Admin", "Agent", "Lander", "User"] },
         },
         {
           status: "read",
@@ -658,4 +957,3 @@ export class AdminAgentChatController {
     }
   }
 }
-

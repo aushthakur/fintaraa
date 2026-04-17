@@ -1165,7 +1165,7 @@ export const updateTicketStatus = async (
   req: Request | any,
   res: Response,
 ): Promise<any> => {
-  const { role } = req.user;
+  const { role, _id } = req.user;
   const { status, id } = req.params;
   try {
     const ticket = await Ticket.findById({ _id: id });
@@ -1180,20 +1180,37 @@ export const updateTicketStatus = async (
         .status(200)
         .json({ success: true, message: "Ticket has been already closed" });
 
-    if (!ticket?.assignee)
+    if (!ticket?.assignee && role !== "admin")
       return res
         .status(404)
         .json(new ApiError(404, "Ticket is not yet assigned"));
 
     if (
       (status === "closed" || status === "resolved") &&
-      !ticket.resolutionDate
+      !ticket.resolutionDate &&
+      ticket.assignee
     ) {
       ticket.resolutionDate = new Date();
       const agentData: any = await Agent.findById({ _id: ticket.assignee });
-      agentData.activeTickets = Math.max(0, (agentData.activeTickets || 0) - 1);
-      agentData.resolvedTickets += 1;
-      await agentData.save();
+      if (agentData) {
+        agentData.activeTickets = Math.max(
+          0,
+          (agentData.activeTickets || 0) - 1,
+        );
+        agentData.resolvedTickets += 1;
+        await agentData.save();
+      }
+    }
+
+    const closingRemark = String(
+      req.query?.closingRemark || req.body?.closingRemark || "",
+    ).trim();
+    if (closingRemark) {
+      ticket.closingRemark = closingRemark;
+    }
+    if (status === "closed" || status === "resolved") {
+      ticket.closedAt = new Date();
+      ticket.closedBy = _id;
     }
 
     ticket.status = status;

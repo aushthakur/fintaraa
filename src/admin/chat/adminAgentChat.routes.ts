@@ -11,6 +11,7 @@ router.use(authenticateToken);
 
 // Get all conversations
 router.get("/conversations", asyncHandler(AdminAgentChatController.getConversations));
+router.get("/sidebar-counts", asyncHandler(AdminAgentChatController.getSidebarCounts));
 
 // Get messages with a specific user
 router.get("/messages/:receiverId", asyncHandler(AdminAgentChatController.getMessages));
@@ -27,4 +28,3 @@ router.post(
 router.post("/messages/:receiverId/read", asyncHandler(AdminAgentChatController.markAsRead));
 
 export default router;
-

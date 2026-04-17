@@ -16,6 +16,10 @@ export interface IKnowledge extends Document {
   content?: string;
   coverImageUrl?: string;
   linkUrl?: string;
+  leadSource?: string;
+  metaTagTitle?: string;
+  metaTagDescription?: string;
+  metaTagKeywords?: string[];
   tags?: string[];
   isActive: boolean;
   publishedAt?: Date;
@@ -24,6 +28,11 @@ export interface IKnowledge extends Document {
   editedByName?: string;
   editedByRole?: string;
   editedAt?: Date;
+  createdOn?: Date;
+  createdBy?: string;
+  publishedOn?: Date;
+  editedOn?: Date;
+  editedBy?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -42,6 +51,10 @@ const KnowledgeSchema: Schema<IKnowledge> = new Schema(
     content: { type: String },
     coverImageUrl: { type: String, trim: true, default: "" },
     linkUrl: { type: String, trim: true },
+    leadSource: { type: String, trim: true },
+    metaTagTitle: { type: String, trim: true },
+    metaTagDescription: { type: String, trim: true },
+    metaTagKeywords: { type: [String], default: [] },
     tags: { type: [String], default: [] },
     isActive: { type: Boolean, default: true, index: true },
     publishedAt: { type: Date },
@@ -50,6 +63,11 @@ const KnowledgeSchema: Schema<IKnowledge> = new Schema(
     editedByName: { type: String, trim: true },
     editedByRole: { type: String, trim: true },
     editedAt: { type: Date },
+    createdOn: { type: Date },
+    createdBy: { type: String, trim: true },
+    publishedOn: { type: Date },
+    editedOn: { type: Date },
+    editedBy: { type: String, trim: true },
   },
   { timestamps: true }
 );

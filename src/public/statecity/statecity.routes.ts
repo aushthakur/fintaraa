@@ -2,7 +2,6 @@ import express from "express";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { StateCityController } from "./statecity.controller";
 import { authenticateToken } from "../../middlewares/authMiddleware";
-import { dynamicUpload, s3UploaderMiddleware } from "../../middlewares/s3FileUploadMiddleware";
 
 const {
   // Country
@@ -25,13 +24,6 @@ const {
   getCityById,
   updateCityById,
   deleteCityById,
-
-  // Property City
-  createProperty,
-  getPropertyById,
-  getAllPropertyCity,
-  updatePropertyById,
-  deletePropertyById,
 
   // Combined
   createStateCity,
@@ -66,25 +58,6 @@ router.get("/city", authenticateToken, asyncHandler(getAllCity));
 router.get("/city/:id", authenticateToken, asyncHandler(getCityById));
 router.put("/city/:id", authenticateToken, asyncHandler(updateCityById));
 router.delete("/city/:id", authenticateToken, asyncHandler(deleteCityById));
-
-// ==============================
-// 🏙️ Property City Routes
-// ==============================
-router.post(
-  "/propertycity",
-  authenticateToken,
-  dynamicUpload([{ name: "image", maxCount: 1 }]),
-  s3UploaderMiddleware("city"),
-  asyncHandler(createProperty));
-router.get("/propertycity", authenticateToken, asyncHandler(getAllPropertyCity));
-router.get("/propertycity/:id", authenticateToken, asyncHandler(getPropertyById));
-router.put(
-  "/propertycity/:id",
-  authenticateToken,
-  dynamicUpload([{ name: "image", maxCount: 1 }]),
-  s3UploaderMiddleware("city"),
-  asyncHandler(updatePropertyById));
-router.delete("/propertycity/:id", authenticateToken, asyncHandler(deletePropertyById));
 
 // ==============================
 // 🌐 Combined Route (Optional)

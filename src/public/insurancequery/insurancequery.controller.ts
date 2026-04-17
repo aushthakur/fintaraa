@@ -48,6 +48,25 @@ const resolveDateRange = (
   );
 };
 
+const buildInsuranceScopeMatch = (userId: any, role?: string) => {
+  const match: Record<string, any> = {};
+  if (role === "agent") {
+    const agentObjectId = toObjectId(userId);
+    if (agentObjectId) {
+      match.$or = [
+        { assignedAgent: agentObjectId },
+        { assignedAgents: agentObjectId },
+      ];
+    }
+  } else if (role === "lander") {
+    const landerObjectId = toObjectId(userId);
+    if (landerObjectId) match.assignedLander = landerObjectId;
+  } else if (role !== "admin" && userId) {
+    match.customerId = userId;
+  }
+  return match;
+};
+
 // Helper function to extract URL from uploaded file object
 const extractFileUrl = (file: any): string | undefined => {
   if (!file) return undefined;
@@ -608,18 +627,7 @@ export class InsuranceQueryController {
         match.typeOfInsurance = normalizedType;
       }
 
-      if (role === "agent" && userId) {
-        const agentObjectId = toObjectId(userId);
-        match.$or = [
-          ...(agentObjectId
-            ? [{ assignedAgent: agentObjectId }, { assignedAgents: agentObjectId }]
-            : []),
-        ];
-      } else if (role === "lander" && userId) {
-        match.assignedLander = userId;
-      } else if (role !== "admin" && userId) {
-        match.customerId = userId;
-      }
+      Object.assign(match, buildInsuranceScopeMatch(userId, role));
 
       const rows = await InsuranceQuery.aggregate([
         { $match: match },
@@ -653,6 +661,58 @@ export class InsuranceQueryController {
             byStatus,
           },
           "Insurance query stats fetched successfully",
+        ),
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getSidebarCounts(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      const match = buildInsuranceScopeMatch(userId, role);
+      const rows = await InsuranceQuery.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: "$typeOfInsurance",
+            count: { $sum: 1 },
+          },
+        },
+      ]);
+
+      const byType: Record<string, number> = Object.values(InsuranceType).reduce(
+        (acc, type) => {
+          acc[type] = 0;
+          return acc;
+        },
+        {} as Record<string, number>,
+      );
+
+      let total = 0;
+      rows.forEach((row: any) => {
+        const key = String(row?._id || "").trim();
+        const count = Number(row?.count) || 0;
+        if (key && Object.prototype.hasOwnProperty.call(byType, key)) {
+          byType[key] += count;
+        }
+        total += count;
+      });
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            total,
+            byType,
+          },
+          "Insurance query sidebar counts fetched successfully",
         ),
       );
     } catch (err) {

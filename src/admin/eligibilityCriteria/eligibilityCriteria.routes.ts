@@ -1,6 +1,9 @@
 import express from "express";
 import { asyncHandler } from "../../utils/asyncHandler";
-import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
+import {
+  authenticateToken,
+  authorizePermission,
+} from "../../middlewares/authMiddleware";
 import { EligibilityCriteriaController } from "./eligibilityCriteria.controller";
 
 const router = express.Router();
@@ -9,37 +12,37 @@ router
   .post(
     "/",
     authenticateToken,
-    authorize("admin"),
+    authorizePermission("Eligibility Criteria"),
     asyncHandler(EligibilityCriteriaController.create)
   )
   .post(
     "/send-mail",
     authenticateToken,
-    authorize("admin"),
+    authorizePermission("Eligibility Criteria"),
     asyncHandler(EligibilityCriteriaController.sendMail)
   )
   .get(
     "/",
     authenticateToken,
-    authorize("admin"),
+    authorizePermission("Eligibility Criteria"),
     asyncHandler(EligibilityCriteriaController.getAll)
   )
   .get(
     "/:id",
     authenticateToken,
-    authorize("admin"),
+    authorizePermission("Eligibility Criteria"),
     asyncHandler(EligibilityCriteriaController.getById)
   )
   .put(
     "/:id",
     authenticateToken,
-    authorize("admin"),
+    authorizePermission("Eligibility Criteria"),
     asyncHandler(EligibilityCriteriaController.updateById)
   )
   .delete(
     "/:id",
     authenticateToken,
-    authorize("admin"),
+    authorizePermission("Eligibility Criteria"),
     asyncHandler(EligibilityCriteriaController.deleteById)
   );
 

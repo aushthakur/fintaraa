@@ -845,6 +845,188 @@ export class UserController {
     }
   }
 
+  static async upsertDigiLockerDocument(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { _id: actorId, role } = req.user || {};
+      const targetUserId = String(req.params?.id || "").trim();
+      const docType = String(req.params?.docType || req.body?.docType || "").trim();
+
+      if (!targetUserId) {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, "User id is required"));
+      }
+      if (role !== "admin" && String(actorId) !== targetUserId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only manage your own documents"));
+      }
+      if (!docType) {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, "Document type is required"));
+      }
+
+      const user: any = await User.findById(targetUserId);
+      if (!user) return next(new ApiError(404, "User not found"));
+
+      const currentVaultDocs =
+        JSON.parse(JSON.stringify(user.digiLockerVault?.documents || [])) || [];
+      const currentKyc: IKycProfile =
+        JSON.parse(JSON.stringify(user.kycProfile || {})) || {};
+
+      const incomingDocs = [
+        ...normalizeDocumentEntries(req.body.documents, docType),
+        ...mapUploadsToDocuments(req.body.document, docType),
+      ].map((doc: any) => ({
+        ...doc,
+        docType,
+      }));
+
+      if (incomingDocs.length === 0) {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, "No documents provided"));
+      }
+
+      const mergedDocs = mergeDocuments(currentVaultDocs, incomingDocs);
+      const updatedKyc: IKycProfile = {
+        ...currentKyc,
+        documents: mergeDocuments(currentKyc.documents || [], incomingDocs),
+      };
+
+      const updatedUser = await userService.updateById(
+        targetUserId,
+        {
+          digiLockerVault: {
+            storageProvider: user.digiLockerVault?.storageProvider || "internal",
+            syncedAt: new Date(),
+            documents: mergedDocs,
+          },
+          kycProfile: updatedKyc,
+        },
+        { populate: false },
+      );
+
+      const sanitizedDocs = (updatedUser.digiLockerVault?.documents || []).map(
+        (doc: any) => {
+          const { password, ...rest } = doc?.toObject ? doc.toObject() : doc;
+          return rest;
+        },
+      );
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            ...(((updatedUser as any).digiLockerVault?.toObject
+              ? (updatedUser as any).digiLockerVault.toObject()
+              : updatedUser.digiLockerVault) || {}),
+            documents: sanitizedDocs,
+          },
+          "Document uploaded successfully",
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async updateDigiLockerDocumentPassword(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { _id: actorId, role } = req.user || {};
+      const targetUserId = String(req.params?.id || "").trim();
+      const docType = String(req.params?.docType || "").trim();
+      const password = String(req.body?.password || "").trim();
+
+      if (!targetUserId) {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, "User id is required"));
+      }
+      if (role !== "admin" && String(actorId) !== targetUserId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only manage your own documents"));
+      }
+      if (!docType) {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, "Document type is required"));
+      }
+
+      const user: any = await User.findById(targetUserId);
+      if (!user) return next(new ApiError(404, "User not found"));
+
+      const encryptedPassword = password
+        ? encryptDocumentPassword(password)
+        : undefined;
+      const currentVaultDocs =
+        JSON.parse(JSON.stringify(user.digiLockerVault?.documents || [])) || [];
+      const currentKyc: IKycProfile =
+        JSON.parse(JSON.stringify(user.kycProfile || {})) || {};
+
+      const updateDocPassword = (doc: any) => {
+        if (doc?.docType !== docType) return doc;
+        return {
+          ...doc,
+          ...(encryptedPassword ? { password: encryptedPassword } : {}),
+        };
+      };
+
+      const nextVaultDocs = currentVaultDocs.map(updateDocPassword);
+      const nextKycDocs = (currentKyc.documents || []).map(updateDocPassword);
+
+      const updatedUser = await userService.updateById(
+        targetUserId,
+        {
+          digiLockerVault: {
+            ...(user.digiLockerVault || {}),
+            syncedAt: new Date(),
+            documents: nextVaultDocs,
+          },
+          kycProfile: {
+            ...currentKyc,
+            documents: nextKycDocs,
+          },
+        },
+        { populate: false },
+      );
+
+      const sanitizedDocs = (updatedUser.digiLockerVault?.documents || []).map(
+        (doc: any) => {
+          const { password: _password, ...rest } = doc?.toObject
+            ? doc.toObject()
+            : doc;
+          return rest;
+        },
+      );
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            ...(((updatedUser as any).digiLockerVault?.toObject
+              ? (updatedUser as any).digiLockerVault.toObject()
+              : updatedUser.digiLockerVault) || {}),
+            documents: sanitizedDocs,
+          },
+          "Document password updated successfully",
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async loginUser(req: Request, res: Response) {
     try {
       const { email, password } = req.body;

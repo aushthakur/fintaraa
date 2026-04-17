@@ -4,6 +4,7 @@ import { NextFunction, Request, Response } from "express";
 import { CommonService } from "../../services/common.services";
 import {
   LoanQuery,
+  LoanType,
   allowedFieldsByFormType,
   LoanQueryActivityType,
 } from "../../modals/loanquery.model";
@@ -43,6 +44,25 @@ const resolveDateRange = (startRaw: any, endRaw: any, days: number = 7) => {
     days,
     DEFAULT_QUERY_TIMEZONE,
   );
+};
+
+const buildLoanScopeMatch = (userId: any, role?: string) => {
+  const match: Record<string, any> = {};
+  if (role === "agent") {
+    const agentObjectId = toObjectId(userId);
+    if (agentObjectId) {
+      match.$or = [
+        { assignedAgent: agentObjectId },
+        { assignedAgents: agentObjectId },
+      ];
+    }
+  } else if (role === "lander") {
+    const landerObjectId = toObjectId(userId);
+    if (landerObjectId) match.assignedLander = landerObjectId;
+  } else if (role !== "admin" && userId) {
+    match.customerId = userId;
+  }
+  return match;
 };
 
 const getIdString = (value: any): string => {
@@ -476,20 +496,6 @@ export class LoanQueryController {
         );
       }
 
-      if (forceRefresh && refreshLocked) {
-        return res.status(200).json(
-          new ApiResponse(200, {
-            cached: true,
-            report: cachedReport,
-            payload: cachedPayload,
-            cibilScore: user.cibilScore || null,
-            refreshAvailableInDays: daysRemaining,
-            lastFetchedAt: user.cibilLastFetchedAt,
-            message: `CIBIL can be refreshed again in ${daysRemaining} day(s).`,
-          }),
-        );
-      }
-
       const payload = prepareSurepassCibilPayload({
         name: req.body?.name || req.body?.fullName || user.name,
         panNumber: req.body?.panNumber || user.panCard,
@@ -584,18 +590,6 @@ export class LoanQueryController {
         null;
 
       if (!forceRefresh && cachedLink && refreshLocked) {
-        return res.status(200).json(
-          new ApiResponse(200, {
-            cached: true,
-            report: cachedReport,
-            refreshAvailableInDays: daysRemaining,
-            lastFetchedAt: user.cibilPdfLastFetchedAt,
-            message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
-          }),
-        );
-      }
-
-      if (forceRefresh && refreshLocked) {
         return res.status(200).json(
           new ApiResponse(200, {
             cached: true,
@@ -1030,19 +1024,7 @@ export class LoanQueryController {
         match.loanType = normalizedLoanType;
       }
 
-      if (role === "agent" && userId) {
-        const agentObjectId = toObjectId(userId);
-        if (agentObjectId) {
-          match.$or = [
-            { assignedAgent: agentObjectId },
-            { assignedAgents: agentObjectId },
-          ];
-        }
-      } else if (role === "lander" && userId) {
-        match.assignedLander = userId;
-      } else if (role !== "admin" && userId) {
-        match.customerId = userId;
-      }
+      Object.assign(match, buildLoanScopeMatch(userId, role));
 
       const rows = await LoanQuery.aggregate([
         { $match: match },
@@ -1085,6 +1067,58 @@ export class LoanQueryController {
             amountByStatus,
           },
           "Loan query stats fetched successfully",
+        ),
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getSidebarCounts(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      const match = buildLoanScopeMatch(userId, role);
+      const rows = await LoanQuery.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: "$loanType",
+            count: { $sum: 1 },
+          },
+        },
+      ]);
+
+      const byType: Record<string, number> = Object.values(LoanType).reduce(
+        (acc, type) => {
+          acc[type] = 0;
+          return acc;
+        },
+        {} as Record<string, number>,
+      );
+
+      let total = 0;
+      rows.forEach((row: any) => {
+        const key = normalizeLoanType(String(row?._id || "")) || String(row?._id || "");
+        const count = Number(row?.count) || 0;
+        if (key && Object.prototype.hasOwnProperty.call(byType, key)) {
+          byType[key] += count;
+        }
+        total += count;
+      });
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            total,
+            byType,
+          },
+          "Loan query sidebar counts fetched successfully",
         ),
       );
     } catch (err) {

@@ -72,6 +72,18 @@ router.delete(
   "/digilocker/:docType",
   asyncHandler(UserController.deleteDigiLockerDocument)
 );
+router.patch(
+  "/:id/digilocker/documents/:docType",
+  authenticateToken,
+  dynamicUpload([{ name: "document", maxCount: 10 }]),
+  s3UploaderMiddleware("digilocker"),
+  asyncHandler(UserController.upsertDigiLockerDocument)
+);
+router.put(
+  "/:id/digilocker/documents/:docType/password",
+  authenticateToken,
+  asyncHandler(UserController.updateDigiLockerDocumentPassword)
+);
 
 router.get(
   "/notification-preferences",

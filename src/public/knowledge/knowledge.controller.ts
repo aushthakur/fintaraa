@@ -39,6 +39,15 @@ export class KnowledgeController {
         .map((tag: string) => tag.trim())
         .filter(Boolean);
     }
+    if (typeof next.metaTagKeywords === "string") {
+      next.metaTagKeywords = next.metaTagKeywords
+        .split(",")
+        .map((tag: string) => tag.trim())
+        .filter(Boolean);
+    }
+    if (typeof next.leadSource === "string") {
+      next.leadSource = next.leadSource.trim();
+    }
     return next;
   }
   static async getAllPublic(req: Request, res: Response, next: NextFunction) {
@@ -109,7 +118,12 @@ export class KnowledgeController {
       payload.createdByRole = actor?.role?.name || actor?.role || undefined;
       payload.editedByName = payload.createdByName;
       payload.editedByRole = payload.createdByRole;
+      payload.createdOn = payload.createdOn || new Date();
+      payload.createdBy = payload.createdBy || payload.createdByName;
+      payload.publishedOn = payload.publishedOn || (payload.isActive ? new Date() : undefined);
       payload.editedAt = new Date();
+      payload.editedOn = payload.editedAt;
+      payload.editedBy = payload.editedBy || payload.editedByName;
       if (payload.isActive && !payload.publishedAt) {
         payload.publishedAt = new Date();
       }
@@ -129,7 +143,9 @@ export class KnowledgeController {
       const actor = (req as any).user || {};
       payload.editedByName = actor?.name || actor?.username || actor?.email;
       payload.editedByRole = actor?.role?.name || actor?.role || undefined;
+      payload.editedBy = payload.editedBy || payload.editedByName;
       payload.editedAt = new Date();
+      payload.editedOn = payload.editedAt;
       if (payload.isActive && !payload.publishedAt) {
         payload.publishedAt = new Date();
       }

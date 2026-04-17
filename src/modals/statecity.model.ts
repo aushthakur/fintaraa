@@ -78,29 +78,4 @@ const CitySchema: Schema<ICity> = new Schema(
 
 const City: Model<ICity> = mongoose.model<ICity>("City", CitySchema);
 
-/**
- * ==========================
- * 🏙️ Property City Schema & Interface
- * ==========================
- */
-export interface IPropertyCity extends Document {
-  image: string;
-  isActive?: boolean;
-  cityId: mongoose.Types.ObjectId;
-}
-
-const PropertyCitySchema: Schema<IPropertyCity> = new Schema(
-  {
-    cityId: {
-      ref: "City",
-      required: true,
-      type: mongoose.Schema.Types.ObjectId,
-    },
-    isActive: { type: Boolean, default: false },
-    image: { type: String, required: true, trim: true, unique: true },
-  },
-  { timestamps: true }
-);
-
-const PropertyCity: Model<IPropertyCity> = mongoose.model<IPropertyCity>("PropertyCity", PropertyCitySchema);
-export { State, City, Country, PropertyCity };
+export { State, City, Country };

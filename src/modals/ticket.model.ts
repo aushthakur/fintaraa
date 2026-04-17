@@ -224,6 +224,9 @@ export interface ITicket extends Document {
   requester: Types.ObjectId;
   requesterRole: UserType;
   assignee?: Types.ObjectId;
+  closedBy?: Types.ObjectId;
+  closedAt?: Date;
+  closingRemark?: string;
   timeToResolve?: number | null;
   relatedTickets?: Types.ObjectId[];
   listingId?: Types.ObjectId; // Reference to the product listing
@@ -301,6 +304,9 @@ const TicketSchema = new Schema<ITicket>(
       required: true,
     },
     assignee: { type: Schema.Types.ObjectId, ref: "Agent" },
+    closedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+    closedAt: { type: Date },
+    closingRemark: { type: String, trim: true },
     priority: {
       type: String,
       enum: ["low", "medium", "high", "critical"],
