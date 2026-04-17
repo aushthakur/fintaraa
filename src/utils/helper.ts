@@ -256,6 +256,9 @@ export const getPipeline = (
     return val;
   };
 
+  const escapeRegex = (value: string) =>
+    value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
   /**
    * Check if value is truly empty (null, undefined, empty string)
    */
@@ -369,7 +372,7 @@ export const getPipeline = (
     value: any,
   ): { field: string; operator: string; value: any } => {
     const parts = key.split("__");
-    const field = parts[0];
+    const field = parts[0] === "product" ? "productService" : parts[0];
     const operator = parts[1] || "eq";
 
     const parsedValue = parseValue(value);
@@ -403,7 +406,7 @@ export const getPipeline = (
         return {
           field,
           operator: "$regex",
-          value: new RegExp(value, "i"),
+          value: new RegExp(String(value), "i"),
         };
       default:
         return { field, operator: "eq", value: parsedValue };
@@ -429,7 +432,9 @@ export const getPipeline = (
         if (operator === "eq") {
           // For string values, use case-insensitive regex
           if (typeof value === "string" && operator === "eq") {
-            current[k] = { $regex: new RegExp(`^${value}$`, "i") };
+            current[k] = {
+              $regex: new RegExp(`^${escapeRegex(value)}$`, "i"),
+            };
           } else {
             current[k] = value;
           }
@@ -467,6 +472,12 @@ export const getPipeline = (
     const value = filters[key];
 
     if (isEmpty(value)) continue;
+    if (
+      typeof value === "string" &&
+      ["all", "any"].includes(value.trim().toLowerCase())
+    ) {
+      continue;
+    }
 
     const {
       field,
