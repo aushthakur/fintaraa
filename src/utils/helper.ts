@@ -604,14 +604,19 @@ export const getPipeline = (
   }
 
   const searchNeedsLookup = searchKeys.some((key) => key.includes("."));
-  const countPipeline: any[] = [...basePipeline];
-  if (searchStage) {
-    if (searchNeedsLookup && lookupStages.length > 0) {
-      countPipeline.push(...lookupStages);
+  const shouldBuildCountPipeline = useCursor || includeTotal;
+  const countPipeline: any[] = shouldBuildCountPipeline
+    ? [...basePipeline]
+    : [];
+  if (shouldBuildCountPipeline) {
+    if (searchStage) {
+      if (searchNeedsLookup && lookupStages.length > 0) {
+        countPipeline.push(...lookupStages);
+      }
+      countPipeline.push(searchStage);
     }
-    countPipeline.push(searchStage);
+    countPipeline.push({ $count: "total" });
   }
-  countPipeline.push({ $count: "total" });
 
   // ==========================================
   // 📄 PAGINATION
