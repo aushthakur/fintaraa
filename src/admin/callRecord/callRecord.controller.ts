@@ -292,6 +292,34 @@ const enrichCallRecordsWithCustomerContext = async (records: any[]) => {
   });
 };
 
+const shouldIncludeCustomerContext = (value: unknown) => {
+  const normalized = String(value ?? "true").trim().toLowerCase();
+  return !["false", "0", "no", "off"].includes(normalized);
+};
+
+const shouldDeferCallRecordLookups = (query: Record<string, any>) => {
+  const lookupSensitiveValues = [
+    query.searchkey,
+    query.sortKey,
+    query.multiSort,
+  ];
+
+  const usesNestedField = (value: unknown) =>
+    String(value ?? "")
+      .split(",")
+      .map((part) => part.trim().split(":")[0].trim())
+      .filter(Boolean)
+      .some((field) => field.includes("."));
+
+  if (lookupSensitiveValues.some(usesNestedField)) return false;
+
+  return !Object.keys(query).some((key) => {
+    if (!key || key.startsWith("_")) return false;
+    const baseKey = key.split("__")[0].trim();
+    return baseKey.includes(".");
+  });
+};
+
 const buildSourceTag = (value?: string): string | null => {
   const source = String(value || "")
     .trim()
@@ -967,6 +995,9 @@ export class CallRecordController {
 
   static async list(req: Request, res: Response, next: NextFunction) {
     try {
+      const rawQuery = req.query as Record<string, any>;
+      const deferLookupsToDataFacet = shouldDeferCallRecordLookups(rawQuery);
+
       const lookupStages = [
         {
           $lookup: {
@@ -1078,6 +1109,7 @@ export class CallRecordController {
         followUpBucket,
         productService,
         loanType,
+        includeCustomerContext,
         ...queryParams
       } = req.query as Record<string, any>;
       const requestTimeZone =
@@ -1152,7 +1184,10 @@ export class CallRecordController {
       const result = await CallRecordService.getAll(
         queryParams,
         lookupStages,
-        pipelineModifier ? { pipelineModifier } : undefined,
+        {
+          ...(pipelineModifier ? { pipelineModifier } : {}),
+          lookupsInDataFacet: deferLookupsToDataFacet,
+        },
       );
       const normalizedResult = Array.isArray(result)
         ? result.map((item) => normalizeCallRecordAssigneeView(item))
@@ -1164,16 +1199,21 @@ export class CallRecordController {
                 )
               : [],
           };
-      const enrichedResult = Array.isArray(normalizedResult)
-        ? await enrichCallRecordsWithCustomerContext(normalizedResult)
-        : {
-            ...normalizedResult,
-            result: await enrichCallRecordsWithCustomerContext(
-              Array.isArray((normalizedResult as any)?.result)
-                ? (normalizedResult as any).result
-                : [],
-            ),
-          };
+      const shouldEnrichCustomerContext = shouldIncludeCustomerContext(
+        includeCustomerContext,
+      );
+      const enrichedResult = shouldEnrichCustomerContext
+        ? Array.isArray(normalizedResult)
+          ? await enrichCallRecordsWithCustomerContext(normalizedResult)
+          : {
+              ...normalizedResult,
+              result: await enrichCallRecordsWithCustomerContext(
+                Array.isArray((normalizedResult as any)?.result)
+                  ? (normalizedResult as any).result
+                  : [],
+              ),
+            }
+        : normalizedResult;
       return res
         .status(200)
         .json(new ApiResponse(200, enrichedResult, "Call records fetched"));
