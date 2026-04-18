@@ -442,6 +442,8 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
 
 LoanQuerySchema.index({ mobile: 1, email: 1 });
 LoanQuerySchema.index({ customerId: 1 });
+LoanQuerySchema.index({ loanType: 1, createdAt: -1 });
+LoanQuerySchema.index({ loanType: 1, status: 1, createdAt: -1 });
 LoanQuerySchema.index({ ownerAgency: 1, status: 1, createdAt: -1 });
 
 LoanQuerySchema.pre("save", async function (next) {

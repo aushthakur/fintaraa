@@ -8,52 +8,6 @@ import { LoanQuery } from "../../modals/loanquery.model";
 import { createMailOptions, transporter } from "../../config/nodeMailerConfig";
 
 const EligibilityCriteriaService = new CommonService(EligibilityCriteria);
-const criteriaFieldLabels: Record<string, string> = {
-  loanType: "Loan Type",
-  bankName: "Bank Name",
-  salaryType: "Income Type",
-  commissionType: "Commission Type",
-  commissionValue: "Commission Value",
-  commissionMinAmount: "Commission Min Amount",
-  commissionMaxAmount: "Commission Max Amount",
-  commissionCapAmount: "Commission Cap Amount",
-  itrWithFinancial: "ITR With Financial",
-  gstProgram: "GST Program",
-  cashProfit: "Cash Profit",
-  lowTv: "Low LTV",
-  bankingSurrogate: "Banking Surrogate",
-  companyListed: "Company Listed",
-  foir: "FOIR",
-  minimumVintage: "Minimum Vintage",
-  businessAge: "Business Age",
-  currentExperience: "Current Experience",
-  totalExperience: "Total Experience",
-  salaryAmount: "Salary Amount",
-  form16Itr: "Form16/ITR",
-  grossSalary: "Gross Salary",
-  netSalary: "Net Salary",
-  currentTotalEmi: "Current Total EMI",
-  netIncome: "Net Income",
-  netProfit: "Net Profit",
-  cibilScoreWithCall: "CIBIL Score",
-  catAApproved: "Cat A Approved",
-  catBSemiApproved: "Cat B Semi Approved",
-  catCUnapproved: "Cat C Unapproved",
-  rateOfInterest: "Rate Of Interest",
-  averageBankBalance: "Average Bank Balance",
-  rm: "RM",
-  rmMailId: "RM Mail ID",
-  rmMbNo: "RM Mobile",
-  asm: "ASM",
-  asmMailId: "ASM Mail ID",
-  asmMbNo: "ASM Mobile",
-  zsm: "RSM",
-  zsmMailId: "RSM Mail ID",
-  zsmMbNo: "RSM Mobile",
-  remarks: "Remarks",
-  status: "Status",
-};
-
 const formatValue = (value: any) => {
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "boolean") return value ? "Yes" : "No";
@@ -64,15 +18,6 @@ const humanize = (value: any) =>
   formatValue(value)
     .replace(/_/g, " ")
     .replace(/([a-z])([A-Z])/g, "$1 $2");
-
-const buildCriteriaRows = (criteria: Record<string, any>) =>
-  Object.keys(criteriaFieldLabels)
-    .map((key) => {
-      const label = criteriaFieldLabels[key];
-      const value = humanize(criteria[key]);
-      return `<tr><td style=\"padding:6px 10px;border:1px solid #e2e8f0;font-weight:600;\">${label}</td><td style=\"padding:6px 10px;border:1px solid #e2e8f0;\">${value}</td></tr>`;
-    })
-    .join("");
 
 const buildApplicantRows = (loan: Record<string, any> | null) => {
   if (!loan) return "";
@@ -93,6 +38,124 @@ const buildApplicantRows = (loan: Record<string, any> | null) => {
         `<tr><td style=\"padding:6px 10px;border:1px solid #e2e8f0;font-weight:600;\">${label}</td><td style=\"padding:6px 10px;border:1px solid #e2e8f0;\">${formatValue(value)}</td></tr>`,
     )
     .join("");
+};
+
+const normalizeEmail = (value: any) =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
+
+const getRecipientEmails = (
+  criteriaList: Record<string, any>[],
+  recipientType?: string,
+) => {
+  const emails = criteriaList.flatMap((criteria) => {
+    if (recipientType === "rm") {
+      return [criteria.rmMailId];
+    }
+
+    return [criteria.rmMailId, criteria.asmMailId, criteria.zsmMailId];
+  });
+
+  return Array.from(
+    new Set(emails.map(normalizeEmail).filter((email) => Boolean(email))),
+  );
+};
+
+const buildEligibilityMailHtml = (
+  loanQuery: Record<string, any> | null,
+  criteriaList: Record<string, any>[],
+  recipientType?: string,
+) => {
+  const applicantRows = buildApplicantRows(loanQuery);
+  const criteriaRows = criteriaList
+    .map((criteria) => {
+      const bankName = formatValue(criteria.bankName);
+      const rmName = formatValue(criteria.rm);
+      const rmMailId = formatValue(criteria.rmMailId);
+      const salaryType = formatValue(criteria.salaryType);
+      const score = formatValue(criteria.cibilScoreWithCall);
+      return `
+        <tr>
+          <td style="padding:6px 10px;border:1px solid #e2e8f0;font-weight:600;">${bankName}</td>
+          <td style="padding:6px 10px;border:1px solid #e2e8f0;">${rmName}</td>
+          <td style="padding:6px 10px;border:1px solid #e2e8f0;">${rmMailId}</td>
+          <td style="padding:6px 10px;border:1px solid #e2e8f0;">${salaryType}</td>
+          <td style="padding:6px 10px;border:1px solid #e2e8f0;">${score}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  const recipientLabel = recipientType === "rm" ? "RM" : "Bank Team";
+
+  return `
+    <div style="font-family: Arial, sans-serif; color: #0f172a;">
+      <h2 style="margin:0 0 12px;">Eligibility Bank Matches</h2>
+      <p style="margin:0 0 12px; font-size:13px; color:#475569;">
+        The attached PDF contains the full loan query packet for ${recipientLabel} review.
+      </p>
+      ${
+        applicantRows
+          ? `<h3 style="margin:16px 0 8px;">Applicant Summary</h3>
+             <table style="border-collapse:collapse; width:100%; font-size:13px;">${applicantRows}</table>`
+          : ""
+      }
+      <h3 style="margin:16px 0 8px;">Matched Criteria</h3>
+      <table style="border-collapse:collapse; width:100%; font-size:13px;">
+        <tr>
+          <th style="padding:6px 10px;border:1px solid #e2e8f0;text-align:left;">Bank</th>
+          <th style="padding:6px 10px;border:1px solid #e2e8f0;text-align:left;">RM</th>
+          <th style="padding:6px 10px;border:1px solid #e2e8f0;text-align:left;">RM Email</th>
+          <th style="padding:6px 10px;border:1px solid #e2e8f0;text-align:left;">Salary Type</th>
+          <th style="padding:6px 10px;border:1px solid #e2e8f0;text-align:left;">CIBIL Score</th>
+        </tr>
+        ${criteriaRows}
+      </table>
+    </div>
+  `;
+};
+
+const queueEligibilityMailDispatch = async ({
+  recipients,
+  subject,
+  html,
+  attachments,
+}: {
+  recipients: string[];
+  subject: string;
+  html: string;
+  attachments: any[];
+}) => {
+  console.log("[EligibilityMail] Queue dispatch started", {
+    recipients: recipients.length,
+    attachments: attachments.length,
+    subject,
+  });
+
+  const results = await Promise.allSettled(
+    recipients.map(async (email) => {
+      console.log("[EligibilityMail] Sending queued mail", { email });
+      const info = await transporter.sendMail(
+        createMailOptions(email, subject, html, attachments),
+      );
+      console.log("[EligibilityMail] Queued mail sent", {
+        email,
+        messageId: info?.messageId,
+        accepted: info?.accepted,
+        rejected: info?.rejected,
+      });
+      return info;
+    }),
+  );
+
+  const failures = results.filter((result) => result.status === "rejected");
+  if (failures.length > 0) {
+    console.log("Eligibility mail dispatch completed with failures:", {
+      total: recipients.length,
+      failed: failures.length,
+    });
+  }
 };
 
 type DocumentAttachmentInput = {
@@ -240,7 +303,18 @@ export class EligibilityCriteriaController {
         pdfBase64,
         pdfFileName,
         documentAttachments = [],
+        recipientType,
       } = req.body || {};
+
+      console.log("[EligibilityMail] Request received", {
+        criteriaIds: Array.isArray(criteriaIds) ? criteriaIds.length : 0,
+        queryId,
+        recipientType: recipientType || "default",
+        pdfAttached: Boolean(pdfBase64),
+        documentAttachments: Array.isArray(documentAttachments)
+          ? documentAttachments.length
+          : 0,
+      });
 
       if (!Array.isArray(criteriaIds) || criteriaIds.length === 0) {
         return res
@@ -257,6 +331,11 @@ export class EligibilityCriteriaController {
           .status(404)
           .json(new ApiError(404, "No eligibility criteria found"));
       }
+
+      console.log("[EligibilityMail] Criteria resolved", {
+        criteriaCount: criteriaList.length,
+        queryId,
+      });
 
       let loanQuery: any = null;
       if (queryId) {
@@ -316,17 +395,74 @@ export class EligibilityCriteriaController {
       }
       attachments.push(...documentAttachmentFiles);
 
+      console.log("[EligibilityMail] Attachments prepared", {
+        pdfAttached: Boolean(pdfBase64),
+        attachmentCount: attachments.length,
+        documentFailures: documentAttachmentFailures.length,
+      });
+
+      const subject = `Eligibility Criteria Match - ${
+        loanQuery?.firstName || loanQuery?.lastName || loanQuery?.mobile || "Loan Query"
+      }`;
+      const html = buildEligibilityMailHtml(
+        loanQuery,
+        criteriaList,
+        recipientType,
+      );
+      const recipients = getRecipientEmails(criteriaList, recipientType);
+
+      console.log("[EligibilityMail] Recipients resolved", {
+        recipientType: recipientType || "default",
+        recipients,
+      });
+
+      if (recipients.length === 0) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "No recipient emails found"));
+      }
+
+      if (recipientType === "rm") {
+        console.log("[EligibilityMail] Queueing RM dispatch", {
+          recipients: recipients.length,
+          criteriaCount: criteriaList.length,
+        });
+        void queueEligibilityMailDispatch({
+          recipients,
+          subject,
+          html,
+          attachments,
+        }).catch((error: any) => {
+          console.log("Eligibility mail queue failed:", error);
+        });
+
+        return res.status(202).json(
+          new ApiResponse(
+            202,
+            {
+              total: criteriaList.length,
+              queued: recipients.length,
+              recipientType,
+              attachments: {
+                total: attachments.length,
+                pdfAttached: Boolean(pdfBase64),
+                documentFailures: documentAttachmentFailures.length,
+              },
+            },
+            "Email dispatch queued",
+          ),
+        );
+      }
+
       const results = await Promise.all(
         criteriaList.map(async (criteria: any) => {
-          const recipients = [
-            criteria.rmMailId,
-            criteria.asmMailId,
-            criteria.zsmMailId,
-          ]
-            .map((mail: string) => String(mail || "").trim())
-            .filter(Boolean);
+          const criteriaRecipients = getRecipientEmails([criteria]);
 
-          if (recipients.length === 0) {
+          if (criteriaRecipients.length === 0) {
+            console.log("[EligibilityMail] Skipping criteria with no recipients", {
+              criteriaId: criteria._id,
+              bankName: criteria.bankName,
+            });
             return {
               id: criteria._id,
               sent: false,
@@ -334,36 +470,41 @@ export class EligibilityCriteriaController {
             };
           }
 
-          const subject = `Eligibility Criteria Match - ${criteria.bankName || "Bank"}`;
-          const applicantRows = buildApplicantRows(loanQuery);
-          const criteriaRows = buildCriteriaRows(criteria);
-
-          const attachmentNote = attachments.length
-            ? `<p style="margin:12px 0 0; font-size:12px; color:#475569;">${attachments.length} attachment(s) included with this email.</p>`
-            : "";
-
-          const html = `
-            <div style="font-family: Arial, sans-serif; color: #0f172a;">
-              <h2 style="margin:0 0 12px;">Eligibility Match Details</h2>
-              ${
-                applicantRows
-                  ? `<h3 style="margin:16px 0 8px;">Applicant Summary</h3>
-                     <table style="border-collapse:collapse; width:100%; font-size:13px;">${applicantRows}</table>`
-                  : ""
-              }
-              <h3 style="margin:16px 0 8px;">Eligibility Criteria</h3>
-              <table style="border-collapse:collapse; width:100%; font-size:13px;">${criteriaRows}</table>
-              ${attachmentNote}
-            </div>
-          `;
-
-          await transporter.sendMail(
-            createMailOptions(recipients.join(","), subject, html, attachments),
+          const criteriaHtml = buildEligibilityMailHtml(
+            loanQuery,
+            [criteria],
+            recipientType,
           );
 
-          return { id: criteria._id, sent: true, recipients };
+          console.log("[EligibilityMail] Sending criteria mail", {
+            criteriaId: criteria._id,
+            bankName: criteria.bankName,
+            recipients: criteriaRecipients,
+          });
+
+          await transporter.sendMail(
+            createMailOptions(
+              criteriaRecipients.join(","),
+              subject,
+              criteriaHtml,
+              attachments,
+            ),
+          );
+
+          console.log("[EligibilityMail] Criteria mail sent", {
+            criteriaId: criteria._id,
+            recipients: criteriaRecipients,
+          });
+
+          return { id: criteria._id, sent: true, recipients: criteriaRecipients };
         }),
       );
+
+      console.log("[EligibilityMail] Dispatch completed", {
+        total: criteriaList.length,
+        sent: results.filter((r) => r.sent).length,
+        failed: results.filter((r) => !r.sent).length,
+      });
 
       return res.status(200).json(
         new ApiResponse(

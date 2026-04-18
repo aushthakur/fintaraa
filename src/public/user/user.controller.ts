@@ -197,7 +197,10 @@ const resolveNotificationPayload = (body: any, existing?: any) => {
   const bodyNotification = body?.notification || {};
 
   return {
-    sms: normalizeBoolean(bodyNotification.sms ?? body.sms, current.sms ?? true),
+    sms: normalizeBoolean(
+      bodyNotification.sms ?? body.sms,
+      current.sms ?? true,
+    ),
     push: normalizeBoolean(
       bodyNotification.push ?? body.push,
       current.push ?? true,
@@ -794,6 +797,109 @@ export class UserController {
       const user: any = await userService.getById(_id, false);
       if (!user) return next(new ApiError(404, "User not found"));
 
+      const fileUrl = String(
+        req.body?.fileUrl || req.query?.fileUrl || "",
+      ).trim();
+
+      const currentVaultDocs =
+        JSON.parse(JSON.stringify(user.digiLockerVault?.documents || [])) || [];
+
+      let nextVaultDocs;
+      if (fileUrl) {
+        // remove only the specific file entry matching both docType and fileUrl
+        nextVaultDocs = currentVaultDocs.filter(
+          (doc: any) =>
+            !(
+              doc?.docType === docType && String(doc?.fileUrl || "") === fileUrl
+            ),
+        );
+      } else {
+        // remove all documents of this docType
+        nextVaultDocs = currentVaultDocs.filter(
+          (doc: any) => doc?.docType !== docType,
+        );
+      }
+
+      const currentKyc: IKycProfile =
+        JSON.parse(JSON.stringify(user.kycProfile || {})) || {};
+      const nextKycDocs = (currentKyc.documents || []).filter((doc: any) => {
+        if (fileUrl) {
+          return !(
+            doc?.docType === docType && String(doc?.fileUrl || "") === fileUrl
+          );
+        }
+        return doc?.docType !== docType;
+      });
+
+      const updatedUser = await userService.updateById(
+        _id,
+        {
+          digiLockerVault: {
+            ...(user.digiLockerVault || {}),
+            documents: nextVaultDocs,
+            syncedAt: new Date(),
+          },
+          kycProfile: {
+            ...currentKyc,
+            documents: nextKycDocs,
+          },
+        },
+        { populate: false },
+      );
+
+      const sanitizedDocs = (updatedUser.digiLockerVault?.documents || []).map(
+        (doc: any) => {
+          const { password, ...rest } = doc?.toObject ? doc.toObject() : doc;
+          return rest;
+        },
+      );
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            ...(((updatedUser as any).digiLockerVault?.toObject
+              ? (updatedUser as any).digiLockerVault.toObject()
+              : updatedUser.digiLockerVault) || {}),
+            documents: sanitizedDocs,
+          },
+          "Document removed successfully",
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async deleteDigiLockerDocumentById(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { _id: actorId, role } = req.user || {};
+      const targetUserId = String(req.params?.id || "").trim();
+      const docType = String(req.params?.docType || "").trim();
+
+      if (!targetUserId) {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, "User id is required"));
+      }
+      if (role !== "admin" && String(actorId) !== targetUserId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only manage your own documents"));
+      }
+      if (!docType) {
+        return res
+          .status(400)
+          .json(new ApiResponse(400, null, "Document type is required"));
+      }
+
+      const user: any = await userService.getById(targetUserId, false);
+      if (!user) return next(new ApiError(404, "User not found"));
+
       const currentVaultDocs =
         JSON.parse(JSON.stringify(user.digiLockerVault?.documents || [])) || [];
       const nextVaultDocs = currentVaultDocs.filter(
@@ -806,7 +912,7 @@ export class UserController {
       );
 
       const updatedUser = await userService.updateById(
-        _id,
+        targetUserId,
         {
           digiLockerVault: {
             ...(user.digiLockerVault || {}),
@@ -853,7 +959,9 @@ export class UserController {
     try {
       const { _id: actorId, role } = req.user || {};
       const targetUserId = String(req.params?.id || "").trim();
-      const docType = String(req.params?.docType || req.body?.docType || "").trim();
+      const docType = String(
+        req.params?.docType || req.body?.docType || "",
+      ).trim();
 
       if (!targetUserId) {
         return res
@@ -903,7 +1011,8 @@ export class UserController {
         targetUserId,
         {
           digiLockerVault: {
-            storageProvider: user.digiLockerVault?.storageProvider || "internal",
+            storageProvider:
+              user.digiLockerVault?.storageProvider || "internal",
             syncedAt: new Date(),
             documents: mergedDocs,
           },
@@ -1507,7 +1616,9 @@ export class UserController {
       // If user doesn't exist, create a minimal account so the verified phone
       // can continue through the onboarding flow without requesting OTP again.
       if (!user) {
-        const providedEmail = String(email || "").trim().toLowerCase();
+        const providedEmail = String(email || "")
+          .trim()
+          .toLowerCase();
         const fallbackEmail = `${mobile}@mobile.fintaraa.local`;
         const nextEmail = providedEmail || fallbackEmail;
 
@@ -1572,7 +1683,9 @@ export class UserController {
         accountExisted,
         needsProfileCompletion:
           !user?.name ||
-          String(user?.name || "").toLowerCase().startsWith("user ") ||
+          String(user?.name || "")
+            .toLowerCase()
+            .startsWith("user ") ||
           !user?.panCard,
       });
     } catch (error) {

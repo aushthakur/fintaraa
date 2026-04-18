@@ -47,6 +47,10 @@ router.use(authenticateToken);
 router.post("/rc-lookup", asyncHandler(LoanQueryController.fetchRcDetails));
 router.post("/:id/cibil", asyncHandler(LoanQueryController.fetchCibilForQuery));
 router.post(
+  "/:id/cibil-person",
+  asyncHandler(LoanQueryController.fetchCibilForPerson),
+);
+router.post(
   "/fetch-cibil-pdf-by-mobile",
   asyncHandler(LoanQueryController.fetchCibilPdfByMobile),
 );
@@ -66,7 +70,10 @@ router.post(
   asyncHandler(LoanQueryController.createQuery),
 );
 router.get("/stats", asyncHandler(LoanQueryController.getStats));
-router.get("/sidebar-counts", asyncHandler(LoanQueryController.getSidebarCounts));
+router.get(
+  "/sidebar-counts",
+  asyncHandler(LoanQueryController.getSidebarCounts),
+);
 router.get("/", asyncHandler(LoanQueryController.getAllQueries));
 router.get("/:id", asyncHandler(LoanQueryController.getQueryById));
 router.put(
@@ -113,13 +120,14 @@ router.patch(
   "/:id/assign-agent",
   asyncHandler(LoanQueryController.assignAgent),
 );
-router.post(
-  "/:id/assign-agent",
-  asyncHandler(LoanQueryController.assignAgent),
-);
+router.post("/:id/assign-agent", asyncHandler(LoanQueryController.assignAgent));
 
 // ====== DETAIL VIEW AND OPERATIONS FOR ADMIN/LANDER ======
 router.get("/:id/detail", asyncHandler(LoanQueryController.getQueryDetail));
+router.get(
+  "/:id/detail-extras",
+  asyncHandler(LoanQueryController.getQueryDetailExtras),
+);
 router.post("/:id/notes", asyncHandler(LoanQueryController.addNote));
 router.post("/:id/status", asyncHandler(LoanQueryController.updateStatus));
 router.patch(

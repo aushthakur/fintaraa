@@ -21,10 +21,10 @@ router.post(
     { name: "panCardUrl", maxCount: 1 },
     { name: "aadhaarCardUrl", maxCount: 1 },
     { name: "cancelledChequeOrPassbook", maxCount: 1 },
-    {name : "avatar", maxCount: 1},
+    { name: "avatar", maxCount: 1 },
   ]),
   s3UploaderMiddleware("profile"),
-  asyncHandler(UserController.createUser)
+  asyncHandler(UserController.createUser),
 );
 router.post("/login", asyncHandler(UserController.loginUser));
 router.post("/send-otp", asyncHandler(UserController.generateOtp));
@@ -42,7 +42,7 @@ router
       { name: "avatar", maxCount: 1 },
     ]),
     s3UploaderMiddleware("profile"),
-    asyncHandler(UserController.updateUser)
+    asyncHandler(UserController.updateUser),
   )
   .delete(asyncHandler(UserController.deleteUserById));
 
@@ -55,51 +55,56 @@ router.put(
     { name: "incomeProof", maxCount: 5 },
   ]),
   s3UploaderMiddleware("kyc"),
-  asyncHandler(UserController.completeKycProfile)
+  asyncHandler(UserController.completeKycProfile),
 );
 router.put(
   "/security/preferences",
-  asyncHandler(UserController.updateSecurityPreferences)
+  asyncHandler(UserController.updateSecurityPreferences),
 );
 router.post(
   "/digilocker-sync",
   dynamicUpload([{ name: "digiLockerFiles", maxCount: 10 }]),
   s3UploaderMiddleware("digilocker"),
-  asyncHandler(UserController.syncDigiLocker)
+  asyncHandler(UserController.syncDigiLocker),
 );
 router.get("/digilocker", asyncHandler(UserController.getDigiLockerDocuments));
 router.delete(
   "/digilocker/:docType",
-  asyncHandler(UserController.deleteDigiLockerDocument)
+  asyncHandler(UserController.deleteDigiLockerDocument),
 );
 router.patch(
   "/:id/digilocker/documents/:docType",
   authenticateToken,
   dynamicUpload([{ name: "document", maxCount: 10 }]),
   s3UploaderMiddleware("digilocker"),
-  asyncHandler(UserController.upsertDigiLockerDocument)
+  asyncHandler(UserController.upsertDigiLockerDocument),
+);
+router.delete(
+  "/:id/digilocker/documents/:docType",
+  authenticateToken,
+  asyncHandler(UserController.deleteDigiLockerDocumentById),
 );
 router.put(
   "/:id/digilocker/documents/:docType/password",
   authenticateToken,
-  asyncHandler(UserController.updateDigiLockerDocumentPassword)
+  asyncHandler(UserController.updateDigiLockerDocumentPassword),
 );
 
 router.get(
   "/notification-preferences",
-  asyncHandler(UserController.getNotificationPreferences)
+  asyncHandler(UserController.getNotificationPreferences),
 );
 router.put(
   "/notification-preferences",
-  asyncHandler(UserController.updateNotificationPreferences)
+  asyncHandler(UserController.updateNotificationPreferences),
 );
 router.get(
   "/contacts/preferences",
-  asyncHandler(UserController.getContactPreferences)
+  asyncHandler(UserController.getContactPreferences),
 );
 router.put(
   "/contacts/preferences",
-  asyncHandler(UserController.updateContactPreferences)
+  asyncHandler(UserController.updateContactPreferences),
 );
 router.post("/contacts/sync", asyncHandler(UserController.syncContacts));
 

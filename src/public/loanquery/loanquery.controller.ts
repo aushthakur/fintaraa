@@ -151,10 +151,71 @@ const canAccessLoanQuery = async (
   }
 
   const customerOwnerId = getIdString(
-    query?.customerIdDetails?._id || query?.customerId?._id || query?.customerId,
+    query?.customerIdDetails?._id ||
+      query?.customerId?._id ||
+      query?.customerId,
   );
   return customerOwnerId === actorId;
 };
+
+const sanitizeLoanQueryListItem = (item: any) => {
+  if (!item || typeof item !== "object") return item;
+
+  const policyDetails =
+    item.policyDetails && typeof item.policyDetails === "object"
+      ? Object.entries(item.policyDetails).reduce<Record<string, any>>(
+          (acc, [key, value]) => {
+            const normalizedKey = key.toLowerCase();
+            if (
+              normalizedKey === "coapplicants" ||
+              normalizedKey.includes("file") ||
+              normalizedKey.includes("document") ||
+              normalizedKey.includes("attachment") ||
+              normalizedKey.includes("upload") ||
+              normalizedKey.endsWith("url") ||
+              Array.isArray(value) ||
+              (value && typeof value === "object")
+            ) {
+              return acc;
+            }
+            acc[key] = value;
+            return acc;
+          },
+          {},
+        )
+      : item.policyDetails;
+
+  const { documents, activities, rcLookup, ...rest } = item;
+  return {
+    ...rest,
+    policyDetails,
+  };
+};
+
+const loanQueryListFields = [
+  "_id",
+  "loanId",
+  "loanType",
+  "firstName",
+  "lastName",
+  "mobile",
+  "email",
+  "assignedAgent",
+  "assignedAgents",
+  "assignedLander",
+  "status",
+  "createdAt",
+  "updatedAt",
+  "city",
+  "state",
+  "employmentType",
+  "monthlyIncome",
+  "workExperience",
+  "loanAmount",
+  "approved",
+  "policyDetails.propertyType",
+  "policyDetails.propertyValue",
+];
 
 const resolveActivityActorModel = (
   role?: string,
@@ -267,16 +328,92 @@ const extractFileUrls = (file: any): string[] => {
   return [];
 };
 
+const parseMaybeJson = (value: any) => {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+};
+
+const normalizeUploadedAttachment = (value: any) => {
+  const parsed = parseMaybeJson(value);
+  if (!parsed) return null;
+
+  if (typeof parsed === "string") {
+    return { url: parsed };
+  }
+
+  if (typeof parsed !== "object") {
+    return null;
+  }
+
+  const url =
+    parsed.url ||
+    parsed.fileUrl ||
+    parsed.dataUrl ||
+    parsed.preview ||
+    parsed.link ||
+    parsed.path;
+
+  if (!url) {
+    return null;
+  }
+
+  return {
+    ...parsed,
+    url,
+    name:
+      parsed.name ||
+      parsed.originalname ||
+      parsed.fileName ||
+      parsed.label ||
+      parsed.filename ||
+      undefined,
+  };
+};
+
+const normalizeCoApplicants = (value: any) => {
+  const parsed = parseMaybeJson(value);
+  const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+
+  return list
+    .map((item) => {
+      const coApplicant = parseMaybeJson(item);
+      if (!coApplicant || typeof coApplicant !== "object") return null;
+      return {
+        ...coApplicant,
+        aadhaarFile: normalizeUploadedAttachment(coApplicant.aadhaarFile),
+        panFile: normalizeUploadedAttachment(coApplicant.panFile),
+        bankStatementFile: normalizeUploadedAttachment(
+          coApplicant.bankStatementFile,
+        ),
+      };
+    })
+    .filter(Boolean);
+};
+
 // Helper function to process uploaded files and map to request body
 const processFileUploads = (req: Request) => {
   // Initialize policyDetails if it doesn't exist
+  req.body.policyDetails = parseMaybeJson(req.body.policyDetails) || {};
   if (!req.body.policyDetails) {
     req.body.policyDetails = {};
   }
 
   // Initialize documents if it doesn't exist
+  req.body.documents = parseMaybeJson(req.body.documents) || {};
   if (!req.body.documents) {
     req.body.documents = {};
+  }
+
+  if (req.body.policyDetails?.coApplicants) {
+    req.body.policyDetails.coApplicants = normalizeCoApplicants(
+      req.body.policyDetails.coApplicants,
+    );
   }
 
   // Process bankStatementUrl (main field)
@@ -538,6 +675,68 @@ export class LoanQueryController {
     }
   }
 
+  static async fetchCibilForPerson(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { role } = (req as any).user || {};
+      if (!["admin", "agent", "lander"].includes(role)) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You are not allowed to fetch CIBIL here"));
+      }
+
+      const { name, panNumber, mobile, gender, environment, consent } =
+        req.body || {};
+      if (!mobile && !panNumber && !name) {
+        return res
+          .status(400)
+          .json(
+            new ApiError(
+              400,
+              "At least one identifier (mobile/pan/name) is required",
+            ),
+          );
+      }
+
+      const payload = prepareSurepassCibilPayload({
+        name: name || undefined,
+        panNumber: panNumber || undefined,
+        mobile: mobile || undefined,
+        gender: gender || undefined,
+        consent: consent || "Y",
+      });
+
+      const report = await fetchSurepassCibilReport(payload, {
+        environment:
+          environment === "production"
+            ? "production"
+            : environment === "sandbox"
+              ? "sandbox"
+              : undefined,
+      });
+
+      const score =
+        report.data?.score ||
+        report.data?.cibil_score ||
+        report.data?.data?.score ||
+        null;
+
+      return res.status(200).json(
+        new ApiResponse(200, {
+          payload,
+          environment: report.environment,
+          report: report.data,
+          ...(score ? { cibilScore: score } : {}),
+        }),
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
   static async fetchCibilPdfByMobile(
     req: Request,
     res: Response,
@@ -670,9 +869,7 @@ export class LoanQueryController {
         const list = Array.isArray(req.body.policyDetails.coApplicants)
           ? req.body.policyDetails.coApplicants
           : [req.body.policyDetails.coApplicants];
-        req.body.policyDetails.coApplicants = list
-          .map((item: any) => String(item || "").trim())
-          .filter(Boolean);
+        req.body.policyDetails.coApplicants = list.filter(Boolean);
       }
 
       // Validate policyDetails against loanType if both are provided (skip for draft)
@@ -976,20 +1173,34 @@ export class LoanQueryController {
       ];
 
       const loanQueries = await loanQueryService.getAll(
-        req.query,
+        {
+          ...req.query,
+          fields: (req.query.fields as string) || loanQueryListFields.join(","),
+        },
         populateStages,
-        prependStages.length > 0
-          ? {
-              prependStages,
-            }
-          : undefined,
+        {
+          prependStages,
+          lookupsInDataFacet: true,
+        },
       );
+      const sanitizedLoanQueries = Array.isArray(loanQueries)
+        ? loanQueries.map(sanitizeLoanQueryListItem)
+        : loanQueries &&
+            typeof loanQueries === "object" &&
+            Array.isArray((loanQueries as any).result)
+          ? {
+              ...(loanQueries as any),
+              result: (loanQueries as any).result.map(
+                sanitizeLoanQueryListItem,
+              ),
+            }
+          : loanQueries;
       return res
         .status(200)
         .json(
           new ApiResponse(
             200,
-            loanQueries,
+            sanitizedLoanQueries,
             "Loan queries fetched successfully",
           ),
         );
@@ -1103,7 +1314,8 @@ export class LoanQueryController {
 
       let total = 0;
       rows.forEach((row: any) => {
-        const key = normalizeLoanType(String(row?._id || "")) || String(row?._id || "");
+        const key =
+          normalizeLoanType(String(row?._id || "")) || String(row?._id || "");
         const count = Number(row?.count) || 0;
         if (key && Object.prototype.hasOwnProperty.call(byType, key)) {
           byType[key] += count;
@@ -1203,6 +1415,12 @@ export class LoanQueryController {
           ...existingResult.policyDetails,
           ...req.body.policyDetails,
         };
+      }
+
+      if (req.body.policyDetails?.coApplicants) {
+        req.body.policyDetails.coApplicants = normalizeCoApplicants(
+          req.body.policyDetails.coApplicants,
+        );
       }
 
       // Merge with existing documents if updating
@@ -1495,7 +1713,8 @@ export class LoanQueryController {
       }
 
       const actorId = (req as any).user?._id;
-      const previousAgentIds: string[] = collectAssignedAgentIds(existingResult);
+      const previousAgentIds: string[] =
+        collectAssignedAgentIds(existingResult);
       const nextAgentIds: string[] = selectedAgentIds;
       const addedAgentIds: string[] = nextAgentIds.filter(
         (id) => !previousAgentIds.includes(id),
@@ -1573,9 +1792,10 @@ export class LoanQueryController {
       const { role } = (req as any).user || {};
 
       const query = await LoanQuery.findById(req.params.id)
+        .select("-activities -documents -rcLookup -policyDetails.coApplicants")
         .populate(
           "customerId",
-          "name email mobile profilePictureUrl cibilScore cibilLastFetchedAt cibilReport cibilRequestPayload cibilPdfLastFetchedAt cibilPdfReport digiLockerVault",
+          "name email mobile profilePictureUrl cibilScore cibilLastFetchedAt cibilPdfLastFetchedAt",
         )
         .populate(
           "assignedAgent",
@@ -1603,23 +1823,9 @@ export class LoanQueryController {
           );
       }
 
-      const rcNumberCandidate =
-        (query as any)?.policyDetails?.carRegistrationNumber ||
-        (query as any)?.policyDetails?.carRegistrationNo ||
-        null;
-      const rcLookup =
-        rcNumberCandidate &&
-        normalizeRcNumber(String(rcNumberCandidate)).length >= 6
-          ? await VehicleRcLookup.findOne({
-              idNumber: normalizeRcNumber(String(rcNumberCandidate)),
-            }).lean()
-          : null;
-
       // Ensure commission fields are always present (for backward compatibility with old documents)
       const responseData = {
         ...query,
-        rcLookup,
-        activities: await enrichActivityActors(query.activities || []),
         commissionRecorded: query.commissionRecorded ?? false,
         commissionRecordedAt: query.commissionRecordedAt ?? null,
         commissionTransactionId: query.commissionTransactionId ?? null,
@@ -1634,6 +1840,80 @@ export class LoanQueryController {
             "Loan query details fetched successfully",
           ),
         );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getQueryDetailExtras(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+
+      const query = await LoanQuery.findById(req.params.id)
+        .select("activities rcLookup customerId policyDetails.coApplicants policyDetails.carRegistrationNumber policyDetails.carRegistrationNo")
+        .lean();
+
+      if (!query) {
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
+      }
+
+      if (!(await canAccessLoanQuery(query, userId, role))) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(
+              403,
+              "You can only view details of queries created or assigned to you",
+            ),
+          );
+      }
+
+      const customerId = getIdString(
+        (query as any)?.customerId?._id || query?.customerId,
+      );
+      const customer = customerId
+        ? await User.findById(customerId)
+            .select(
+              "cibilScore cibilLastFetchedAt cibilReport cibilRequestPayload cibilPdfLastFetchedAt cibilPdfReport digiLockerVault",
+            )
+            .lean()
+        : null;
+
+      const rcNumberCandidate =
+        (query as any)?.rcLookup?.idNumber ||
+        (query as any)?.policyDetails?.carRegistrationNumber ||
+        (query as any)?.policyDetails?.carRegistrationNo ||
+        null;
+      const rcLookup =
+        (query as any)?.rcLookup ||
+        (rcNumberCandidate &&
+        normalizeRcNumber(String(rcNumberCandidate)).length >= 6
+          ? await VehicleRcLookup.findOne({
+              idNumber: normalizeRcNumber(String(rcNumberCandidate)),
+            }).lean()
+          : null);
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            policyDetails: (query as any)?.policyDetails || {},
+            customerId: customer,
+            rcLookup,
+            activities: await enrichActivityActors(
+              Array.isArray(query.activities)
+                ? query.activities.slice(-100)
+                : [],
+            ),
+          },
+          "Loan query detail extras fetched successfully",
+        ),
+      );
     } catch (err) {
       next(err);
     }
@@ -1955,7 +2235,7 @@ export class LoanQueryController {
     try {
       const actorId = (req as any).user?._id;
       const { role } = (req as any).user || {};
-      const { policyDetails } = req.body;
+      const policyDetails = parseMaybeJson(req.body.policyDetails);
 
       if (!policyDetails || typeof policyDetails !== "object") {
         return res
@@ -1980,7 +2260,19 @@ export class LoanQueryController {
       }
 
       // Merge policy details
-      query.policyDetails = { ...query.policyDetails, ...policyDetails };
+      const normalizedPolicyDetails = {
+        ...policyDetails,
+        ...(policyDetails?.coApplicants
+          ? {
+              coApplicants: normalizeCoApplicants(policyDetails.coApplicants),
+            }
+          : {}),
+      };
+
+      query.policyDetails = {
+        ...query.policyDetails,
+        ...normalizedPolicyDetails,
+      };
 
       query.activities = query.activities || [];
       query.activities.push({
