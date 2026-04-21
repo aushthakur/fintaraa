@@ -38,7 +38,7 @@ export const createDefaultMailOptions = (
   attachments?: SendMailOptions["attachments"],
 ): SendMailOptions => ({
   from: {
-    name: "Fintara",
+    name: "Fintaraa",
     address: config.email.user as string,
   },
   to: receiverEmail,

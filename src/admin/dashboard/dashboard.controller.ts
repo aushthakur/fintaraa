@@ -253,7 +253,7 @@ export class DashboardController {
           .lean(),
         LoanQuery.find(loanMatch)
           .select(
-            "firstName lastName email mobile loanAmount loanType status customerId createdAt"
+            "firstName lastName email mobile loanAmount loanType status customerId createdAt leadBy dataSource updatedByName"
           )
           .sort({ createdAt: -1 })
           .limit(5)
@@ -478,6 +478,10 @@ export class DashboardController {
             mobile: l.mobile,
             loanType: l.loanType,
             loanAmount: l.loanAmount,
+            fileStatus: l.fileStatus || l.status,
+            dataSource: l.dataSource || "",
+            leadBy: l.leadBy || "",
+            updatedByName: l.updatedByName || "",
             status: l.status,
             createdAt: l.createdAt,
           })),

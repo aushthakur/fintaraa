@@ -88,6 +88,14 @@ const normalizeObjectIdArray = (value: any): Types.ObjectId[] => {
     .filter((item): item is Types.ObjectId => Boolean(item));
 };
 
+const resolveAdminDisplayName = async (adminId?: string) => {
+  if (!adminId) return "";
+  const admin = await Admin.findById(adminId)
+    .select("name username email")
+    .lean();
+  return admin?.name || admin?.username || admin?.email || "";
+};
+
 const stringifyValue = (value: any): string => {
   if (value === undefined) return "undefined";
   if (value === null) return "null";
@@ -675,6 +683,26 @@ const createLoanQueryFromCallRecord = async (
           callRecord.dataSource ||
           "Not Provided",
       ).trim() || "Not Provided";
+    const resolvedLeadBy =
+      String(
+        normalizedLoanContext.leadBy ||
+          callRecord.leadBy ||
+          lead?.leadBy ||
+          "",
+      ).trim() || "";
+    const resolvedDataSource =
+      String(
+        normalizedLoanContext.dataSource ||
+          callRecord.dataSource ||
+          lead?.channel ||
+          "",
+      ).trim() || "";
+    const resolvedUpdatedByName =
+      String(
+        normalizedLoanContext.updatedByName ||
+          normalizedLoanContext.actorName ||
+          "",
+      ).trim() || "";
     const resolvedOfficeAddress =
       String(
         normalizedLoanContext.officeAddress ||
@@ -740,6 +768,9 @@ const createLoanQueryFromCallRecord = async (
       state: resolvedState,
       city: resolvedCity,
       street: resolvedStreet,
+      leadBy: resolvedLeadBy || undefined,
+      dataSource: resolvedDataSource || undefined,
+      updatedByName: resolvedUpdatedByName || undefined,
       employmentType: resolvedEmploymentType,
       companyName: resolvedCompanyName,
       monthlyIncome:
@@ -879,6 +910,29 @@ export class CallRecordController {
           .json(new ApiError(400, "Phone number is required"));
       }
 
+      const primaryPhoneDigits = normalizePhoneDigits(payload.phoneNumber);
+      if (primaryPhoneDigits.length !== 10) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Phone number must be exactly 10 digits"));
+      }
+      payload.phoneNumber = primaryPhoneDigits;
+
+      if (payload.alternatePhone) {
+        const alternatePhoneDigits = normalizePhoneDigits(payload.alternatePhone);
+        if (alternatePhoneDigits.length !== 10) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                "Alternate phone number must be exactly 10 digits",
+              ),
+            );
+        }
+        payload.alternatePhone = alternatePhoneDigits;
+      }
+
       let assigneeId = payload.assignee;
       let assignmentMode: "auto" | "manual" = "manual";
       const assignees = normalizeObjectIdArray(
@@ -944,9 +998,15 @@ export class CallRecordController {
 
       // Auto-create a loan application for loan products so it appears in the loan section immediately.
       if (result?.productService && isLoanProduct(result.productService)) {
+        const actorDisplayName = await resolveAdminDisplayName(
+          adminId?.toString?.(),
+        );
         const loanQuery = await createLoanQueryFromCallRecord(
           finalRecord || result,
-          payload.loanContext,
+          {
+            ...(payload.loanContext || {}),
+            updatedByName: actorDisplayName || undefined,
+          },
           linkedLead,
         );
         if (loanQuery) {
@@ -1293,6 +1353,33 @@ export class CallRecordController {
       };
       if (adminId) updates.updatedBy = adminId;
 
+      if (Object.prototype.hasOwnProperty.call(updateBody, "phoneNumber")) {
+        const primaryPhoneDigits = normalizePhoneDigits(updateBody.phoneNumber);
+        if (primaryPhoneDigits.length !== 10) {
+          return res
+            .status(400)
+            .json(new ApiError(400, "Phone number must be exactly 10 digits"));
+        }
+        updates.phoneNumber = primaryPhoneDigits;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(updateBody, "alternatePhone")) {
+        const alternatePhoneDigits = normalizePhoneDigits(
+          updateBody.alternatePhone,
+        );
+        if (alternatePhoneDigits && alternatePhoneDigits.length !== 10) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                "Alternate phone number must be exactly 10 digits",
+              ),
+            );
+        }
+        updates.alternatePhone = alternatePhoneDigits || "";
+      }
+
       if (incomingAssignees.length > 0) {
         updates.assignees = incomingAssignees;
         updates.assignee = incomingAssignees[0];
@@ -1379,7 +1466,13 @@ export class CallRecordController {
       // Auto-create loan query if product is a loan type
       const incomingProduct = req.body?.productService;
       if (incomingProduct && isLoanProduct(incomingProduct)) {
-        const loanQuery = await createLoanQueryFromCallRecord(result);
+        const actorDisplayName = await resolveAdminDisplayName(
+          adminId?.toString?.(),
+        );
+        const loanQuery = await createLoanQueryFromCallRecord(result, {
+          ...(req.body?.loanContext || {}),
+          updatedByName: actorDisplayName || undefined,
+        });
         if (loanQuery) {
           console.log(
             "[CallRecord] Loan query created for call record:",
@@ -1437,6 +1530,11 @@ export class CallRecordController {
 
   static async remove(req: Request, res: Response, next: NextFunction) {
     try {
+      if ((req as any).user?.role !== "admin") {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Only admin can delete call records"));
+      }
       const result = await CallRecordService.deleteById(req.params.id);
       if (!result)
         return res.status(404).json(new ApiError(404, "Call record not found"));

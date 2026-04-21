@@ -67,7 +67,7 @@ export const NotificationService = {
           case "admin":
             return Admin.findById(id).lean();
           case "agent":
-            return Agent.findById(id).lean();
+            return (await Admin.findById(id).lean()) || Agent.findById(id).lean();
           case "agency":
           case "agency_member":
             return Agency.findById(id).lean();

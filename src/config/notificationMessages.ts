@@ -182,7 +182,7 @@ export const NotificationMessages: Record<string, DualNotificationTemplate> = {
       message: "A new account has been created.",
     }),
     receiver: (ctx) => ({
-      title: "Welcome to Fintara",
+      title: "Welcome to Fintaraa",
       message: `Hi ${ctx?.userName || "there"}, your account is ready.`,
     }),
   },

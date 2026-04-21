@@ -208,6 +208,9 @@ export interface ILoanQuery extends Document {
   state: string;
   city: string;
   street: string;
+  leadBy?: string;
+  dataSource?: string;
+  updatedByName?: string;
 
   // Professional Details
   employmentType: string; // Self-employed, Self Employed Professional, Self Employed Non-Professional
@@ -290,6 +293,9 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     state: { type: String, required: true, trim: true },
     city: { type: String, required: true, trim: true },
     street: { type: String, required: true, trim: true },
+    leadBy: { type: String, trim: true },
+    dataSource: { type: String, trim: true },
+    updatedByName: { type: String, trim: true },
 
     // Professional Details
     employmentType: {

@@ -32,6 +32,10 @@ export interface DashboardOverviewResponse {
       mobile: string;
       loanType: string;
       loanAmount: number;
+      fileStatus?: string;
+      dataSource?: string;
+      leadBy?: string;
+      updatedByName?: string;
       status: string;
       createdAt: string;
     }>;
