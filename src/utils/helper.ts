@@ -6,8 +6,7 @@ const { ObjectId } = mongoose.Types;
 export const DEFAULT_QUERY_TIMEZONE = "Asia/Kolkata";
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const DATETIME_LOCAL_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/;
+const DATETIME_LOCAL_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/;
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
 
@@ -23,13 +22,12 @@ const getTimeZoneParts = (date: Date, timeZone = DEFAULT_QUERY_TIMEZONE) => {
     hourCycle: "h23",
   });
 
-  const parts = formatter.formatToParts(date).reduce<Record<string, string>>(
-    (acc, part) => {
+  const parts = formatter
+    .formatToParts(date)
+    .reduce<Record<string, string>>((acc, part) => {
       if (part.type !== "literal") acc[part.type] = part.value;
       return acc;
-    },
-    {},
-  );
+    }, {});
 
   return {
     year: Number(parts.year),
@@ -169,7 +167,7 @@ export const buildDateRangeInTimeZone = (
     },
     timeZone,
   );
-
+  console.log(start, end);
   return { start, end };
 };
 

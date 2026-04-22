@@ -29,6 +29,7 @@ import { agencyEarningsService } from "../../services/agencyEarnings.service";
 import {
   DEFAULT_QUERY_TIMEZONE,
   buildDateRangeInTimeZone,
+  parseDateInTimeZone,
 } from "../../utils/helper";
 
 const RC_CACHE_TTL_DAYS = 365;
@@ -1260,7 +1261,13 @@ export class LoanQueryController {
         return res.status(400).json(new ApiError(400, "Invalid loanType"));
       }
 
-      const { start, end } = resolveDateRange(startDate, endDate, 7);
+    
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+      start.setHours(0, 0, 0, 0); // 12:00 AM
+      end.setHours(23, 59, 59, 0); // 23:59 PM (end of the day)
+
 
       const match: Record<string, any> = {
         createdAt: { $gte: start, $lte: end },
@@ -1904,7 +1911,9 @@ export class LoanQueryController {
       const { role } = (req as any).user || {};
 
       const query = await LoanQuery.findById(req.params.id)
-        .select("activities rcLookup customerId policyDetails.coApplicants policyDetails.carRegistrationNumber policyDetails.carRegistrationNo")
+        .select(
+          "activities rcLookup customerId policyDetails.coApplicants policyDetails.carRegistrationNumber policyDetails.carRegistrationNo",
+        )
         .lean();
 
       if (!query) {
@@ -1990,8 +1999,8 @@ export class LoanQueryController {
             new ApiError(
               403,
               "You can only add notes to queries created or assigned to you",
-          ),
-        );
+            ),
+          );
       }
 
       const updatedByName = await resolveActorDisplayName(actorId, role);
@@ -2039,8 +2048,8 @@ export class LoanQueryController {
             new ApiError(
               403,
               "You can only update status of queries created or assigned to you",
-          ),
-        );
+            ),
+          );
       }
 
       const oldStatus = query.status;
