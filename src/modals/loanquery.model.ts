@@ -35,6 +35,11 @@ export enum LoanType {
   MACHINERY_LOAN = "machinery_loan",
   HOME_LOAN = "home_loan",
   BUSINESS_LOAN = "business_loan",
+  DOD_LOAN = "dod_loan",
+  OD_LOAN = "od_loan",
+  INDUSTRIAL_LOAN = "industrial_loan",
+  COMMERCIAL_PURCHASES_LOAN = "commercial_purchases_loan",
+  CREDIT_CARD = "credit_card",
 }
 
 export enum LoanQueryActivityType {
@@ -184,6 +189,11 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
     "businessRegistrationCertificateUrl",
     "tenure",
   ],
+  [LoanType.DOD_LOAN]: [],
+  [LoanType.OD_LOAN]: [],
+  [LoanType.INDUSTRIAL_LOAN]: [],
+  [LoanType.COMMERCIAL_PURCHASES_LOAN]: [],
+  [LoanType.CREDIT_CARD]: [],
 };
 
 export interface ILoanQuery extends Document {

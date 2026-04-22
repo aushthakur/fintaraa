@@ -28,6 +28,7 @@ export interface ICallRecord extends Document {
   recordingUrl?: string;
   emailSend?: boolean;
   createAccount?: boolean;
+  createInquiry?: boolean;
   comment?: string;
   contactActionStatus?: string;
   followUpHistory?: Array<{
@@ -63,6 +64,8 @@ export interface ICallRecord extends Document {
   attachedLead?: Types.ObjectId;
   loanQueryId?: Types.ObjectId;
   loanQueryCreatedAt?: Date;
+  insuranceQueryId?: Types.ObjectId;
+  insuranceQueryCreatedAt?: Date;
   channelMatchedAt?: Date;
   createdBy?: Types.ObjectId;
   updatedBy?: Types.ObjectId;
@@ -99,6 +102,7 @@ const CallRecordSchema = new Schema<ICallRecord>(
     recordingUrl: { type: String, trim: true },
     emailSend: { type: Boolean, default: false },
     createAccount: { type: Boolean, default: false },
+    createInquiry: { type: Boolean, default: false },
     comment: { type: String, trim: true },
     contactActionStatus: { type: String, trim: true },
     followUpHistory: {
@@ -153,6 +157,8 @@ const CallRecordSchema = new Schema<ICallRecord>(
     channelAgency: { type: Schema.Types.ObjectId, ref: "Agency" },
     loanQueryId: { type: Schema.Types.ObjectId, ref: "LoanQuery" },
     loanQueryCreatedAt: { type: Date },
+    insuranceQueryId: { type: Schema.Types.ObjectId, ref: "InsuranceQuery" },
+    insuranceQueryCreatedAt: { type: Date },
     channelMatchedAt: { type: Date },
     createdBy: { type: Schema.Types.ObjectId, ref: "Admin" },
     updatedBy: { type: Schema.Types.ObjectId, ref: "Admin" },

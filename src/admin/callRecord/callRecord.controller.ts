@@ -10,9 +10,16 @@ import { sendSingleNotification } from "../../services/notification.service";
 import { UserType } from "../../modals/notification.model";
 import { Gender, User, UserStatus } from "../../modals/user.model";
 import { LoanQuery } from "../../modals/loanquery.model";
+import {
+  InsuranceQuery,
+  InsuranceType,
+  InsuranceQueryActivityType,
+  ApplicationStatus as InsuranceApplicationStatus,
+} from "../../modals/insurancequery.model";
 import { Agency } from "../../modals/agency.model";
 import Lead, { LeadConnectorType } from "../../modals/lead.model";
 import { leadManagementService } from "../../services/leadManagement.service";
+import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
 import { getLoanTypeMatchValues, normalizeLoanType } from "../../utils/loanType";
 import {
   DEFAULT_QUERY_TIMEZONE,
@@ -517,9 +524,32 @@ const getFollowUpBucketFilter = (
   return null;
 };
 
-// Check if product is a loan type
-const isLoanProduct = (productService?: string): boolean => {
-  return !!normalizeLoanType(productService);
+const INSURANCE_PRODUCT_MAP: Record<string, InsuranceType> = {
+  health_insurance: InsuranceType.HEALTH,
+  life_insurance: InsuranceType.LIFE,
+  term_insurance: InsuranceType.TERM,
+  vehicle_insurance: InsuranceType.VEHICLE,
+  property_insurance: InsuranceType.PROPERTY,
+  stock_insurance: InsuranceType.STOCK,
+  machine_insurance: InsuranceType.MACHINERY,
+  travel_insurance: InsuranceType.TRAVEL,
+  retirement_plan: InsuranceType.RETIREMENT,
+  shop_insurance: InsuranceType.SHOP,
+  personal_accident: InsuranceType.HEALTH,
+  critical_illness: InsuranceType.HEALTH,
+  group_insurance: InsuranceType.HEALTH,
+  cyber_insurance: InsuranceType.PROPERTY,
+  pet_insurance: InsuranceType.PROPERTY,
+  loan_suraksha: InsuranceType.TERM,
+  all_insurance: InsuranceType.HEALTH,
+};
+
+const normalizeInsuranceTypeFromProductService = (
+  productService?: string,
+): InsuranceType | undefined => {
+  if (!productService) return undefined;
+  const normalized = String(productService).trim().toLowerCase();
+  return INSURANCE_PRODUCT_MAP[normalized];
 };
 
 // Create loan query from call record data
@@ -541,6 +571,9 @@ const createLoanQueryFromCallRecord = async (
 
     const loanType = normalizeLoanType(callRecord.productService);
     if (!loanType) return null;
+    const primaryAssigneeId = toObjectId(
+      context?.assignee || callRecord.assignee || callRecord.assignees?.[0],
+    );
 
     const normalizedLoanContext = context || {};
     const contextQueryId = String(
@@ -557,6 +590,7 @@ const createLoanQueryFromCallRecord = async (
     const existingByContact = await LoanQuery.findOne({
       loanType,
       status: { $nin: ["completed", "approved", "cancelled"] },
+      ...(primaryAssigneeId ? { assignedAgent: primaryAssigneeId } : {}),
       $or: [
         { mobile: { $regex: searchPhone, $options: "i" } },
         { mobile: phoneNumber },
@@ -614,6 +648,7 @@ const createLoanQueryFromCallRecord = async (
       customerId: user._id,
       loanType: loanType,
       status: { $nin: ["completed", "approved", "cancelled"] },
+      ...(primaryAssigneeId ? { assignedAgent: primaryAssigneeId } : {}),
     });
 
     if (existingQuery) {
@@ -787,6 +822,19 @@ const createLoanQueryFromCallRecord = async (
       ifscCode: resolvedIfscCode,
       bankStatementUrl:
         normalizedLoanContext.bankStatementUrl || callRecord.recordingUrl || "",
+      ...(primaryAssigneeId ? { assignedAgent: primaryAssigneeId } : {}),
+      ...(Array.isArray(callRecord.assignees) && callRecord.assignees.length > 0
+        ? {
+            assignedAgents: Array.from(
+              new Set(
+                callRecord.assignees
+                  .map((item) => toObjectId(item))
+                  .filter((item): item is Types.ObjectId => Boolean(item))
+                  .map((item) => item.toString()),
+              ),
+            ).map((id) => new Types.ObjectId(id)),
+          }
+        : {}),
       activities: [
         {
           type: "created",
@@ -799,6 +847,18 @@ const createLoanQueryFromCallRecord = async (
     };
 
     const newLoanQuery = await LoanQuery.create(loanQueryData);
+    if (!newLoanQuery.assignedAgent) {
+      await EmployeeAssignmentEngine.ensureAssignmentForLoanQuery(
+        newLoanQuery as any,
+        {
+          actorId: context?.actorId,
+          actorModel: "Admin",
+          reason: "auto_created_from_call_record",
+          session: context?.session,
+        },
+      );
+      await newLoanQuery.save({ session: context?.session });
+    }
     console.log(
       "[CallRecord] Created loan query:",
       newLoanQuery._id,
@@ -868,24 +928,385 @@ const notifyAssignee = async (
   }
 };
 
-const ensureUserAccountFromCallRecord = async (record: ICallRecord) => {
+const createInsuranceQueryFromCallRecord = async (
+  callRecord: ICallRecord,
+  context?: Record<string, any>,
+  lead?: any,
+): Promise<any> => {
+  try {
+    const phoneNumber = callRecord.phoneNumber;
+    if (!phoneNumber) return null;
+
+    const normalizedPhone = phoneNumber.replace(/\D/g, "");
+    const searchPhone =
+      normalizedPhone.length > 10
+        ? normalizedPhone.slice(-10)
+        : normalizedPhone;
+
+    const insuranceType = normalizeInsuranceTypeFromProductService(
+      callRecord.productService,
+    );
+    if (!insuranceType) return null;
+
+    const normalizedInsuranceContext = context || {};
+    const contextQueryId = String(
+      normalizedInsuranceContext.queryId ||
+        normalizedInsuranceContext.insuranceQueryId ||
+        normalizedInsuranceContext.id ||
+        "",
+    ).trim();
+    if (contextQueryId) {
+      const existingById = await InsuranceQuery.findById(contextQueryId);
+      if (existingById) return existingById;
+    }
+
+    const primaryAssigneeId = toObjectId(
+      normalizedInsuranceContext.assignee ||
+        callRecord.assignee ||
+        callRecord.assignees?.[0],
+    );
+
+    const existingByContact = await InsuranceQuery.findOne({
+      typeOfInsurance: insuranceType,
+      status: {
+        $nin: [
+          InsuranceApplicationStatus.COMPLETED,
+          InsuranceApplicationStatus.APPROVED,
+          InsuranceApplicationStatus.CANCELLED,
+        ],
+      },
+      ...(primaryAssigneeId ? { assignedAgent: primaryAssigneeId } : {}),
+      $or: [
+        { mobile: { $regex: searchPhone, $options: "i" } },
+        { mobile: phoneNumber },
+        ...(normalizedInsuranceContext.email
+          ? [
+              {
+                email: String(normalizedInsuranceContext.email)
+                  .trim()
+                  .toLowerCase(),
+              },
+            ]
+          : []),
+      ],
+    });
+    if (existingByContact) return existingByContact;
+
+    const findOrCreateUser = async () => {
+      if (lead?.borrowerProfile) {
+        const borrowerByLead = await User.findById(lead.borrowerProfile);
+        if (borrowerByLead) return borrowerByLead;
+      }
+      if (normalizedInsuranceContext.customerId) {
+        const customerId = String(normalizedInsuranceContext.customerId).trim();
+        if (customerId) {
+          const borrowerByContext = await User.findById(customerId);
+          if (borrowerByContext) return borrowerByContext;
+        }
+      }
+
+      const lookup = [
+        { mobile: { $regex: searchPhone, $options: "i" } },
+        { mobile: phoneNumber },
+      ];
+      const existingUser = await User.findOne({ $or: lookup });
+      if (existingUser) return existingUser;
+
+      const fallbackName =
+        `${callRecord.firstName || lead?.fullName || ""} ${callRecord.lastName || ""}`.trim() ||
+        `Lead ${searchPhone.slice(-4) || phoneNumber.slice(-4)}`;
+
+      const createdUser = new User({
+        name: fallbackName,
+        email: normalizedInsuranceContext.email || undefined,
+        mobile: phoneNumber,
+        role: "user",
+        agreedToTerms: true,
+        privacyPolicyAccepted: true,
+        gender: Gender.PREFER_NOT_TO_SAY,
+        status: UserStatus.PENDING_VERIFICATION,
+      } as any);
+
+      await createdUser.save();
+      console.log(
+        "[CallRecord] Created fallback borrower profile for insurance phone:",
+        phoneNumber,
+      );
+      return createdUser;
+    };
+
+    const user = await findOrCreateUser();
+
+    const existingQuery = await InsuranceQuery.findOne({
+      customerId: user._id,
+      typeOfInsurance: insuranceType,
+      status: {
+        $nin: [
+          InsuranceApplicationStatus.COMPLETED,
+          InsuranceApplicationStatus.APPROVED,
+          InsuranceApplicationStatus.CANCELLED,
+        ],
+      },
+      ...(primaryAssigneeId ? { assignedAgent: primaryAssigneeId } : {}),
+    });
+
+    if (existingQuery) {
+      console.log(
+        "[CallRecord] Insurance query already exists for",
+        phoneNumber,
+        insuranceType,
+      );
+      return existingQuery;
+    }
+
+    const firstName =
+      String(normalizedInsuranceContext.firstName || callRecord.firstName || "")
+        .trim() || "Unknown";
+    const lastName =
+      String(normalizedInsuranceContext.lastName || callRecord.lastName || "")
+        .trim() || "Lead";
+    const email = String(
+      normalizedInsuranceContext.email || callRecord.email || lead?.email || "",
+    )
+      .trim()
+      .toLowerCase();
+    const resolvedDobRaw =
+      normalizedInsuranceContext.dateOfBirth ||
+      normalizedInsuranceContext.dob ||
+      lead?.dateOfBirth ||
+      "1970-01-01";
+    const resolvedDob =
+      resolvedDobRaw instanceof Date ? resolvedDobRaw : new Date(resolvedDobRaw);
+    const resolvedGender = String(
+      normalizedInsuranceContext.gender ||
+        callRecord.gender ||
+        Gender.PREFER_NOT_TO_SAY,
+    )
+      .trim()
+      .toLowerCase() || Gender.PREFER_NOT_TO_SAY;
+    const resolvedFullAddress =
+      String(
+        normalizedInsuranceContext.fullAddress ||
+          normalizedInsuranceContext.address ||
+          callRecord.address ||
+          "Not Provided",
+      ).trim() || "Not Provided";
+    const resolvedCity =
+      String(normalizedInsuranceContext.city || callRecord.city || lead?.location?.city || "Unknown")
+        .trim() || "Unknown";
+    const resolvedState =
+      String(normalizedInsuranceContext.state || callRecord.state || lead?.location?.state || "Unknown")
+        .trim() || "Unknown";
+    const resolvedPincode =
+      String(
+        normalizedInsuranceContext.pincode ||
+          callRecord.pincode ||
+          lead?.location?.pincode ||
+          "000000",
+      ).trim() || "000000";
+    const resolvedOccupation =
+      String(normalizedInsuranceContext.occupation || "Not Provided").trim() ||
+      "Not Provided";
+    const resolvedAnnualIncome = Number(
+      normalizedInsuranceContext.annualIncome ??
+        normalizedInsuranceContext.loanAmount ??
+        callRecord.loanAmount ??
+        lead?.loanAmount ??
+        0,
+    );
+
+    const insuranceQueryData: any = {
+      customerId: user._id,
+      firstName,
+      lastName,
+      dateOfBirth: Number.isNaN(resolvedDob.getTime())
+        ? new Date("1970-01-01")
+        : resolvedDob,
+      gender: resolvedGender,
+      mobile: normalizedInsuranceContext.mobile || phoneNumber,
+      isMobileVerified: false,
+      email: email || "",
+      isEmailVerified: false,
+      fullAddress: resolvedFullAddress,
+      pincode: resolvedPincode,
+      city: resolvedCity,
+      state: resolvedState,
+      nomineeName:
+        String(
+          normalizedInsuranceContext.nomineeName ||
+            callRecord.lastName ||
+            callRecord.firstName ||
+            "Not Provided",
+        ).trim() || "Not Provided",
+      nomineeRelation:
+        String(normalizedInsuranceContext.nomineeRelation || "self")
+          .trim() || "self",
+      occupation: resolvedOccupation,
+      annualIncome:
+        Number.isFinite(resolvedAnnualIncome) && resolvedAnnualIncome >= 0
+          ? resolvedAnnualIncome
+          : 0,
+      kycDocumentType:
+        String(normalizedInsuranceContext.kycDocumentType || "pan")
+          .trim() || "pan",
+      kycDocumentUrl:
+        normalizedInsuranceContext.kycDocumentUrl ||
+        normalizedInsuranceContext.kycDocument ||
+        "pending_upload",
+      typeOfInsurance: insuranceType,
+      status: InsuranceApplicationStatus.PENDING,
+      policyDetails: {
+        ...(normalizedInsuranceContext.policyDetails || {}),
+        purpose:
+          normalizedInsuranceContext.purpose ||
+          callRecord.productService ||
+          "Not Specified",
+        requestedCoverage:
+          normalizedInsuranceContext.requestedCoverage ??
+          normalizedInsuranceContext.loanAmount ??
+          callRecord.loanAmount ??
+          0,
+      },
+      ...(primaryAssigneeId ? { assignedAgent: primaryAssigneeId } : {}),
+      activities: [
+        {
+          type: InsuranceQueryActivityType.CREATED,
+          description: `Insurance query created from Call Record (${callRecord.productService})`,
+          actor: callRecord.createdBy,
+          actorModel: "Admin",
+          payload: {
+            phoneNumber,
+            insuranceType,
+          },
+          createdAt: new Date(),
+        },
+      ],
+    };
+
+    const newInsuranceQuery = new InsuranceQuery(insuranceQueryData);
+
+    if (!newInsuranceQuery.assignedAgent) {
+      await EmployeeAssignmentEngine.ensureAssignmentForInsuranceQuery(
+        newInsuranceQuery as any,
+        {
+          actorId: context?.actorId,
+          actorModel: "Admin",
+          reason: "auto_created_from_call_record",
+          session: context?.session,
+        },
+      );
+    }
+
+    await newInsuranceQuery.save({ session: context?.session });
+    console.log(
+      "[CallRecord] Created insurance query:",
+      newInsuranceQuery._id,
+      "for phone:",
+      phoneNumber,
+    );
+    return newInsuranceQuery;
+  } catch (error) {
+    console.error("[CallRecord] Error creating insurance query:", error);
+    return null;
+  }
+};
+
+const createInquiryFromCallRecord = async (
+  callRecord: ICallRecord,
+  context?: Record<string, any>,
+  lead?: any,
+) => {
+  const productService = String(
+    context?.productService || callRecord.productService || "",
+  ).trim();
+  if (!productService) return null;
+
+  const loanType = normalizeLoanType(productService);
+  if (loanType) {
+    return createLoanQueryFromCallRecord(
+      callRecord,
+      { ...context, loanType, productService },
+      lead,
+    );
+  }
+
+  const insuranceType = normalizeInsuranceTypeFromProductService(productService);
+  if (insuranceType) {
+    return createInsuranceQueryFromCallRecord(
+      callRecord,
+      { ...context, typeOfInsurance: insuranceType, productService },
+      lead,
+    );
+  }
+
+  throw new ApiError(
+    400,
+    `Unsupported product/service "${productService}" for inquiry creation`,
+  );
+};
+
+const buildCallRecordUserLookup = (record: ICallRecord) => {
   const normalizedMobile = normalizePhoneToLeadFormat(record.phoneNumber);
   const normalizedEmail = String(record.email || "").trim().toLowerCase();
-  const accountFilter: Record<string, any>[] = [];
-  if (normalizedMobile) {
-    accountFilter.push({ mobile: normalizedMobile });
-    accountFilter.push({ mobile: record.phoneNumber });
-  }
+  const digits = normalizePhoneDigits(record.phoneNumber);
+  const last10 = digits.length > 10 ? digits.slice(-10) : digits;
+  const mobileCandidates = Array.from(
+    new Set(
+      [
+        normalizedMobile,
+        record.phoneNumber,
+        digits,
+        last10,
+        `+91${last10}`,
+        `91${last10}`,
+        `0${last10}`,
+      ].filter(Boolean),
+    ),
+  );
+
+  return {
+    normalizedMobile,
+    normalizedEmail,
+    mobileCandidates,
+  };
+};
+
+const findExistingUserForCallRecord = async (record: ICallRecord) => {
+  const { normalizedEmail, mobileCandidates } =
+    buildCallRecordUserLookup(record);
+
+  const accountFilter: Record<string, any>[] = mobileCandidates.map(
+    (mobile) => ({ mobile }),
+  );
+
   if (normalizedEmail) {
     accountFilter.push({ email: normalizedEmail });
   }
 
-  const existingAccount = await User.findOne({
+  if (accountFilter.length === 0) return null;
+
+  return User.findOne({
     $or: accountFilter,
   });
+};
+
+const isDuplicateKeyError = (error: any) => {
+  return Boolean(
+    error?.code === 11000 ||
+      error?.errorResponse?.code === 11000 ||
+      error?.keyPattern ||
+      error?.errorResponse?.keyPattern,
+  );
+};
+
+const ensureUserAccountFromCallRecord = async (record: ICallRecord) => {
+  const { normalizedMobile, normalizedEmail } =
+    buildCallRecordUserLookup(record);
+
+  const existingAccount = await findExistingUserForCallRecord(record);
   if (existingAccount) return existingAccount;
 
-  return User.create({
+  const accountPayload = {
     name:
       `${record.firstName || ""} ${record.lastName || ""}`.trim() ||
       `Lead ${normalizePhoneDigits(record.phoneNumber).slice(-4)}`,
@@ -895,7 +1316,22 @@ const ensureUserAccountFromCallRecord = async (record: ICallRecord) => {
     status: UserStatus.PENDING_VERIFICATION,
     agreedToTerms: true,
     privacyPolicyAccepted: true,
-  } as any);
+  } as any;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await User.create(accountPayload);
+    } catch (error) {
+      if (!isDuplicateKeyError(error) || attempt === 1) {
+        throw error;
+      }
+
+      const retryAccount = await findExistingUserForCallRecord(record);
+      if (retryAccount) return retryAccount;
+    }
+  }
+
+  return null;
 };
 
 export class CallRecordController {
@@ -933,6 +1369,7 @@ export class CallRecordController {
         payload.alternatePhone = alternatePhoneDigits;
       }
 
+      const createInquiryEnabled = payload.createInquiry === true;
       let assigneeId = payload.assignee;
       let assignmentMode: "auto" | "manual" = "manual";
       const assignees = normalizeObjectIdArray(
@@ -944,7 +1381,27 @@ export class CallRecordController {
         assigneeId = assigneeId || assignees[0]?.toString();
       }
 
-      if (!assigneeId) {
+      if (createInquiryEnabled) {
+        const inquiryProduct = String(payload.productService || "").trim();
+        const inquiryLoanAmount = Number(payload.loanAmount);
+        if (!inquiryProduct) {
+          return res
+            .status(400)
+            .json(new ApiError(400, "Product/Service is required when inquiry creation is enabled"));
+        }
+        if (!assigneeId) {
+          return res
+            .status(400)
+            .json(new ApiError(400, "Assigned agent is required when inquiry creation is enabled"));
+        }
+        if (!Number.isFinite(inquiryLoanAmount) || inquiryLoanAmount <= 0) {
+          return res
+            .status(400)
+            .json(new ApiError(400, "Loan amount is required when inquiry creation is enabled"));
+        }
+      }
+
+      if (!assigneeId && !createInquiryEnabled) {
         const autoAssignee = await findAutoAssignee();
         if (autoAssignee) {
           assigneeId = autoAssignee._id.toString();
@@ -996,33 +1453,47 @@ export class CallRecordController {
         await ensureUserAccountFromCallRecord(result);
       }
 
-      // Auto-create a loan application for loan products so it appears in the loan section immediately.
-      if (result?.productService && isLoanProduct(result.productService)) {
+      // Auto-create the inquiry only when the explicit flag is enabled.
+      if (payload.createInquiry) {
         const actorDisplayName = await resolveAdminDisplayName(
           adminId?.toString?.(),
         );
-        const loanQuery = await createLoanQueryFromCallRecord(
+        const createdInquiry = await createInquiryFromCallRecord(
           finalRecord || result,
           {
             ...(payload.loanContext || {}),
             updatedByName: actorDisplayName || undefined,
+            productService: payload.productService || result?.productService,
+            assignee: payload.assignee || result?.assignee,
+            assignees: payload.assignees || result?.assignees,
           },
           linkedLead,
         );
-        if (loanQuery) {
+        if (createdInquiry) {
+          const inquiryType = (createdInquiry as any).loanType
+            ? "loan"
+            : "insurance";
+          const updatePayload: Record<string, any> = {
+            followUp: true,
+          };
+          if ((createdInquiry as any).loanType) {
+            updatePayload.loanQueryId = createdInquiry._id;
+            updatePayload.loanQueryCreatedAt =
+              createdInquiry.createdAt || new Date();
+          } else if ((createdInquiry as any).typeOfInsurance) {
+            updatePayload.insuranceQueryId = createdInquiry._id;
+            updatePayload.insuranceQueryCreatedAt =
+              createdInquiry.createdAt || new Date();
+          }
+
           await CallRecord.findByIdAndUpdate(
             finalRecord?._id || result._id,
-            {
-              $set: {
-                loanQueryId: loanQuery._id,
-                loanQueryCreatedAt: loanQuery.createdAt || new Date(),
-                followUp: true,
-              },
-            },
+            { $set: updatePayload },
           );
           console.log(
-            "[CallRecord] Loan query ensured during create:",
-            loanQuery._id,
+            "[CallRecord] Inquiry ensured during create:",
+            inquiryType,
+            createdInquiry._id,
           );
         }
       }
@@ -1392,6 +1863,35 @@ export class CallRecordController {
         updates.followUp = true;
       }
 
+      if (updates.createInquiry === true) {
+        const inquiryProduct = String(
+          updates.productService || record.productService || "",
+        ).trim();
+        const inquiryLoanAmount = Number(
+          updates.loanAmount ?? record.loanAmount ?? 0,
+        );
+        const inquiryAssignee =
+          updates.assignee ||
+          updates.assignees?.[0] ||
+          previousAssignee;
+
+        if (!inquiryProduct) {
+          return res
+            .status(400)
+            .json(new ApiError(400, "Product/Service is required when inquiry creation is enabled"));
+        }
+        if (!inquiryAssignee) {
+          return res
+            .status(400)
+            .json(new ApiError(400, "Assigned agent is required when inquiry creation is enabled"));
+        }
+        if (!Number.isFinite(inquiryLoanAmount) || inquiryLoanAmount <= 0) {
+          return res
+            .status(400)
+            .json(new ApiError(400, "Loan amount is required when inquiry creation is enabled"));
+        }
+      }
+
       if (
         (incomingAssignee && incomingAssignee !== previousAssignee) ||
         (incomingAssignees.length > 0 &&
@@ -1463,19 +1963,42 @@ export class CallRecordController {
         await notifyAssignee(req, result, incomingAssignee);
       }
 
-      // Auto-create loan query if product is a loan type
+      // Auto-create inquiry only when the explicit flag is enabled.
       const incomingProduct = req.body?.productService;
-      if (incomingProduct && isLoanProduct(incomingProduct)) {
+      if (req.body?.createInquiry) {
         const actorDisplayName = await resolveAdminDisplayName(
           adminId?.toString?.(),
         );
-        const loanQuery = await createLoanQueryFromCallRecord(result, {
+        const createdInquiry = await createInquiryFromCallRecord(result, {
           ...(req.body?.loanContext || {}),
           updatedByName: actorDisplayName || undefined,
+          productService: incomingProduct || result?.productService,
+          assignee: req.body?.assignee || result?.assignee,
+          assignees: req.body?.assignees || result?.assignees,
         });
-        if (loanQuery) {
+        if (createdInquiry) {
+          const inquiryType = (createdInquiry as any).loanType
+            ? "loan"
+            : "insurance";
+          const updatePayload: Record<string, any> = {
+            followUp: true,
+          };
+          if ((createdInquiry as any).loanType) {
+            updatePayload.loanQueryId = createdInquiry._id;
+            updatePayload.loanQueryCreatedAt =
+              createdInquiry.createdAt || new Date();
+          } else if ((createdInquiry as any).typeOfInsurance) {
+            updatePayload.insuranceQueryId = createdInquiry._id;
+            updatePayload.insuranceQueryCreatedAt =
+              createdInquiry.createdAt || new Date();
+          }
+
+          await CallRecord.findByIdAndUpdate(req.params.id, {
+            $set: updatePayload,
+          });
           console.log(
-            "[CallRecord] Loan query created for call record:",
+            "[CallRecord] Inquiry created for call record:",
+            inquiryType,
             req.params.id,
           );
         }

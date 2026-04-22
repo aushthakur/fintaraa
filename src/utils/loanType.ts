@@ -9,6 +9,18 @@ const LOAN_TYPE_ALIAS_MAP: Record<string, LoanType> = {
   balance_transfer_loan: LoanType.PERSONAL_LOAN,
   loan_against_car_value: LoanType.LOAN_AGAINST_CAR,
   construction_loan: LoanType.HOME_LOAN,
+  dod: LoanType.DOD_LOAN,
+  dod_loan: LoanType.DOD_LOAN,
+  od: LoanType.OD_LOAN,
+  od_loan: LoanType.OD_LOAN,
+  industrial: LoanType.INDUSTRIAL_LOAN,
+  industrial_loan: LoanType.INDUSTRIAL_LOAN,
+  commercial_purchases: LoanType.COMMERCIAL_PURCHASES_LOAN,
+  commercial_purchase_loan: LoanType.COMMERCIAL_PURCHASES_LOAN,
+  commercial_purchases_loan: LoanType.COMMERCIAL_PURCHASES_LOAN,
+  card: LoanType.CREDIT_CARD,
+  card_loan: LoanType.CREDIT_CARD,
+  credit_card_loan: LoanType.CREDIT_CARD,
 };
 
 const normalizeInput = (value: string) => {

@@ -651,11 +651,12 @@ export const generateReferralCode = (userId: string) => {
   return `${prefix}-${randomPart}-${userPart}`.toUpperCase();
 };
 
-// 🔐 Password Hash Middleware
-UserSchema.pre("save", async function (next) {
-  const user = this as IUser;
-  if (user.isNew && user.role === "user" && !user.customerId) {
-    const session = user.$session();
+const allocateUniqueCustomerId = async (user: any): Promise<string> => {
+  const session = user.$session();
+  const UserModel = user.constructor as any;
+  const maxAttempts = 25;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const counter = await Counter.findOneAndUpdate(
       { key: "customerId" },
       { $inc: { seq: 1 } },
@@ -666,7 +667,30 @@ UserSchema.pre("save", async function (next) {
         ...(session ? { session } : {}),
       },
     );
-    user.customerId = `FINT${counter.seq}`;
+
+    const candidate = `FINT${counter.seq}`;
+    let collisionQuery = UserModel.exists({
+      customerId: candidate,
+      _id: { $ne: user._id },
+    });
+    if (session) {
+      collisionQuery = collisionQuery.session(session);
+    }
+    const collision = await collisionQuery;
+
+    if (!collision) {
+      return candidate;
+    }
+  }
+
+  throw new Error("Unable to allocate a unique customer ID");
+};
+
+// 🔐 Password Hash Middleware
+UserSchema.pre("save", async function (next) {
+  const user = this as IUser;
+  if (user.isNew && user.role === "user" && !user.customerId) {
+    user.customerId = await allocateUniqueCustomerId(user);
   }
   if (!user.isModified("password")) return next();
   if (!user.password) return next();

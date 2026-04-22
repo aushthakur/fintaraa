@@ -915,22 +915,24 @@ export class LoanQueryController {
         Object.keys(req.body.policyDetails).length > 0
       ) {
         const allowed = allowedFieldsByFormType[req.body.loanType] || [];
-        const invalidFields = Object.keys(req.body.policyDetails).filter(
-          (field) => !allowed.includes(field),
-        );
-        if (invalidFields.length > 0) {
-          return res
-            .status(400)
-            .json(
-              new ApiError(
-                400,
-                `Field(s) "${invalidFields.join(
-                  ", ",
-                )}" is/are not allowed for ${
-                  req.body.loanType
-                }. Allowed fields: ${allowed.join(", ")}`,
-              ),
-            );
+        if (allowed.length > 0) {
+          const invalidFields = Object.keys(req.body.policyDetails).filter(
+            (field) => !allowed.includes(field),
+          );
+          if (invalidFields.length > 0) {
+            return res
+              .status(400)
+              .json(
+                new ApiError(
+                  400,
+                  `Field(s) "${invalidFields.join(
+                    ", ",
+                  )}" is/are not allowed for ${
+                    req.body.loanType
+                  }. Allowed fields: ${allowed.join(", ")}`,
+                ),
+              );
+          }
         }
       }
 
@@ -2230,20 +2232,22 @@ export class LoanQueryController {
       const bankStatementUrl = extractFileUrl(req.body?.bankStatementUrl);
 
       const allowed = allowedFieldsByFormType[query.loanType] || [];
-      const invalidFields = Object.keys(incoming).filter(
-        (field) => !allowed.includes(field),
-      );
-      if (invalidFields.length > 0) {
-        return res
-          .status(400)
-          .json(
-            new ApiError(
-              400,
-              `Field(s) "${invalidFields.join(
-                ", ",
-              )}" is/are not allowed for ${query.loanType}`,
-            ),
-          );
+      if (allowed.length > 0) {
+        const invalidFields = Object.keys(incoming).filter(
+          (field) => !allowed.includes(field),
+        );
+        if (invalidFields.length > 0) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                `Field(s) "${invalidFields.join(
+                  ", ",
+                )}" is/are not allowed for ${query.loanType}`,
+              ),
+            );
+        }
       }
 
       if (!bankStatementUrl && Object.keys(incoming).length === 0) {
