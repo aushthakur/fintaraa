@@ -15,7 +15,7 @@ import {
 
 // Helper to determine file type from mimetype
 const getFileType = (
-  mimetype: string
+  mimetype: string,
 ): "image" | "video" | "audio" | "document" | "other" => {
   if (mimetype.startsWith("image/")) return "image";
   if (mimetype.startsWith("video/")) return "video";
@@ -29,7 +29,7 @@ const getFileType = (
   }
   return "other";
 };
-const MAX_CHAT_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_CHAT_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 
 const toObjectId = (value: any): Types.ObjectId | null => {
   if (!value) return null;
@@ -75,7 +75,9 @@ const resolveSenderModel = async (role: string, senderId: any) => {
 const resolveActorInfo = async (id: any, model?: string) => {
   if (!id) return { _id: "", name: "Unknown" };
   if (model === "Admin") {
-    const admin = await Admin.findById(id).select("_id email username name").lean();
+    const admin = await Admin.findById(id)
+      .select("_id email username name")
+      .lean();
     if (admin) {
       return {
         _id: admin._id.toString(),
@@ -133,7 +135,11 @@ export class LoanQueryChatController {
       if (!isStaff && !sameId(query.customerId, actorId)) {
         throw new ApiError(403, "Access denied");
       }
-      if (role === "lander" && query.assignedLander && !sameId(query.assignedLander, actorId)) {
+      if (
+        role === "lander" &&
+        query.assignedLander &&
+        !sameId(query.assignedLander, actorId)
+      ) {
         throw new ApiError(403, "Access denied");
       }
       if (
@@ -159,7 +165,10 @@ export class LoanQueryChatController {
           };
 
           senderData = await resolveActorInfo(msg.sender, msg.senderModel);
-          receiverData = await resolveActorInfo(msg.receiver, msg.receiverModel);
+          receiverData = await resolveActorInfo(
+            msg.receiver,
+            msg.receiverModel,
+          );
 
           return {
             ...msg,
@@ -167,7 +176,7 @@ export class LoanQueryChatController {
             sender: senderData,
             receiver: receiverData,
           };
-        })
+        }),
       );
       res
         .status(200)
@@ -181,7 +190,7 @@ export class LoanQueryChatController {
    * Helper to determine file type from mimetype
    */
   private static getFileType(
-    mimetype: string
+    mimetype: string,
   ): "image" | "video" | "audio" | "document" | "other" {
     if (mimetype.startsWith("image/")) return "image";
     if (mimetype.startsWith("video/")) return "video";
@@ -218,7 +227,11 @@ export class LoanQueryChatController {
         }));
       }
 
-      if (attachments.some((file) => Number(file?.size || 0) > MAX_CHAT_FILE_SIZE_BYTES)) {
+      if (
+        attachments.some(
+          (file) => Number(file?.size || 0) > MAX_CHAT_FILE_SIZE_BYTES,
+        )
+      ) {
         throw new ApiError(400, "Each file must be 5 MB or smaller");
       }
 
@@ -239,13 +252,18 @@ export class LoanQueryChatController {
       const assignedAgentIds = collectAssignedAgentIds(query);
       const assignedLanderId = query.assignedLander || null;
 
-      const participantModels = new Map<string, "User" | "Admin" | "Agent" | "Lander">();
+      const participantModels = new Map<
+        string,
+        "User" | "Admin" | "Agent" | "Lander"
+      >();
       if (customerId) participantModels.set(String(customerId), "User");
-      if (assignedAgentId) participantModels.set(String(assignedAgentId), "Admin");
+      if (assignedAgentId)
+        participantModels.set(String(assignedAgentId), "Admin");
       assignedAgentIds.forEach((agentId) =>
         participantModels.set(String(agentId), "Admin"),
       );
-      if (assignedLanderId) participantModels.set(String(assignedLanderId), "Lander");
+      if (assignedLanderId)
+        participantModels.set(String(assignedLanderId), "Lander");
 
       let finalReceiverId: any = receiverId;
       let receiverModel: "User" | "Admin" | "Agent" | "Lander" = "User";
@@ -308,7 +326,10 @@ export class LoanQueryChatController {
       };
 
       senderData = await resolveActorInfo(senderId, senderModel);
-      receiverData = await resolveActorInfo(finalReceiverObjectId, receiverModel);
+      receiverData = await resolveActorInfo(
+        finalReceiverObjectId,
+        receiverModel,
+      );
 
       const populatedMessage = {
         ...message.toObject(),
@@ -351,7 +372,7 @@ export class LoanQueryChatController {
         },
         {
           $set: { status: "read", readAt: new Date() },
-        }
+        },
       );
 
       res.status(200).json(new ApiResponse(200, {}, "Messages marked as read"));

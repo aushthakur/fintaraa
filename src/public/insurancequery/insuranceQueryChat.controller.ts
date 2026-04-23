@@ -14,16 +14,22 @@ import {
 } from "../../utils/queryChatCrypto";
 
 // Helper to determine file type from mimetype
-const getFileType = (mimetype: string): "image" | "video" | "audio" | "document" | "other" => {
+const getFileType = (
+  mimetype: string,
+): "image" | "video" | "audio" | "document" | "other" => {
   if (mimetype.startsWith("image/")) return "image";
   if (mimetype.startsWith("video/")) return "video";
   if (mimetype.startsWith("audio/")) return "audio";
-  if (mimetype.includes("pdf") || mimetype.includes("document") || mimetype.includes("text")) {
+  if (
+    mimetype.includes("pdf") ||
+    mimetype.includes("document") ||
+    mimetype.includes("text")
+  ) {
     return "document";
   }
   return "other";
 };
-const MAX_CHAT_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_CHAT_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 
 const toObjectId = (value: any): Types.ObjectId | null => {
   if (!value) return null;
@@ -51,7 +57,9 @@ const resolveSenderModel = async (role: string, senderId: any) => {
 const resolveActorInfo = async (id: any, model?: string) => {
   if (!id) return { _id: "", name: "Unknown" };
   if (model === "Admin") {
-    const admin = await Admin.findById(id).select("_id email username name").lean();
+    const admin = await Admin.findById(id)
+      .select("_id email username name")
+      .lean();
     if (admin) {
       return {
         _id: admin._id.toString(),
@@ -94,11 +102,7 @@ export class InsuranceQueryChatController {
   /**
    * Get all messages for a specific insurance query
    */
-  static async getMessages(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async getMessages(req: Request, res: Response, next: NextFunction) {
     try {
       const queryId = req.params.id;
       const { role, _id: actorId } = (req as any).user || {};
@@ -113,10 +117,18 @@ export class InsuranceQueryChatController {
       if (!isStaff && !sameId(query.customerId, actorId)) {
         throw new ApiError(403, "Access denied");
       }
-      if (role === "lander" && query.assignedLander && !sameId(query.assignedLander, actorId)) {
+      if (
+        role === "lander" &&
+        query.assignedLander &&
+        !sameId(query.assignedLander, actorId)
+      ) {
         throw new ApiError(403, "Access denied");
       }
-      if (role === "agent" && query.assignedAgent && !sameId(query.assignedAgent, actorId)) {
+      if (
+        role === "agent" &&
+        query.assignedAgent &&
+        !sameId(query.assignedAgent, actorId)
+      ) {
         throw new ApiError(403, "Access denied");
       }
 
@@ -129,10 +141,16 @@ export class InsuranceQueryChatController {
       const serializedMessages = await Promise.all(
         messages.map(async (msg) => {
           let senderData: any = { _id: msg.sender.toString(), name: "Unknown" };
-          let receiverData: any = { _id: msg.receiver.toString(), name: "Unknown" };
+          let receiverData: any = {
+            _id: msg.receiver.toString(),
+            name: "Unknown",
+          };
 
           senderData = await resolveActorInfo(msg.sender, msg.senderModel);
-          receiverData = await resolveActorInfo(msg.receiver, msg.receiverModel);
+          receiverData = await resolveActorInfo(
+            msg.receiver,
+            msg.receiverModel,
+          );
 
           return {
             ...msg,
@@ -140,10 +158,12 @@ export class InsuranceQueryChatController {
             sender: senderData,
             receiver: receiverData,
           };
-        })
+        }),
       );
 
-      res.status(200).json(new ApiResponse(200, serializedMessages, "Messages fetched"));
+      res
+        .status(200)
+        .json(new ApiResponse(200, serializedMessages, "Messages fetched"));
     } catch (error) {
       next(error);
     }
@@ -152,11 +172,17 @@ export class InsuranceQueryChatController {
   /**
    * Helper to determine file type from mimetype
    */
-  private static getFileType(mimetype: string): "image" | "video" | "audio" | "document" | "other" {
+  private static getFileType(
+    mimetype: string,
+  ): "image" | "video" | "audio" | "document" | "other" {
     if (mimetype.startsWith("image/")) return "image";
     if (mimetype.startsWith("video/")) return "video";
     if (mimetype.startsWith("audio/")) return "audio";
-    if (mimetype.includes("pdf") || mimetype.includes("document") || mimetype.includes("text")) {
+    if (
+      mimetype.includes("pdf") ||
+      mimetype.includes("document") ||
+      mimetype.includes("text")
+    ) {
       return "document";
     }
     return "other";
@@ -165,11 +191,7 @@ export class InsuranceQueryChatController {
   /**
    * Send a message in insurance query chat
    */
-  static async sendMessage(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async sendMessage(req: Request, res: Response, next: NextFunction) {
     try {
       const queryId = req.params.id;
       const { text, receiverId } = req.body;
@@ -188,7 +210,11 @@ export class InsuranceQueryChatController {
         }));
       }
 
-      if (attachments.some((file) => Number(file?.size || 0) > MAX_CHAT_FILE_SIZE_BYTES)) {
+      if (
+        attachments.some(
+          (file) => Number(file?.size || 0) > MAX_CHAT_FILE_SIZE_BYTES,
+        )
+      ) {
         throw new ApiError(400, "Each file must be 5 MB or smaller");
       }
 
@@ -198,7 +224,8 @@ export class InsuranceQueryChatController {
       }
 
       // Verify insurance query exists
-      const query = await InsuranceQuery.findById(queryId).populate("customerId");
+      const query =
+        await InsuranceQuery.findById(queryId).populate("customerId");
       if (!query) {
         throw new ApiError(404, "Insurance query not found");
       }
@@ -208,10 +235,15 @@ export class InsuranceQueryChatController {
       const assignedAgentId = query.assignedAgent || null;
       const assignedLanderId = query.assignedLander || null;
 
-      const participantModels = new Map<string, "User" | "Admin" | "Agent" | "Lander">();
+      const participantModels = new Map<
+        string,
+        "User" | "Admin" | "Agent" | "Lander"
+      >();
       if (customerId) participantModels.set(String(customerId), "User");
-      if (assignedAgentId) participantModels.set(String(assignedAgentId), "Admin");
-      if (assignedLanderId) participantModels.set(String(assignedLanderId), "Lander");
+      if (assignedAgentId)
+        participantModels.set(String(assignedAgentId), "Admin");
+      if (assignedLanderId)
+        participantModels.set(String(assignedLanderId), "Lander");
 
       let finalReceiverId: any = receiverId;
       let receiverModel: "User" | "Admin" | "Agent" | "Lander" = "User";
@@ -268,10 +300,16 @@ export class InsuranceQueryChatController {
 
       // Populate sender and receiver details
       let senderData: any = { _id: senderId.toString(), name: "Unknown" };
-      let receiverData: any = { _id: finalReceiverId.toString(), name: "Unknown" };
+      let receiverData: any = {
+        _id: finalReceiverId.toString(),
+        name: "Unknown",
+      };
 
       senderData = await resolveActorInfo(senderId, senderModel);
-      receiverData = await resolveActorInfo(finalReceiverObjectId, receiverModel);
+      receiverData = await resolveActorInfo(
+        finalReceiverObjectId,
+        receiverModel,
+      );
 
       const populatedMessage = {
         ...message.toObject(),
@@ -290,7 +328,9 @@ export class InsuranceQueryChatController {
         });
       }
 
-      res.status(201).json(new ApiResponse(201, populatedMessage, "Message sent"));
+      res
+        .status(201)
+        .json(new ApiResponse(201, populatedMessage, "Message sent"));
     } catch (error) {
       next(error);
     }
@@ -299,11 +339,7 @@ export class InsuranceQueryChatController {
   /**
    * Mark messages as read
    */
-  static async markAsRead(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async markAsRead(req: Request, res: Response, next: NextFunction) {
     try {
       const queryId = req.params.id;
       const userId = (req as any).user?._id;
@@ -316,7 +352,7 @@ export class InsuranceQueryChatController {
         },
         {
           $set: { status: "read", readAt: new Date() },
-        }
+        },
       );
 
       res.status(200).json(new ApiResponse(200, {}, "Messages marked as read"));

@@ -35,8 +35,8 @@ if (config.security.rateLimitEnabled) {
 // Middleware for parsing JSON and URL-encoded bodies
 // Co-applicant attachments are currently stored as data URLs in policyDetails,
 // so the parser limit needs to be higher than the Express default 100kb.
-app.use(express.json({ limit: "25mb" }));
-app.use(express.urlencoded({ extended: true, limit: "25mb" }));
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
 // Logging Middleware
 import mongoose from "mongoose";

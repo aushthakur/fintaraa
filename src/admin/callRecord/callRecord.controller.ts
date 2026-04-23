@@ -477,6 +477,12 @@ const getFollowUpBucketFilter = (
     .toLowerCase();
   if (!bucket) return null;
 
+  if (bucket === "followup" || bucket === "followups") {
+    return {
+      followUp: true,
+    };
+  }
+
   const now = new Date();
   const todayKey = formatDateInTimeZone(now, timeZone);
   const startOfToday = parseDateInTimeZone(
@@ -1686,27 +1692,46 @@ export class CallRecordController {
       const loanTypeMatchValues = getLoanTypeMatchValues(
         String(loanType || productService || queryParams.productService || ""),
       );
+      const rawAgentFilter = String(queryParams.assignee || "").trim();
+      const agentObjectId =
+        rawAgentFilter && Types.ObjectId.isValid(rawAgentFilter)
+          ? new Types.ObjectId(rawAgentFilter)
+          : null;
+      delete (queryParams as any).assignee;
 
       const pipelineModifier =
-        loanTypeMatchValues.length > 0
+        loanTypeMatchValues.length > 0 || Boolean(agentObjectId)
           ? (pipeline: any[]) => {
               const next = [...pipeline];
-              const matchStage = {
-                $match: {
-                  $or: [
-                    { productService: { $in: loanTypeMatchValues } },
-                    { "attachedLead.productType": { $in: loanTypeMatchValues } },
-                    { "attachedLead.loanType": { $in: loanTypeMatchValues } },
-                  ],
-                },
-              };
+              const dynamicStages: any[] = [];
+              if (loanTypeMatchValues.length > 0) {
+                dynamicStages.push({
+                  $match: {
+                    $or: [
+                      { productService: { $in: loanTypeMatchValues } },
+                      { "attachedLead.productType": { $in: loanTypeMatchValues } },
+                      { "attachedLead.loanType": { $in: loanTypeMatchValues } },
+                    ],
+                  },
+                });
+              }
+              if (agentObjectId) {
+                dynamicStages.push({
+                  $match: {
+                    $or: [
+                      { assignee: agentObjectId },
+                      { assignees: agentObjectId },
+                    ],
+                  },
+                });
+              }
               const sortIndex = next.findIndex(
                 (stage) => stage && typeof stage === "object" && "$sort" in stage,
               );
               if (sortIndex >= 0) {
-                next.splice(sortIndex, 0, matchStage);
+                next.splice(sortIndex, 0, ...dynamicStages);
               } else {
-                next.push(matchStage);
+                next.push(...dynamicStages);
               }
               return next;
             }
@@ -1762,11 +1787,35 @@ export class CallRecordController {
       const userId = (req as any)?.user?._id;
       const { role } = (req as any)?.user || {};
       const match = buildCallRecordScopeMatch(userId, role);
-      const total = await CallRecord.countDocuments(match);
+      const requestTimeZone =
+        (req as any)?.timezone || DEFAULT_QUERY_TIMEZONE;
+      const followupsFilter = getFollowUpBucketFilter("followups", requestTimeZone);
+      const todayFilter = getFollowUpBucketFilter("today", requestTimeZone);
+      const upcomingFilter = getFollowUpBucketFilter("upcoming", requestTimeZone);
+      const missedFilter = getFollowUpBucketFilter("missed", requestTimeZone);
+      if (!followupsFilter || !todayFilter || !upcomingFilter || !missedFilter) {
+        throw new ApiError(400, "Invalid follow-up bucket filters");
+      }
+
+      const [total, followups, today, upcoming, missed] = await Promise.all([
+        CallRecord.countDocuments(match),
+        CallRecord.countDocuments({ ...match, ...followupsFilter }),
+        CallRecord.countDocuments({ ...match, ...todayFilter }),
+        CallRecord.countDocuments({ ...match, ...upcomingFilter }),
+        CallRecord.countDocuments({ ...match, ...missedFilter }),
+      ]);
+      const byType = {
+        all: Number(total) || 0,
+        followup: Number(followups) || 0,
+        followups: Number(followups) || 0,
+        today: Number(today) || 0,
+        upcoming: Number(upcoming) || 0,
+        missed: Number(missed) || 0,
+      };
       return res.status(200).json(
         new ApiResponse(
           200,
-          { total },
+          { total, byType },
           "Call record sidebar counts fetched successfully",
         ),
       );
