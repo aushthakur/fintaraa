@@ -617,7 +617,11 @@ export class InsuranceQueryController {
           .json(new ApiError(400, "Invalid typeOfInsurance"));
       }
 
-      const { start, end } = resolveDateRange(startDate, endDate, 7);
+     
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+      start.setHours(0, 0, 0, 0); // 12:00 AM
+      end.setHours(23, 59, 59, 0); // 23:59 PM (end of the day)
 
       const match: Record<string, any> = {
         createdAt: { $gte: start, $lte: end },
