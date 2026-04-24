@@ -20,7 +20,10 @@ import { Agency } from "../../modals/agency.model";
 import Lead, { LeadConnectorType } from "../../modals/lead.model";
 import { leadManagementService } from "../../services/leadManagement.service";
 import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
-import { getLoanTypeMatchValues, normalizeLoanType } from "../../utils/loanType";
+import {
+  getLoanTypeMatchValues,
+  normalizeLoanType,
+} from "../../utils/loanType";
 import {
   DEFAULT_QUERY_TIMEZONE,
   formatDateInTimeZone,
@@ -150,11 +153,13 @@ const buildFollowUpHistoryEntry = (
   callbackAt?: Date,
 ) => {
   const now = new Date();
-  const openingRemark = String(record.comment || record.contactActionStatus || "")
-    .trim();
+  const openingRemark = String(
+    record.comment || record.contactActionStatus || "",
+  ).trim();
 
   return {
-    openedBy: record.createdBy || (actorId ? new Types.ObjectId(actorId) : undefined),
+    openedBy:
+      record.createdBy || (actorId ? new Types.ObjectId(actorId) : undefined),
     closedBy: actorId ? new Types.ObjectId(actorId) : undefined,
     openedByName: (record as any)?.createdBy?.name || actorName || undefined,
     closedByName: actorName,
@@ -163,7 +168,10 @@ const buildFollowUpHistoryEntry = (
     openingRemark: openingRemark || undefined,
     closingRemark: closingRemark || undefined,
     assignedTo: record.assignee || undefined,
-    assignedToName: (record as any)?.assignee?.name || (record as any)?.assigneeName || undefined,
+    assignedToName:
+      (record as any)?.assignee?.name ||
+      (record as any)?.assigneeName ||
+      undefined,
     callbackAt: callbackAt || record.callbackAt || undefined,
   };
 };
@@ -177,7 +185,9 @@ const normalizeCallRecordAssigneeView = (record: any) => {
   const assigneesDetails = Array.isArray(record?.assigneesDetails)
     ? record.assigneesDetails
     : Array.isArray(record?.assignees)
-      ? record.assignees.filter((agent: any) => agent && typeof agent === "object")
+      ? record.assignees.filter(
+          (agent: any) => agent && typeof agent === "object",
+        )
       : [];
 
   let assigneeDetails =
@@ -265,7 +275,9 @@ const enrichCallRecordsWithCustomerContext = async (records: any[]) => {
 
   return records.map((record) => {
     const recordId = String(record?._id || "");
-    const candidates = recordCandidates.get(recordId) || buildPhoneCandidates(record?.phoneNumber);
+    const candidates =
+      recordCandidates.get(recordId) ||
+      buildPhoneCandidates(record?.phoneNumber);
     const matchedUser = candidates
       .map((candidate) => userLookup.get(candidate))
       .find(Boolean);
@@ -294,9 +306,10 @@ const enrichCallRecordsWithCustomerContext = async (records: any[]) => {
             isMobileVerified: matchedUser.isMobileVerified !== false,
             registered: true,
             registrationLabel: "Registered on B2C App",
-            sourceLabel: matchedUser.isMobileVerified !== false
-              ? "Verified B2C App user"
-              : "B2C App user",
+            sourceLabel:
+              matchedUser.isMobileVerified !== false
+                ? "Verified B2C App user"
+                : "B2C App user",
           }
         : {
             registered: false,
@@ -308,7 +321,9 @@ const enrichCallRecordsWithCustomerContext = async (records: any[]) => {
 };
 
 const shouldIncludeCustomerContext = (value: unknown) => {
-  const normalized = String(value ?? "true").trim().toLowerCase();
+  const normalized = String(value ?? "true")
+    .trim()
+    .toLowerCase();
   return !["false", "0", "no", "off"].includes(normalized);
 };
 
@@ -485,16 +500,8 @@ const getFollowUpBucketFilter = (
 
   const now = new Date();
   const todayKey = formatDateInTimeZone(now, timeZone);
-  const startOfToday = parseDateInTimeZone(
-    todayKey,
-    "start",
-    timeZone,
-  );
-  const endOfToday = parseDateInTimeZone(
-    todayKey,
-    "end",
-    timeZone,
-  );
+  const startOfToday = parseDateInTimeZone(todayKey, "start", timeZone);
+  const endOfToday = parseDateInTimeZone(todayKey, "end", timeZone);
 
   if (!startOfToday || !endOfToday) return null;
 
@@ -601,7 +608,11 @@ const createLoanQueryFromCallRecord = async (
         { mobile: { $regex: searchPhone, $options: "i" } },
         { mobile: phoneNumber },
         ...(normalizedLoanContext.email
-          ? [{ email: String(normalizedLoanContext.email).trim().toLowerCase() }]
+          ? [
+              {
+                email: String(normalizedLoanContext.email).trim().toLowerCase(),
+              },
+            ]
           : []),
       ],
     });
@@ -643,7 +654,10 @@ const createLoanQueryFromCallRecord = async (
       } as any);
 
       await createdUser.save();
-      console.log("[CallRecord] Created fallback borrower profile for phone:", phoneNumber);
+      console.log(
+        "[CallRecord] Created fallback borrower profile for phone:",
+        phoneNumber,
+      );
       return createdUser;
     };
 
@@ -667,18 +681,23 @@ const createLoanQueryFromCallRecord = async (
     }
 
     const firstName =
-      String(normalizedLoanContext.firstName || callRecord.firstName || "")
-        .trim() || "Unknown";
+      String(
+        normalizedLoanContext.firstName || callRecord.firstName || "",
+      ).trim() || "Unknown";
     const lastName =
-      String(normalizedLoanContext.lastName || callRecord.lastName || "")
-        .trim() || "Lead";
+      String(
+        normalizedLoanContext.lastName || callRecord.lastName || "",
+      ).trim() || "Lead";
     const email = String(
       normalizedLoanContext.email || callRecord.email || lead?.email || "",
     )
       .trim()
       .toLowerCase();
     const resolvedLoanAmount = Number(
-      normalizedLoanContext.loanAmount ?? callRecord.loanAmount ?? lead?.loanAmount ?? 0,
+      normalizedLoanContext.loanAmount ??
+        callRecord.loanAmount ??
+        lead?.loanAmount ??
+        0,
     );
     const resolvedLoanAmountValue = Number.isFinite(resolvedLoanAmount)
       ? resolvedLoanAmount
@@ -687,11 +706,19 @@ const createLoanQueryFromCallRecord = async (
       normalizedLoanContext.mobile || phoneNumber || callRecord.phoneNumber,
     ).trim();
     const resolvedCity =
-      String(normalizedLoanContext.city || callRecord.city || lead?.location?.city || "Unknown")
-        .trim() || "Unknown";
+      String(
+        normalizedLoanContext.city ||
+          callRecord.city ||
+          lead?.location?.city ||
+          "Unknown",
+      ).trim() || "Unknown";
     const resolvedState =
-      String(normalizedLoanContext.state || callRecord.state || lead?.location?.state || "Unknown")
-        .trim() || "Unknown";
+      String(
+        normalizedLoanContext.state ||
+          callRecord.state ||
+          lead?.location?.state ||
+          "Unknown",
+      ).trim() || "Unknown";
     const resolvedPincode =
       String(
         normalizedLoanContext.pincode ||
@@ -715,7 +742,10 @@ const createLoanQueryFromCallRecord = async (
         .trim()
         .toLowerCase() || "self_employed";
     const resolvedMonthlyIncome = Number(
-      normalizedLoanContext.monthlyIncome ?? lead?.monthlyIncome ?? resolvedLoanAmountValue,
+      normalizedLoanContext.monthlyIncome ??
+        callRecord.monthlySalary ??
+        lead?.monthlyIncome ??
+        resolvedLoanAmountValue,
     );
     const resolvedCompanyName =
       String(
@@ -726,10 +756,7 @@ const createLoanQueryFromCallRecord = async (
       ).trim() || "Not Provided";
     const resolvedLeadBy =
       String(
-        normalizedLoanContext.leadBy ||
-          callRecord.leadBy ||
-          lead?.leadBy ||
-          "",
+        normalizedLoanContext.leadBy || callRecord.leadBy || lead?.leadBy || "",
       ).trim() || "";
     const resolvedDataSource =
       String(
@@ -763,8 +790,9 @@ const createLoanQueryFromCallRecord = async (
       String(normalizedLoanContext.accountNumber || "0000000000").trim() ||
       "0000000000";
     const resolvedIfscCode =
-      String(normalizedLoanContext.ifscCode || "NA00000000000").trim().toUpperCase() ||
-      "NA00000000000";
+      String(normalizedLoanContext.ifscCode || "NA00000000000")
+        .trim()
+        .toUpperCase() || "NA00000000000";
     const resolvedDobRaw =
       normalizedLoanContext.dateOfBirth ||
       normalizedLoanContext.dob ||
@@ -775,15 +803,20 @@ const createLoanQueryFromCallRecord = async (
         ? resolvedDobRaw
         : new Date(resolvedDobRaw);
     const resolvedGender =
-      String(normalizedLoanContext.gender || callRecord.gender || Gender.PREFER_NOT_TO_SAY)
+      String(
+        normalizedLoanContext.gender ||
+          callRecord.gender ||
+          Gender.PREFER_NOT_TO_SAY,
+      )
         .trim()
         .toLowerCase() || Gender.PREFER_NOT_TO_SAY;
     const resolvedMarriedStatus =
-      String(normalizedLoanContext.marriedStatus || "not_specified")
-        .trim() || "not_specified";
+      String(normalizedLoanContext.marriedStatus || "not_specified").trim() ||
+      "not_specified";
     const resolvedPan =
-      String(normalizedLoanContext.panNumber || "NA").trim().toUpperCase() ||
-      "NA";
+      String(normalizedLoanContext.panNumber || "NA")
+        .trim()
+        .toUpperCase() || "NA";
     const resolvedAadhaar =
       String(normalizedLoanContext.aadhaarNumber || "NA").trim() || "NA";
     const resolvedLoanType = loanType;
@@ -820,10 +853,11 @@ const createLoanQueryFromCallRecord = async (
           : 0,
       officeAddress: resolvedOfficeAddress,
       bankName: resolvedBankName,
-      accountType:
-        ["savings", "current", "salary"].includes(resolvedAccountType)
-          ? resolvedAccountType
-          : "savings",
+      accountType: ["savings", "current", "salary"].includes(
+        resolvedAccountType,
+      )
+        ? resolvedAccountType
+        : "savings",
       accountNumber: resolvedAccountNumber,
       ifscCode: resolvedIfscCode,
       bankStatementUrl:
@@ -1066,11 +1100,13 @@ const createInsuranceQueryFromCallRecord = async (
     }
 
     const firstName =
-      String(normalizedInsuranceContext.firstName || callRecord.firstName || "")
-        .trim() || "Unknown";
+      String(
+        normalizedInsuranceContext.firstName || callRecord.firstName || "",
+      ).trim() || "Unknown";
     const lastName =
-      String(normalizedInsuranceContext.lastName || callRecord.lastName || "")
-        .trim() || "Lead";
+      String(
+        normalizedInsuranceContext.lastName || callRecord.lastName || "",
+      ).trim() || "Lead";
     const email = String(
       normalizedInsuranceContext.email || callRecord.email || lead?.email || "",
     )
@@ -1082,14 +1118,17 @@ const createInsuranceQueryFromCallRecord = async (
       lead?.dateOfBirth ||
       "1970-01-01";
     const resolvedDob =
-      resolvedDobRaw instanceof Date ? resolvedDobRaw : new Date(resolvedDobRaw);
-    const resolvedGender = String(
-      normalizedInsuranceContext.gender ||
-        callRecord.gender ||
-        Gender.PREFER_NOT_TO_SAY,
-    )
-      .trim()
-      .toLowerCase() || Gender.PREFER_NOT_TO_SAY;
+      resolvedDobRaw instanceof Date
+        ? resolvedDobRaw
+        : new Date(resolvedDobRaw);
+    const resolvedGender =
+      String(
+        normalizedInsuranceContext.gender ||
+          callRecord.gender ||
+          Gender.PREFER_NOT_TO_SAY,
+      )
+        .trim()
+        .toLowerCase() || Gender.PREFER_NOT_TO_SAY;
     const resolvedFullAddress =
       String(
         normalizedInsuranceContext.fullAddress ||
@@ -1098,11 +1137,19 @@ const createInsuranceQueryFromCallRecord = async (
           "Not Provided",
       ).trim() || "Not Provided";
     const resolvedCity =
-      String(normalizedInsuranceContext.city || callRecord.city || lead?.location?.city || "Unknown")
-        .trim() || "Unknown";
+      String(
+        normalizedInsuranceContext.city ||
+          callRecord.city ||
+          lead?.location?.city ||
+          "Unknown",
+      ).trim() || "Unknown";
     const resolvedState =
-      String(normalizedInsuranceContext.state || callRecord.state || lead?.location?.state || "Unknown")
-        .trim() || "Unknown";
+      String(
+        normalizedInsuranceContext.state ||
+          callRecord.state ||
+          lead?.location?.state ||
+          "Unknown",
+      ).trim() || "Unknown";
     const resolvedPincode =
       String(
         normalizedInsuranceContext.pincode ||
@@ -1115,6 +1162,7 @@ const createInsuranceQueryFromCallRecord = async (
       "Not Provided";
     const resolvedAnnualIncome = Number(
       normalizedInsuranceContext.annualIncome ??
+        (callRecord.monthlySalary ? callRecord.monthlySalary * 12 : null) ??
         normalizedInsuranceContext.loanAmount ??
         callRecord.loanAmount ??
         lead?.loanAmount ??
@@ -1145,16 +1193,16 @@ const createInsuranceQueryFromCallRecord = async (
             "Not Provided",
         ).trim() || "Not Provided",
       nomineeRelation:
-        String(normalizedInsuranceContext.nomineeRelation || "self")
-          .trim() || "self",
+        String(normalizedInsuranceContext.nomineeRelation || "self").trim() ||
+        "self",
       occupation: resolvedOccupation,
       annualIncome:
         Number.isFinite(resolvedAnnualIncome) && resolvedAnnualIncome >= 0
           ? resolvedAnnualIncome
           : 0,
       kycDocumentType:
-        String(normalizedInsuranceContext.kycDocumentType || "pan")
-          .trim() || "pan",
+        String(normalizedInsuranceContext.kycDocumentType || "pan").trim() ||
+        "pan",
       kycDocumentUrl:
         normalizedInsuranceContext.kycDocumentUrl ||
         normalizedInsuranceContext.kycDocument ||
@@ -1172,6 +1220,11 @@ const createInsuranceQueryFromCallRecord = async (
           normalizedInsuranceContext.loanAmount ??
           callRecord.loanAmount ??
           0,
+        ...(insuranceType === "retirement" && callRecord.monthlySalary
+          ? {
+              currentMonthlyIncome: callRecord.monthlySalary,
+            }
+          : {}),
       },
       ...(primaryAssigneeId ? { assignedAgent: primaryAssigneeId } : {}),
       activities: [
@@ -1236,7 +1289,8 @@ const createInquiryFromCallRecord = async (
     );
   }
 
-  const insuranceType = normalizeInsuranceTypeFromProductService(productService);
+  const insuranceType =
+    normalizeInsuranceTypeFromProductService(productService);
   if (insuranceType) {
     return createInsuranceQueryFromCallRecord(
       callRecord,
@@ -1253,7 +1307,9 @@ const createInquiryFromCallRecord = async (
 
 const buildCallRecordUserLookup = (record: ICallRecord) => {
   const normalizedMobile = normalizePhoneToLeadFormat(record.phoneNumber);
-  const normalizedEmail = String(record.email || "").trim().toLowerCase();
+  const normalizedEmail = String(record.email || "")
+    .trim()
+    .toLowerCase();
   const digits = normalizePhoneDigits(record.phoneNumber);
   const last10 = digits.length > 10 ? digits.slice(-10) : digits;
   const mobileCandidates = Array.from(
@@ -1299,9 +1355,9 @@ const findExistingUserForCallRecord = async (record: ICallRecord) => {
 const isDuplicateKeyError = (error: any) => {
   return Boolean(
     error?.code === 11000 ||
-      error?.errorResponse?.code === 11000 ||
-      error?.keyPattern ||
-      error?.errorResponse?.keyPattern,
+    error?.errorResponse?.code === 11000 ||
+    error?.keyPattern ||
+    error?.errorResponse?.keyPattern,
   );
 };
 
@@ -1361,7 +1417,9 @@ export class CallRecordController {
       payload.phoneNumber = primaryPhoneDigits;
 
       if (payload.alternatePhone) {
-        const alternatePhoneDigits = normalizePhoneDigits(payload.alternatePhone);
+        const alternatePhoneDigits = normalizePhoneDigits(
+          payload.alternatePhone,
+        );
         if (alternatePhoneDigits.length !== 10) {
           return res
             .status(400)
@@ -1390,20 +1448,49 @@ export class CallRecordController {
       if (createInquiryEnabled) {
         const inquiryProduct = String(payload.productService || "").trim();
         const inquiryLoanAmount = Number(payload.loanAmount);
+        const inquiryMonthlySalary = Number(payload.monthlySalary);
         if (!inquiryProduct) {
           return res
             .status(400)
-            .json(new ApiError(400, "Product/Service is required when inquiry creation is enabled"));
+            .json(
+              new ApiError(
+                400,
+                "Product/Service is required when inquiry creation is enabled",
+              ),
+            );
         }
         if (!assigneeId) {
           return res
             .status(400)
-            .json(new ApiError(400, "Assigned agent is required when inquiry creation is enabled"));
+            .json(
+              new ApiError(
+                400,
+                "Assigned agent is required when inquiry creation is enabled",
+              ),
+            );
         }
         if (!Number.isFinite(inquiryLoanAmount) || inquiryLoanAmount <= 0) {
           return res
             .status(400)
-            .json(new ApiError(400, "Loan amount is required when inquiry creation is enabled"));
+            .json(
+              new ApiError(
+                400,
+                "Loan amount is required when inquiry creation is enabled",
+              ),
+            );
+        }
+        if (
+          !Number.isFinite(inquiryMonthlySalary) ||
+          inquiryMonthlySalary <= 0
+        ) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                "Monthly salary is required when inquiry creation is enabled",
+              ),
+            );
         }
       }
 
@@ -1492,10 +1579,9 @@ export class CallRecordController {
               createdInquiry.createdAt || new Date();
           }
 
-          await CallRecord.findByIdAndUpdate(
-            finalRecord?._id || result._id,
-            { $set: updatePayload },
-          );
+          await CallRecord.findByIdAndUpdate(finalRecord?._id || result._id, {
+            $set: updatePayload,
+          });
           console.log(
             "[CallRecord] Inquiry ensured during create:",
             inquiryType,
@@ -1649,8 +1735,7 @@ export class CallRecordController {
         includeCustomerContext,
         ...queryParams
       } = req.query as Record<string, any>;
-      const requestTimeZone =
-        (req as any)?.timezone || DEFAULT_QUERY_TIMEZONE;
+      const requestTimeZone = (req as any)?.timezone || DEFAULT_QUERY_TIMEZONE;
 
       const followUpBucketFilter = getFollowUpBucketFilter(
         followUpBucket,
@@ -1709,7 +1794,11 @@ export class CallRecordController {
                   $match: {
                     $or: [
                       { productService: { $in: loanTypeMatchValues } },
-                      { "attachedLead.productType": { $in: loanTypeMatchValues } },
+                      {
+                        "attachedLead.productType": {
+                          $in: loanTypeMatchValues,
+                        },
+                      },
                       { "attachedLead.loanType": { $in: loanTypeMatchValues } },
                     ],
                   },
@@ -1726,7 +1815,8 @@ export class CallRecordController {
                 });
               }
               const sortIndex = next.findIndex(
-                (stage) => stage && typeof stage === "object" && "$sort" in stage,
+                (stage) =>
+                  stage && typeof stage === "object" && "$sort" in stage,
               );
               if (sortIndex >= 0) {
                 next.splice(sortIndex, 0, ...dynamicStages);
@@ -1737,14 +1827,10 @@ export class CallRecordController {
             }
           : undefined;
 
-      const result = await CallRecordService.getAll(
-        queryParams,
-        lookupStages,
-        {
-          ...(pipelineModifier ? { pipelineModifier } : {}),
-          lookupsInDataFacet: deferLookupsToDataFacet,
-        },
-      );
+      const result = await CallRecordService.getAll(queryParams, lookupStages, {
+        ...(pipelineModifier ? { pipelineModifier } : {}),
+        lookupsInDataFacet: deferLookupsToDataFacet,
+      });
       const normalizedResult = Array.isArray(result)
         ? result.map((item) => normalizeCallRecordAssigneeView(item))
         : {
@@ -1787,13 +1873,23 @@ export class CallRecordController {
       const userId = (req as any)?.user?._id;
       const { role } = (req as any)?.user || {};
       const match = buildCallRecordScopeMatch(userId, role);
-      const requestTimeZone =
-        (req as any)?.timezone || DEFAULT_QUERY_TIMEZONE;
-      const followupsFilter = getFollowUpBucketFilter("followups", requestTimeZone);
+      const requestTimeZone = (req as any)?.timezone || DEFAULT_QUERY_TIMEZONE;
+      const followupsFilter = getFollowUpBucketFilter(
+        "followups",
+        requestTimeZone,
+      );
       const todayFilter = getFollowUpBucketFilter("today", requestTimeZone);
-      const upcomingFilter = getFollowUpBucketFilter("upcoming", requestTimeZone);
+      const upcomingFilter = getFollowUpBucketFilter(
+        "upcoming",
+        requestTimeZone,
+      );
       const missedFilter = getFollowUpBucketFilter("missed", requestTimeZone);
-      if (!followupsFilter || !todayFilter || !upcomingFilter || !missedFilter) {
+      if (
+        !followupsFilter ||
+        !todayFilter ||
+        !upcomingFilter ||
+        !missedFilter
+      ) {
         throw new ApiError(400, "Invalid follow-up bucket filters");
       }
 
@@ -1812,13 +1908,15 @@ export class CallRecordController {
         upcoming: Number(upcoming) || 0,
         missed: Number(missed) || 0,
       };
-      return res.status(200).json(
-        new ApiResponse(
-          200,
-          { total, byType },
-          "Call record sidebar counts fetched successfully",
-        ),
-      );
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            { total, byType },
+            "Call record sidebar counts fetched successfully",
+          ),
+        );
     } catch (err) {
       next(err);
     }
@@ -1833,11 +1931,7 @@ export class CallRecordController {
       return res
         .status(200)
         .json(
-          new ApiResponse(
-            200,
-            enrichedRecord || result,
-            "Call record fetched",
-          ),
+          new ApiResponse(200, enrichedRecord || result, "Call record fetched"),
         );
     } catch (err) {
       next(err);
@@ -1919,25 +2013,54 @@ export class CallRecordController {
         const inquiryLoanAmount = Number(
           updates.loanAmount ?? record.loanAmount ?? 0,
         );
+        const inquiryMonthlySalary = Number(
+          updates.monthlySalary ?? record.monthlySalary ?? 0,
+        );
         const inquiryAssignee =
-          updates.assignee ||
-          updates.assignees?.[0] ||
-          previousAssignee;
+          updates.assignee || updates.assignees?.[0] || previousAssignee;
 
         if (!inquiryProduct) {
           return res
             .status(400)
-            .json(new ApiError(400, "Product/Service is required when inquiry creation is enabled"));
+            .json(
+              new ApiError(
+                400,
+                "Product/Service is required when inquiry creation is enabled",
+              ),
+            );
         }
         if (!inquiryAssignee) {
           return res
             .status(400)
-            .json(new ApiError(400, "Assigned agent is required when inquiry creation is enabled"));
+            .json(
+              new ApiError(
+                400,
+                "Assigned agent is required when inquiry creation is enabled",
+              ),
+            );
         }
         if (!Number.isFinite(inquiryLoanAmount) || inquiryLoanAmount <= 0) {
           return res
             .status(400)
-            .json(new ApiError(400, "Loan amount is required when inquiry creation is enabled"));
+            .json(
+              new ApiError(
+                400,
+                "Loan amount is required when inquiry creation is enabled",
+              ),
+            );
+        }
+        if (
+          !Number.isFinite(inquiryMonthlySalary) ||
+          inquiryMonthlySalary <= 0
+        ) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                "Monthly salary is required when inquiry creation is enabled",
+              ),
+            );
         }
       }
 
@@ -1953,7 +2076,13 @@ export class CallRecordController {
 
       const changeKeys = Object.keys(updateBody).filter(
         (key) =>
-          !["assignee", "assignees", "assigneeIds", "followUp", "callbackAt"].includes(key),
+          ![
+            "assignee",
+            "assignees",
+            "assigneeIds",
+            "followUp",
+            "callbackAt",
+          ].includes(key),
       );
       const changeDiff = buildChangeDiff(
         record.toObject ? record.toObject() : (record as any),
@@ -1985,7 +2114,9 @@ export class CallRecordController {
             adminId?.toString?.(),
             req.user?.name || req.user?.email || "Admin",
             rawFollowUpNote,
-            updates.callbackAt ? new Date(updates.callbackAt) : record.callbackAt,
+            updates.callbackAt
+              ? new Date(updates.callbackAt)
+              : record.callbackAt,
           ),
         };
       } else if (updates.callbackAt || updates.followUp) {
@@ -1996,7 +2127,9 @@ export class CallRecordController {
             adminId?.toString?.(),
             req.user?.name || req.user?.email || "Admin",
             undefined,
-            updates.callbackAt ? new Date(updates.callbackAt) : record.callbackAt,
+            updates.callbackAt
+              ? new Date(updates.callbackAt)
+              : record.callbackAt,
           ),
         };
       }
@@ -2059,7 +2192,9 @@ export class CallRecordController {
 
       // Auto-attach channel agency + lead when source is provided.
       const sourceValue =
-        updates?.dataSource !== undefined ? updates.dataSource : result?.dataSource;
+        updates?.dataSource !== undefined
+          ? updates.dataSource
+          : result?.dataSource;
       if (String(sourceValue || "").trim()) {
         const linked = await attachLeadToAgencyFromSource(
           result,

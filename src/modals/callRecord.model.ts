@@ -16,6 +16,7 @@ export interface ICallRecord extends Document {
   followUp?: boolean;
   productService?: string;
   loanAmount?: number;
+  monthlySalary?: number;
   callbackAt?: Date;
   callbackNotifiedAt?: Date;
   leadStatus?: string;
@@ -90,6 +91,7 @@ const CallRecordSchema = new Schema<ICallRecord>(
     followUp: { type: Boolean, default: false },
     productService: { type: String, trim: true },
     loanAmount: { type: Number },
+    monthlySalary: { type: Number },
     callbackAt: { type: Date },
     callbackNotifiedAt: { type: Date },
     leadStatus: { type: String, trim: true },
