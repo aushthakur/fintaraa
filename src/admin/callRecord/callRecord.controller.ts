@@ -1131,7 +1131,7 @@ const createInsuranceQueryFromCallRecord = async (
       gender: resolvedGender,
       mobile: normalizedInsuranceContext.mobile || phoneNumber,
       isMobileVerified: false,
-      email: email || "",
+      email: email || undefined,
       isEmailVerified: false,
       fullAddress: resolvedFullAddress,
       pincode: resolvedPincode,

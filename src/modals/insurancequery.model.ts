@@ -267,7 +267,6 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
     isMobileVerified: { type: Boolean, default: false },
     email: {
       type: String,
-      required: true,
       lowercase: true,
       trim: true,
       index: true,
