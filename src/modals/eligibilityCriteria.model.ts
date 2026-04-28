@@ -20,17 +20,27 @@ export interface IEligibilityCriteria extends Document {
   commissionMaxAmount?: number;
   commissionCapAmount?: number;
   itrWithFinancial?: string;
+  itrYears?: number;
   gstProgram?: string;
+  gstYears?: number;
+  bankingYears?: number;
+  rentalIncomeType?: string;
+  propertyCategory?: string;
+  programs?: string[];
   cashProfit?: number;
-  lowTv?: number;
+  lowLtv?: number;
   bankingSurrogate?: string;
   companyListed?: string;
+  companyCategory?: string;
   foir?: string;
   minimumVintage?: number;
   businessAge?: number;
   currentExperience?: number;
   totalExperience?: number;
   salaryAmount?: number;
+  salaryMode?: string;
+  salarySlip?: string;
+  pfEsiDeduction?: string;
   form16Itr?: string;
   grossSalary?: number;
   netSalary?: number;
@@ -38,6 +48,7 @@ export interface IEligibilityCriteria extends Document {
   netIncome?: number;
   netProfit?: number;
   cibilScoreWithCall?: number;
+  cibilCriteria?: string;
   catAApproved?: boolean;
   catBSemiApproved?: boolean;
   catCUnapproved?: boolean;
@@ -73,17 +84,27 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     commissionMaxAmount: { type: Number },
     commissionCapAmount: { type: Number },
     itrWithFinancial: { type: String, trim: true },
+    itrYears: { type: Number },
     gstProgram: { type: String, trim: true },
+    gstYears: { type: Number },
+    bankingYears: { type: Number },
+    rentalIncomeType: { type: String, trim: true },
+    propertyCategory: { type: String, trim: true },
+    programs: [{ type: String, trim: true }],
     cashProfit: { type: Number },
-    lowTv: { type: Number },
+    lowLtv: { type: Number },
     bankingSurrogate: { type: String, trim: true },
     companyListed: { type: String, trim: true },
+    companyCategory: { type: String, trim: true },
     foir: { type: String, trim: true },
     minimumVintage: { type: Number },
     businessAge: { type: Number },
     currentExperience: { type: Number },
     totalExperience: { type: Number },
     salaryAmount: { type: Number },
+    salaryMode: { type: String, trim: true },
+    salarySlip: { type: String, trim: true },
+    pfEsiDeduction: { type: String, trim: true },
     form16Itr: { type: String, trim: true },
     grossSalary: { type: Number },
     netSalary: { type: Number },
@@ -91,6 +112,7 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     netIncome: { type: Number },
     netProfit: { type: Number },
     cibilScoreWithCall: { type: Number },
+    cibilCriteria: { type: String, trim: true },
     catAApproved: { type: Boolean },
     catBSemiApproved: { type: Boolean },
     catCUnapproved: { type: Boolean },
