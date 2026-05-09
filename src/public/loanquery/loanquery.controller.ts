@@ -618,10 +618,7 @@ export class LoanQueryController {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
-      if (
-        role === "lander" &&
-        query.assignedLander?.toString() !== String(_id)
-      ) {
+      if (!(await canAccessLoanQuery(query, _id, role))) {
         return res
           .status(403)
           .json(
@@ -711,11 +708,27 @@ export class LoanQueryController {
     next: NextFunction,
   ) {
     try {
-      const { role } = (req as any).user || {};
+      const { role, _id } = (req as any).user || {};
       if (!["admin", "agent", "lander"].includes(role)) {
         return res
           .status(403)
           .json(new ApiError(403, "You are not allowed to fetch CIBIL here"));
+      }
+
+      const query = await LoanQuery.findById(req.params.id).lean();
+      if (!query) {
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
+      }
+
+      if (!(await canAccessLoanQuery(query, _id, role))) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(
+              403,
+              "You can only fetch CIBIL for queries created or assigned to you",
+            ),
+          );
       }
 
       const { name, panNumber, mobile, gender, environment, consent } =
@@ -1706,7 +1719,7 @@ export class LoanQueryController {
 
   static async assignAgent(req: Request, res: Response, next: NextFunction) {
     try {
-      const { role } = (req as any).user || {};
+      const { role, _id: actorId } = (req as any).user || {};
       const incomingAgentIds: string[] = Array.isArray(req.body?.agentIds)
         ? req.body.agentIds
         : req.body?.agentId
@@ -1720,10 +1733,10 @@ export class LoanQueryController {
         ),
       );
 
-      if (role !== "admin") {
+      if (!["admin", "agent"].includes(role)) {
         return res
           .status(403)
-          .json(new ApiError(403, "Only admin can assign agents"));
+          .json(new ApiError(403, "Only admin or assigned agents can assign agents"));
       }
 
       if (selectedAgentIds.length === 0) {
@@ -1746,6 +1759,17 @@ export class LoanQueryController {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
+      if (!(await canAccessLoanQuery(existingResult, actorId, role))) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(
+              403,
+              "You can only assign agents to queries created or assigned to you",
+            ),
+          );
+      }
+
       const agents = await Admin.find({ _id: { $in: selectedAgentIds } })
         .populate("role")
         .select("_id name username email mobile role")
@@ -1766,7 +1790,6 @@ export class LoanQueryController {
           .json(new ApiError(400, "Selected employee is not an agent"));
       }
 
-      const actorId = (req as any).user?._id;
       const previousAgentIds: string[] =
         collectAssignedAgentIds(existingResult);
       const updatedByName = await resolveActorDisplayName(actorId, role);
@@ -1912,7 +1935,7 @@ export class LoanQueryController {
 
       const query = await LoanQuery.findById(req.params.id)
         .select(
-          "activities rcLookup customerId policyDetails.coApplicants policyDetails.carRegistrationNumber policyDetails.carRegistrationNo",
+          "activities rcLookup customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency policyDetails.coApplicants policyDetails.carRegistrationNumber policyDetails.carRegistrationNo",
         )
         .lean();
 

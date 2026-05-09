@@ -2,6 +2,7 @@ import express from "express";
 import { asyncHandler } from "../../utils/asyncHandler";
 import {
   authenticateToken,
+  authorize,
   authorizePermission,
 } from "../../middlewares/authMiddleware";
 import { EligibilityCriteriaController } from "./eligibilityCriteria.controller";
@@ -18,19 +19,19 @@ router
   .post(
     "/send-mail",
     authenticateToken,
-    authorizePermission("Eligibility Criteria"),
+    authorize("admin", "agent"),
     asyncHandler(EligibilityCriteriaController.sendMail)
   )
   .get(
     "/",
     authenticateToken,
-    authorizePermission("Eligibility Criteria"),
+    authorize("admin", "agent"),
     asyncHandler(EligibilityCriteriaController.getAll)
   )
   .get(
     "/:id",
     authenticateToken,
-    authorizePermission("Eligibility Criteria"),
+    authorize("admin", "agent"),
     asyncHandler(EligibilityCriteriaController.getById)
   )
   .put(

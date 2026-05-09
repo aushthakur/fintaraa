@@ -2,12 +2,12 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import Otp from "../../modals/otp.model";
 import ApiError from "../../utils/ApiError";
+import { logger } from "../../config/logger";
 import { config } from "../../config/config";
 import ApiResponse from "../../utils/ApiResponse";
 import { extractImageUrl } from "../../utils/helper";
-import { logger } from "../../config/logger";
-import { maskMobileForLogs, sendSMS } from "../../utils/smsService";
 import { Request, Response, NextFunction } from "express";
+import { maskMobileForLogs, sendSMS } from "../../utils/smsService";
 import {
   User,
   UserStatus,
@@ -113,6 +113,15 @@ const mergeDocuments = (existing: any[] = [], incoming: any[] = []) => {
     map.set(key, { ...(map.get(key) || {}), ...doc });
   });
   return Array.from(map.values());
+};
+
+const canManageDigiLockerDocuments = (
+  role: string | undefined,
+  actorId: any,
+  targetUserId: string,
+) => {
+  if (role === "admin" || role === "agent") return true;
+  return String(actorId) === targetUserId;
 };
 
 const normalizePreferredProducts = (items: any) => {
@@ -886,7 +895,7 @@ export class UserController {
           .status(400)
           .json(new ApiResponse(400, null, "User id is required"));
       }
-      if (role !== "admin" && String(actorId) !== targetUserId) {
+      if (!canManageDigiLockerDocuments(role, actorId, targetUserId)) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only manage your own documents"));
@@ -968,7 +977,7 @@ export class UserController {
           .status(400)
           .json(new ApiResponse(400, null, "User id is required"));
       }
-      if (role !== "admin" && String(actorId) !== targetUserId) {
+      if (!canManageDigiLockerDocuments(role, actorId, targetUserId)) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only manage your own documents"));
@@ -1061,7 +1070,7 @@ export class UserController {
           .status(400)
           .json(new ApiResponse(400, null, "User id is required"));
       }
-      if (role !== "admin" && String(actorId) !== targetUserId) {
+      if (!canManageDigiLockerDocuments(role, actorId, targetUserId)) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only manage your own documents"));
