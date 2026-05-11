@@ -71,6 +71,10 @@ router.post(
 );
 router.get("/stats", asyncHandler(LoanQueryController.getStats));
 router.get(
+  "/completed-premium-stats",
+  asyncHandler(LoanQueryController.getCompletedPremiumStats),
+);
+router.get(
   "/sidebar-counts",
   asyncHandler(LoanQueryController.getSidebarCounts),
 );

@@ -5,15 +5,15 @@ import { CommonService } from "../../services/common.services";
 import {
   LoanQuery,
   LoanType,
-  allowedFieldsByFormType,
   LoanQueryActivityType,
+  allowedFieldsByFormType,
 } from "../../modals/loanquery.model";
 import { ApplicationStatus } from "../../modals/insurancequery.model";
 import LanderAssignmentEngine from "../../services/landerAssignment.service";
-import { Types } from "mongoose";
+import mongoose, { Types } from "mongoose";
+import Admin from "../../modals/admin.model";
 import Lander from "../../modals/lander.model";
 import { normalizeLoanType } from "../../utils/loanType";
-import Admin from "../../modals/admin.model";
 import {
   fetchSurepassRcDetails,
   fetchSurepassCibilReport,
@@ -22,6 +22,7 @@ import {
   prepareSurepassRcPayload,
 } from "../../services/surepass.service";
 import { VehicleRcLookup } from "../../modals/vehicleRcLookup.model";
+import { CallRecord } from "../../modals/callRecord.model";
 import { User } from "../../modals/user.model";
 import { Agency } from "../../modals/agency.model";
 import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
@@ -274,6 +275,35 @@ const collectAssignedAgentIds = (query: any) => {
   return Array.from(ids);
 };
 
+const normalizeEmploymentTypeForLoanQuery = (value: any) => {
+  const key = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  if (key === "salaried" || key === "salary") return "salaried";
+  if (
+    ["selfemployedprofessional", "selfemployedpro", "selfprofessional"].includes(
+      key,
+    )
+  ) {
+    return "self_employed_professional";
+  }
+  if (
+    [
+      "selfemployednonprofessional",
+      "selfemployednonpro",
+      "selfnonprofessional",
+      "selfemployed",
+    ].includes(key)
+  ) {
+    return "self_employed_non_professional";
+  }
+  if (key === "selfemployedgeneric" || key === "selfemp") {
+    return "self_employed";
+  }
+  return String(value || "").trim().toLowerCase();
+};
+
 const isAgentAssignedToQuery = (query: any, actorId: any) => {
   const agentId = getIdString(actorId);
   if (!agentId) return false;
@@ -426,6 +456,32 @@ const normalizeCoApplicants = (value: any) => {
     .filter(Boolean);
 };
 
+const normalizeReferenceContacts = (value: any) => {
+  const parsed = parseMaybeJson(value);
+  const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+
+  return list
+    .map((item) => {
+      const reference = parseMaybeJson(item);
+      if (!reference || typeof reference !== "object") return null;
+
+      const name = String(reference.name || "").trim();
+      const phone = String(reference.phone || "").trim();
+      const address = String(reference.address || "").trim();
+      const relation = String(reference.relation || "").trim();
+
+      if (!name && !phone && !address && !relation) return null;
+
+      return {
+        name,
+        phone,
+        address,
+        relation,
+      };
+    })
+    .filter(Boolean);
+};
+
 // Helper function to process uploaded files and map to request body
 const processFileUploads = (req: Request) => {
   // Initialize policyDetails if it doesn't exist
@@ -443,6 +499,11 @@ const processFileUploads = (req: Request) => {
   if (req.body.policyDetails?.coApplicants) {
     req.body.policyDetails.coApplicants = normalizeCoApplicants(
       req.body.policyDetails.coApplicants,
+    );
+  }
+  if (req.body.policyDetails?.references) {
+    req.body.policyDetails.references = normalizeReferenceContacts(
+      req.body.policyDetails.references,
     );
   }
 
@@ -877,9 +938,10 @@ export class LoanQueryController {
 
   static async createQuery(req: Request, res: Response, next: NextFunction) {
     try {
-      // Get customer ID from authenticated user token
       const customerId = (req as any).user?._id;
       const role = (req as any).user?.role;
+      const session = (req as any).mongoSession;
+
       if (!customerId) {
         return res
           .status(401)
@@ -889,39 +951,50 @@ export class LoanQueryController {
       const normalizedLoanType = normalizeLoanType(req.body.loanType);
       if (normalizedLoanType) req.body.loanType = normalizedLoanType;
 
-      // Process uploaded files and map URLs
       processFileUploads(req);
 
-      // Automatically set customerId from token
       req.body.customerId = customerId;
+
+      const [agency, updatedByName] = await Promise.all([
+        role === "agency_member"
+          ? Agency.findById(customerId).select("parentAgency").lean().exec()
+          : Promise.resolve(null),
+
+        resolveActorDisplayName(customerId, role),
+      ]);
+
       if (role === "agency" || role === "agency_member") {
         req.body.channelAgency = customerId;
-        if (role === "agency_member") {
-          const agency = await Agency.findById(customerId)
-            .select("parentAgency")
-            .lean();
-          req.body.ownerAgency = agency?.parentAgency || customerId;
-        } else {
-          req.body.ownerAgency = customerId;
-        }
+        req.body.ownerAgency =
+          role === "agency_member"
+            ? (agency as any)?.parentAgency || customerId
+            : customerId;
       }
+
       if (req.body.accountType) {
         req.body.accountType = normalizeAccountType(req.body.accountType);
       }
-      const updatedByName = await resolveActorDisplayName(customerId, role);
+
       if (updatedByName) {
         req.body.updatedByName = updatedByName;
       }
+
       if (req.body.policyDetails?.coApplicants) {
         const list = Array.isArray(req.body.policyDetails.coApplicants)
           ? req.body.policyDetails.coApplicants
           : [req.body.policyDetails.coApplicants];
+
         req.body.policyDetails.coApplicants = list.filter(Boolean);
       }
 
-      // Validate policyDetails against loanType if both are provided (skip for draft)
-      // This must run AFTER processFileUploads since files are moved to policyDetails
+      if (req.body.policyDetails?.references) {
+        req.body.policyDetails.references = normalizeReferenceContacts(
+          req.body.policyDetails.references,
+        );
+      }
+
       const isDraft = req.body.status === ApplicationStatus.DRAFT;
+
       if (
         !isDraft &&
         req.body.loanType &&
@@ -929,19 +1002,19 @@ export class LoanQueryController {
         Object.keys(req.body.policyDetails).length > 0
       ) {
         const allowed = allowedFieldsByFormType[req.body.loanType] || [];
+
         if (allowed.length > 0) {
           const invalidFields = Object.keys(req.body.policyDetails).filter(
             (field) => !allowed.includes(field),
           );
+
           if (invalidFields.length > 0) {
             return res
               .status(400)
               .json(
                 new ApiError(
                   400,
-                  `Field(s) "${invalidFields.join(
-                    ", ",
-                  )}" is/are not allowed for ${
+                  `Field(s) "${invalidFields.join(", ")}" is/are not allowed for ${
                     req.body.loanType
                   }. Allowed fields: ${allowed.join(", ")}`,
                 ),
@@ -950,11 +1023,9 @@ export class LoanQueryController {
         }
       }
 
-      // Check if user already has an active loan query with the same loanType
-      // User can only have one loanType until status is completed/approved/cancelled
       if (req.body.loanType) {
-        const existingQuery = await LoanQuery.findOne({
-          customerId: customerId,
+        const existingQuery = await LoanQuery.exists({
+          customerId,
           loanType: req.body.loanType,
           status: {
             $nin: [
@@ -977,64 +1048,48 @@ export class LoanQueryController {
         }
       }
 
-      // If status is draft, skip all required field validations
-      let result;
+      const activity = {
+        type: LoanQueryActivityType.CREATED,
+        description: isDraft
+          ? "Loan query created as draft"
+          : "Loan query created",
+        actor: customerId ? new Types.ObjectId(String(customerId)) : undefined,
+        actorModel: role === "admin" ? "Admin" : "User",
+        createdAt: new Date(),
+      };
+
+      let result: any;
+
       if (isDraft) {
-        // For draft status, create without validation
-        const draftData = { ...req.body };
-        // Ensure status is set to draft
-        draftData.status = ApplicationStatus.DRAFT;
-        // Initialize activities array
-        draftData.activities = [];
-        // Create document without running validators
+        const draftData = {
+          ...req.body,
+          status: ApplicationStatus.DRAFT,
+          activities: [activity],
+        };
+
         result = new LoanQuery(draftData);
-        await result.save({ validateBeforeSave: false });
-
-        // Add created activity
-        result.activities = result.activities || [];
-        result.activities.push({
-          type: LoanQueryActivityType.CREATED,
-          description: "Loan query created as draft",
-          actor: customerId
-            ? new Types.ObjectId(String(customerId))
-            : undefined,
-          actorModel: "User",
-          createdAt: new Date(),
-        });
-        await result.save({ validateBeforeSave: false });
+        await result.save({ validateBeforeSave: false, session });
       } else {
-        // For non-draft status, use normal validation
-        const createData = { ...req.body, activities: [] };
-        result = await loanQueryService.create(createData);
+        const createData = {
+          ...req.body,
+          activities: [activity],
+        };
 
-        // Add created activity
-        result.activities = result.activities || [];
-        result.activities.push({
-          type: LoanQueryActivityType.CREATED,
-          description: "Loan query created",
-          actor: customerId
-            ? new Types.ObjectId(String(customerId))
-            : undefined,
-          actorModel: "User",
-          createdAt: new Date(),
-        });
+        result = await LoanQuery.create([createData], { session });
+        result = result?.[0];
 
-        const session = (req as any).mongoSession;
-
-        // Auto-assign employee (from Admin model with role=agent)
         if (result && !result.assignedAgent) {
           result = await EmployeeAssignmentEngine.ensureAssignmentForLoanQuery(
             result,
             {
               actorId: customerId?.toString(),
-              actorModel: "User",
+              actorModel: role === "admin" ? "Admin" : "User",
               reason: "new_loan_query",
               session,
             },
           );
         }
 
-        // Auto-assign lander if not already assigned
         if (result && !result.assignedLander) {
           result = await LanderAssignmentEngine.ensureAssignment(result, {
             actorId: customerId?.toString(),
@@ -1042,13 +1097,18 @@ export class LoanQueryController {
             session,
           });
         }
-        await result.save({ session });
+
+        if (result?.isModified?.()) {
+          await result.save({ session });
+        }
       }
 
-      if (!result)
+      if (!result) {
         return res
           .status(400)
           .json(new ApiError(400, "Failed to create loan query"));
+      }
+
       return res
         .status(201)
         .json(new ApiResponse(201, result, "Loan query created successfully"));
@@ -1258,6 +1318,253 @@ export class LoanQueryController {
     }
   }
 
+  static async getCompletedPremiumStats(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+
+      const { startDate, endDate, rangePreset, loanType } = req.query as Record<
+        string,
+        string
+      >;
+
+      const toDate = (v?: string): Date | null => {
+        if (!v) return null;
+        const d = new Date(v);
+        if (Number.isNaN(d.getTime())) return null;
+        return d;
+      };
+
+      // Resolve disbursed date range (CURRENT)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      let currentStart: Date | null = toDate(startDate);
+      let currentEnd: Date | null = toDate(endDate);
+
+      const applyPreset = () => {
+        if (rangePreset === "last_7_days") {
+          const end = new Date(today);
+          const start = new Date(today);
+          start.setDate(start.getDate() - 6);
+          currentStart = start;
+          currentEnd = end;
+          return;
+        }
+        if (rangePreset === "last_30_days") {
+          const end = new Date(today);
+          const start = new Date(today);
+          start.setDate(start.getDate() - 29);
+          currentStart = start;
+          currentEnd = end;
+          return;
+        }
+        if (rangePreset === "this_month") {
+          const end = new Date(today);
+          const start = new Date(today.getFullYear(), today.getMonth(), 1);
+          currentStart = start;
+          currentEnd = end;
+          return;
+        }
+        if (rangePreset === "last_month") {
+          const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+          const end = new Date(today.getFullYear(), today.getMonth(), 0);
+          currentStart = start;
+          currentEnd = end;
+          return;
+        }
+      };
+
+      if (!currentStart || !currentEnd) {
+        applyPreset();
+      }
+
+      if (!currentStart || !currentEnd) {
+        // default: last 30 days
+        const end = new Date(today);
+        const start = new Date(today);
+        start.setDate(start.getDate() - 29);
+        currentStart = start;
+        currentEnd = end;
+      }
+
+      const currentEndFixed = new Date(currentEnd);
+      currentEndFixed.setHours(23, 59, 59, 999);
+
+      const daysInRange = Math.max(
+        1,
+        Math.ceil(
+          (currentEndFixed.getTime() - currentStart.getTime()) /
+            (1000 * 60 * 60 * 24) +
+            1,
+        ),
+      );
+
+      // Resolve PREVIOUS equal-length range
+      const previousEnd = new Date(currentStart);
+      previousEnd.setDate(previousEnd.getDate() - 1);
+      previousEnd.setHours(23, 59, 59, 999);
+
+      const previousStart = new Date(previousEnd);
+      previousStart.setDate(previousStart.getDate() - (daysInRange - 1));
+      previousStart.setHours(0, 0, 0, 0);
+
+      const normalizedLoanType = loanType
+        ? normalizeLoanType(String(loanType))
+        : "";
+
+      const buildScopeMatch = () => {
+        const m: Record<string, any> = {
+          status: ApplicationStatus.COMPLETED,
+          disbursedDate: {
+            $gte: previousStart,
+            $lte: previousEnd,
+          },
+        };
+        return m;
+      };
+
+      const scopeForRole = (extra: Record<string, any>) => {
+        Object.assign(extra, buildLoanScopeMatch(userId, role));
+        return extra;
+      };
+
+      const currentMatch: Record<string, any> = {
+        status: ApplicationStatus.COMPLETED,
+        disbursedDate: {
+          $gte: currentStart,
+          $lte: currentEndFixed,
+        },
+      };
+
+      const previousMatch: Record<string, any> = buildScopeMatch();
+
+      if (normalizedLoanType) {
+        currentMatch.loanType = normalizedLoanType;
+        previousMatch.loanType = normalizedLoanType;
+      }
+
+      scopeForRole(currentMatch);
+      scopeForRole(previousMatch);
+
+      // Assigned in view (same filtered set)
+      const [currentAgg, previousAgg] = await Promise.all([
+        LoanQuery.aggregate([
+          { $match: currentMatch },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: 1 },
+              totalLoanAmount: { $sum: { $ifNull: ["$loanAmount", 0] } },
+              totalDisbursedAmount: {
+                $sum: { $ifNull: ["$disbursedAmount", 0] },
+              },
+              assignedCount: {
+                $sum: {
+                  $cond: [
+                    {
+                      $or: [
+                        { $ne: ["$assignedLander", null] },
+                        { $ne: ["$assignedLander", undefined] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+            },
+          },
+        ]),
+        LoanQuery.aggregate([
+          { $match: previousMatch },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: 1 },
+              totalLoanAmount: { $sum: { $ifNull: ["$loanAmount", 0] } },
+              totalDisbursedAmount: {
+                $sum: { $ifNull: ["$disbursedAmount", 0] },
+              },
+              assignedCount: {
+                $sum: {
+                  $cond: [
+                    {
+                      $or: [
+                        { $ne: ["$assignedLander", null] },
+                        { $ne: ["$assignedLander", undefined] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+            },
+          },
+        ]),
+      ]);
+
+      const cur = currentAgg?.[0] || {
+        total: 0,
+        totalLoanAmount: 0,
+        totalDisbursedAmount: 0,
+        assignedCount: 0,
+      };
+
+      const prev = previousAgg?.[0] || {
+        total: 0,
+        totalLoanAmount: 0,
+        totalDisbursedAmount: 0,
+        assignedCount: 0,
+      };
+
+      const safePct = (current: number, previous: number) => {
+        const c = Number(current) || 0;
+        const p = Number(previous) || 0;
+        if (p === 0) {
+          if (c === 0) return 0;
+          return 100;
+        }
+        return ((c - p) / p) * 100;
+      };
+
+      const disbursedGrowthPercent = safePct(
+        cur.totalDisbursedAmount,
+        prev.totalDisbursedAmount,
+      );
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            loanType: normalizedLoanType || "all",
+            disbursedRange: {
+              startDate: currentStart.toISOString(),
+              endDate: currentEndFixed.toISOString(),
+            },
+            previousDisbursedRange: {
+              startDate: previousStart.toISOString(),
+              endDate: previousEnd.toISOString(),
+            },
+            totalCompleted: cur.total,
+            totalLoanAmount: cur.totalLoanAmount,
+            totalDisbursedAmount: cur.totalDisbursedAmount,
+            assignedInView: cur.assignedCount,
+            disbursedGrowthPercent,
+          },
+          "Completed loan premium stats fetched successfully",
+        ),
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
   static async getStats(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = (req as any).user?._id;
@@ -1274,13 +1581,10 @@ export class LoanQueryController {
         return res.status(400).json(new ApiError(400, "Invalid loanType"));
       }
 
-    
-
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+      const start = new Date(startDate);
+      const end = new Date(endDate);
       start.setHours(0, 0, 0, 0); // 12:00 AM
       end.setHours(23, 59, 59, 0); // 23:59 PM (end of the day)
-
 
       const match: Record<string, any> = {
         createdAt: { $gte: start, $lte: end },
@@ -1431,44 +1735,66 @@ export class LoanQueryController {
     try {
       const customerId = (req as any).user?._id;
       const { role } = (req as any).user || {};
+      const queryId = req.params.id;
+      const session = (req as any).mongoSession;
+
+      if (!Types.ObjectId.isValid(queryId)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
 
       if (req.body.loanType) {
         const normalized = normalizeLoanType(req.body.loanType);
         if (normalized) req.body.loanType = normalized;
       }
 
-      //only draft queries can be updated
-      const existingResult = await loanQueryService.getById(
-        req.params.id,
-        true,
-      );
-      if (existingResult?.status !== ApplicationStatus.DRAFT) {
+      if (req.body.employmentType) {
+        req.body.employmentType = normalizeEmploymentTypeForLoanQuery(
+          req.body.employmentType,
+        );
+      }
+
+      const existingResult = await LoanQuery.findById(queryId)
+        .select(
+          "status customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy policyDetails documents",
+        )
+        .lean()
+        .exec();
+
+      if (!existingResult) {
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
+      }
+
+      const adminCanEditAnyStatus = role === "admin";
+
+      if (
+        !adminCanEditAnyStatus &&
+        existingResult.status !== ApplicationStatus.DRAFT
+      ) {
         return res
           .status(400)
           .json(new ApiError(400, "Only draft queries can be updated"));
       }
 
-      // Ensure user can only update their own queries (unless admin)
       if (!(await canAccessLoanQuery(existingResult, customerId, role))) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only update your own loan queries"));
       }
 
-      // Process uploaded files and map URLs
       processFileUploads(req);
 
-      // Prevent changing customerId
       delete req.body.customerId;
+
       if (req.body.accountType) {
         req.body.accountType = normalizeAccountType(req.body.accountType);
       }
+
       const updatedByName = await resolveActorDisplayName(customerId, role);
+
       if (updatedByName) {
         req.body.updatedByName = updatedByName;
       }
 
-      // Merge with existing policyDetails if updating
       if (req.body.policyDetails && existingResult.policyDetails) {
         req.body.policyDetails = {
           ...existingResult.policyDetails,
@@ -1482,7 +1808,12 @@ export class LoanQueryController {
         );
       }
 
-      // Merge with existing documents if updating
+      if (req.body.policyDetails?.references) {
+        req.body.policyDetails.references = normalizeReferenceContacts(
+          req.body.policyDetails.references,
+        );
+      }
+
       if (req.body.documents && existingResult.documents) {
         req.body.documents = {
           ...existingResult.documents,
@@ -1490,72 +1821,88 @@ export class LoanQueryController {
         };
       }
 
-      const updatedResult = await loanQueryService.updateById(
-        req.params.id,
-        req.body,
+      const nextStatus = req.body.status || existingResult.status;
+
+      const activity =
+        existingResult.status !== nextStatus
+          ? {
+              type: LoanQueryActivityType.STATUS_CHANGED,
+              description: `Status changed from ${existingResult.status} to ${nextStatus}`,
+              actor: customerId
+                ? new Types.ObjectId(String(customerId))
+                : undefined,
+              actorModel: role === "admin" ? "Admin" : "User",
+              payload: {
+                previousStatus: existingResult.status,
+                newStatus: nextStatus,
+              },
+              createdAt: new Date(),
+            }
+          : {
+              type: LoanQueryActivityType.UPDATED,
+              description: "Loan query updated",
+              actor: customerId
+                ? new Types.ObjectId(String(customerId))
+                : undefined,
+              actorModel: role === "admin" ? "Admin" : "User",
+              createdAt: new Date(),
+            };
+
+      let updatedResult: any = await LoanQuery.findOneAndUpdate(
+        adminCanEditAnyStatus
+          ? {
+              _id: queryId,
+            }
+          : {
+              _id: queryId,
+              status: ApplicationStatus.DRAFT,
+            },
         {
-          populate: true,
+          $set: req.body,
+          $push: {
+            activities: activity,
+          },
         },
-      );
+        {
+          new: true,
+          runValidators:
+            adminCanEditAnyStatus || nextStatus !== ApplicationStatus.DRAFT,
+          session,
+        },
+      ).exec();
 
-      // Track status change
-      if (updatedResult && existingResult?.status !== updatedResult.status) {
-        updatedResult.activities = updatedResult.activities || [];
-        updatedResult.activities.push({
-          type: LoanQueryActivityType.STATUS_CHANGED,
-          description: `Status changed from ${existingResult?.status} to ${updatedResult.status}`,
-          actor: customerId
-            ? new Types.ObjectId(String(customerId))
-            : undefined,
-          actorModel: role === "admin" ? "Admin" : "User",
-          payload: {
-            previousStatus: existingResult?.status,
-            newStatus: updatedResult.status,
-          },
-          createdAt: new Date(),
-        });
-      } else {
-        // Track update if status didn't change
-        updatedResult.activities = updatedResult.activities || [];
-        updatedResult.activities.push({
-          type: LoanQueryActivityType.UPDATED,
-          description: "Loan query updated",
-          actor: customerId
-            ? new Types.ObjectId(String(customerId))
-            : undefined,
-          actorModel: role === "admin" ? "Admin" : "User",
-          createdAt: new Date(),
-        });
+      if (!updatedResult) {
+        return res
+          .status(400)
+          .json(
+            new ApiError(
+              400,
+              adminCanEditAnyStatus
+                ? "Loan query could not be updated"
+                : "Only draft queries can be updated",
+            ),
+          );
       }
 
-      // Auto-assign employee if status changed from draft to non-draft and no employee assigned
-      if (
-        updatedResult &&
-        existingResult?.status === ApplicationStatus.DRAFT &&
-        updatedResult.status !== ApplicationStatus.DRAFT &&
-        !updatedResult.assignedAgent
-      ) {
-        const session = (req as any).mongoSession;
-        await EmployeeAssignmentEngine.ensureAssignmentForLoanQuery(
-          updatedResult as any,
-          {
-            actorId: customerId?.toString(),
-            actorModel: role === "admin" ? "Admin" : "User",
-            reason: "draft_submitted",
-            session,
-          },
-        );
+      const isDraftSubmitted =
+        existingResult.status === ApplicationStatus.DRAFT &&
+        updatedResult.status !== ApplicationStatus.DRAFT;
+
+      if (isDraftSubmitted && !updatedResult.assignedAgent) {
+        updatedResult =
+          await EmployeeAssignmentEngine.ensureAssignmentForLoanQuery(
+            updatedResult,
+            {
+              actorId: customerId?.toString(),
+              actorModel: role === "admin" ? "Admin" : "User",
+              reason: "draft_submitted",
+              session,
+            },
+          );
       }
 
-      // Auto-assign lander if status changed from draft to non-draft and no lander assigned
-      if (
-        updatedResult &&
-        existingResult?.status === ApplicationStatus.DRAFT &&
-        updatedResult.status !== ApplicationStatus.DRAFT &&
-        !updatedResult.assignedLander
-      ) {
-        const session = (req as any).mongoSession;
-        const result = await LanderAssignmentEngine.ensureAssignment(
+      if (isDraftSubmitted && !updatedResult.assignedLander) {
+        updatedResult = await LanderAssignmentEngine.ensureAssignment(
           updatedResult,
           {
             actorId: customerId?.toString(),
@@ -1563,26 +1910,14 @@ export class LoanQueryController {
             session,
           },
         );
-        await result.save({ session });
-        if (
-          existingResult?.status !== result.status &&
-          result.status === ApplicationStatus.DISBURSED
-        ) {
-          await agencyEarningsService.recordLoanDisbursalCommission(
-            result,
-            customerId?.toString(),
-          );
-        }
-        return res
-          .status(200)
-          .json(
-            new ApiResponse(200, result, "Loan query updated successfully"),
-          );
       }
 
-      await updatedResult.save();
+      if (updatedResult?.isModified?.()) {
+        await updatedResult.save({ session });
+      }
+
       if (
-        existingResult?.status !== updatedResult.status &&
+        existingResult.status !== updatedResult.status &&
         updatedResult.status === ApplicationStatus.DISBURSED
       ) {
         await agencyEarningsService.recordLoanDisbursalCommission(
@@ -1590,6 +1925,7 @@ export class LoanQueryController {
           customerId?.toString(),
         );
       }
+
       return res
         .status(200)
         .json(
@@ -1720,12 +2056,15 @@ export class LoanQueryController {
   static async assignAgent(req: Request, res: Response, next: NextFunction) {
     try {
       const { role, _id: actorId } = (req as any).user || {};
+      const queryId = req.params.id;
+
       const incomingAgentIds: string[] = Array.isArray(req.body?.agentIds)
         ? req.body.agentIds
         : req.body?.agentId
           ? [req.body.agentId]
           : [];
-      const selectedAgentIds: string[] = Array.from(
+
+      const selectedAgentIds = Array.from(
         new Set(
           incomingAgentIds
             .map((value: any) => String(value || "").trim())
@@ -1736,10 +2075,15 @@ export class LoanQueryController {
       if (!["admin", "agent"].includes(role)) {
         return res
           .status(403)
-          .json(new ApiError(403, "Only admin or assigned agents can assign agents"));
+          .json(
+            new ApiError(
+              403,
+              "Only admin or assigned agents can assign agents",
+            ),
+          );
       }
 
-      if (selectedAgentIds.length === 0) {
+      if (!selectedAgentIds.length) {
         return res
           .status(400)
           .json(new ApiError(400, "At least one agent ID is required"));
@@ -1751,10 +2095,22 @@ export class LoanQueryController {
           .json(new ApiError(400, "You can assign up to 10 agents only"));
       }
 
-      const existingResult = await LoanQuery.findById(req.params.id)
-        .populate("assignedAgent", "name username email mobile")
-        .populate("assignedAgents", "name username email mobile")
-        .lean();
+      if (
+        !Types.ObjectId.isValid(queryId) ||
+        selectedAgentIds.some((id) => !Types.ObjectId.isValid(id))
+      ) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid query or agent id"));
+      }
+
+      const existingResult = await LoanQuery.findById(queryId)
+        .select(
+          "customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy",
+        )
+        .lean()
+        .exec();
+
       if (!existingResult) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
@@ -1770,10 +2126,15 @@ export class LoanQueryController {
           );
       }
 
-      const agents = await Admin.find({ _id: { $in: selectedAgentIds } })
-        .populate("role")
-        .select("_id name username email mobile role")
-        .lean();
+      const [agents, updatedByName] = await Promise.all([
+        Admin.find({ _id: { $in: selectedAgentIds } })
+          .populate("role", "name")
+          .select("_id name username email mobile role")
+          .lean()
+          .exec(),
+
+        resolveActorDisplayName(actorId, role),
+      ]);
 
       if (agents.length !== selectedAgentIds.length) {
         return res
@@ -1782,76 +2143,85 @@ export class LoanQueryController {
       }
 
       const invalidAgent = agents.find(
-        (agent: any) => (agent as any)?.role?.name !== "agent",
+        (agent: any) => agent?.role?.name !== "agent",
       );
+
       if (invalidAgent) {
         return res
           .status(400)
           .json(new ApiError(400, "Selected employee is not an agent"));
       }
 
-      const previousAgentIds: string[] =
-        collectAssignedAgentIds(existingResult);
-      const updatedByName = await resolveActorDisplayName(actorId, role);
-      const nextAgentIds: string[] = selectedAgentIds;
-      const addedAgentIds: string[] = nextAgentIds.filter(
+      const previousAgentIds = collectAssignedAgentIds(existingResult);
+      const nextAgentIds = selectedAgentIds;
+
+      const addedAgentIds = nextAgentIds.filter(
         (id) => !previousAgentIds.includes(id),
       );
-      const removedAgentIds: string[] = previousAgentIds.filter(
+
+      const removedAgentIds = previousAgentIds.filter(
         (id) => !nextAgentIds.includes(id),
       );
+
       const primaryAgentId = nextAgentIds[0];
-      const agentNames: string[] = agents
+
+      const agentNames = agents
         .map((agent: any) => agent?.name || agent?.username || agent?.email)
         .filter(Boolean);
 
-      const updatedResult = await loanQueryService.updateById(
-        req.params.id,
+      const activity = {
+        type: LoanQueryActivityType.AGENT_ASSIGNED,
+        description: `Agent${nextAgentIds.length > 1 ? "s" : ""} assigned: ${agentNames.join(", ")}${
+          previousAgentIds.length ? " (updated)" : ""
+        }`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: "Admin",
+        payload: {
+          agentIds: nextAgentIds,
+          agentNames,
+          previousAgentIds,
+          addedAgentIds,
+          removedAgentIds,
+          mode: "manual",
+        },
+        createdAt: new Date(),
+      };
+
+      const updatedResult = await LoanQuery.findByIdAndUpdate(
+        queryId,
         {
-          assignedAgent: primaryAgentId,
-          assignedAgents: nextAgentIds,
-          updatedByName: updatedByName || undefined,
+          $set: {
+            assignedAgent: new Types.ObjectId(primaryAgentId),
+            assignedAgents: nextAgentIds.map((id) => new Types.ObjectId(id)),
+            ...(updatedByName ? { updatedByName } : {}),
+          },
           $push: {
-            activities: {
-              type: LoanQueryActivityType.AGENT_ASSIGNED,
-              description: `Agent${nextAgentIds.length > 1 ? "s" : ""} assigned: ${agentNames.join(", ")}${
-                previousAgentIds.length ? " (updated)" : ""
-              }`,
-              actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
-              actorModel: "Admin",
-              payload: {
-                agentIds: nextAgentIds,
-                agentNames,
-                previousAgentIds,
-                addedAgentIds,
-                removedAgentIds,
-                mode: "manual",
-              },
-              createdAt: new Date(),
-            },
+            activities: activity,
           },
         },
         {
-          populate: [
-            { path: "assignedAgent", select: "name username email mobile" },
-            {
-              path: "assignedAgents",
-              select: "name username email mobile",
-            },
-          ],
+          new: true,
+          runValidators: true,
         },
-      );
+      )
+        .select(
+          "status updatedByName assignedAgent assignedAgents assignedLander customerId ownerAgency channelAgency",
+        )
+        .populate("assignedAgent", "name username email mobile")
+        .populate("assignedAgents", "name username email mobile")
+        .lean()
+        .exec();
 
-      await Promise.all(
-        removedAgentIds.map((agentId) =>
+      const loadUpdates = [
+        ...removedAgentIds.map((agentId) =>
           EmployeeAssignmentEngine.adjustEmployeeLoad(agentId, -1),
         ),
-      );
-      await Promise.all(
-        addedAgentIds.map((agentId) =>
+        ...addedAgentIds.map((agentId) =>
           EmployeeAssignmentEngine.adjustEmployeeLoad(agentId, 1),
         ),
-      );
+      ];
+
+      await Promise.allSettled(loadUpdates);
 
       return res
         .status(200)
@@ -1930,54 +2300,122 @@ export class LoanQueryController {
     next: NextFunction,
   ) {
     try {
-      const userId = (req as any).user?._id;
-      const { role } = (req as any).user || {};
+      const authUser = (req as any).user || {};
+      const userId = authUser?._id;
+      const role = authUser?.role;
 
-      const query = await LoanQuery.findById(req.params.id)
-        .select(
-          "activities rcLookup customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency policyDetails.coApplicants policyDetails.carRegistrationNumber policyDetails.carRegistrationNo",
-        )
-        .lean();
+      const queryId = req.params.id;
+
+      if (!mongoose.Types.ObjectId.isValid(queryId)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
+
+      const query = await LoanQuery.findById(queryId)
+        .select({
+          activities: { $slice: -40 }, // HUGE optimization
+          rcLookup: 1,
+          customerId: 1,
+          assignedAgent: 1,
+          assignedAgents: 1,
+          assignedLander: 1,
+          ownerAgency: 1,
+          channelAgency: 1,
+          "policyDetails.coApplicants": 1,
+          "policyDetails.references": 1,
+          "policyDetails.carRegistrationNumber": 1,
+          "policyDetails.carRegistrationNo": 1,
+        })
+        .lean()
+        .exec();
 
       if (!query) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
-      if (!(await canAccessLoanQuery(query, userId, role))) {
-        return res
-          .status(403)
-          .json(
-            new ApiError(
-              403,
-              "You can only view details of queries created or assigned to you",
-            ),
-          );
+      // avoid expensive permission calls if possible
+      const hasDirectAccess =
+        role === "SUPER_ADMIN" ||
+        String(query?.assignedAgent || "") === String(userId) ||
+        String(query?.customerId || "") === String(userId) ||
+        (Array.isArray(query?.assignedAgents) &&
+          query.assignedAgents.some(
+            (id: any) => String(id) === String(userId),
+          ));
+
+      if (!hasDirectAccess) {
+        const allowed = await canAccessLoanQuery(query, userId, role);
+
+        if (!allowed) {
+          return res
+            .status(403)
+            .json(
+              new ApiError(
+                403,
+                "You can only view details of queries created or assigned to you",
+              ),
+            );
+        }
       }
 
       const customerId = getIdString(
         (query as any)?.customerId?._id || query?.customerId,
       );
-      const customer = customerId
-        ? await User.findById(customerId)
-            .select(
-              "cibilScore cibilLastFetchedAt cibilReport cibilRequestPayload cibilPdfLastFetchedAt cibilPdfReport digiLockerVault",
-            )
-            .lean()
-        : null;
 
       const rcNumberCandidate =
         (query as any)?.rcLookup?.idNumber ||
         (query as any)?.policyDetails?.carRegistrationNumber ||
-        (query as any)?.policyDetails?.carRegistrationNo ||
-        null;
-      const rcLookup =
-        (query as any)?.rcLookup ||
-        (rcNumberCandidate &&
-        normalizeRcNumber(String(rcNumberCandidate)).length >= 6
-          ? await VehicleRcLookup.findOne({
+        (query as any)?.policyDetails?.carRegistrationNo;
+
+      const activities = Array.isArray(query.activities)
+        ? query.activities
+        : [];
+
+      const customerPromise = customerId
+        ? User.findById(customerId)
+            .select({
+              cibilScore: 1,
+              cibilLastFetchedAt: 1,
+              cibilReport: 1,
+              cibilRequestPayload: 1,
+              cibilPdfLastFetchedAt: 1,
+              cibilPdfReport: 1,
+              digiLockerVault: 1,
+            })
+            .lean()
+            .exec()
+        : Promise.resolve(null);
+
+      const rcLookupPromise = (query as any)?.rcLookup
+        ? Promise.resolve((query as any)?.rcLookup)
+        : rcNumberCandidate &&
+            normalizeRcNumber(String(rcNumberCandidate)).length >= 6
+          ? VehicleRcLookup.findOne({
               idNumber: normalizeRcNumber(String(rcNumberCandidate)),
-            }).lean()
-          : null);
+            })
+              .lean()
+              .exec()
+          : Promise.resolve(null);
+
+      const activitiesPromise = activities.length
+        ? enrichActivityActors(activities)
+        : Promise.resolve([]);
+
+      const [customer, rcLookup, enrichedActivities] = await Promise.all([
+        customerPromise,
+        rcLookupPromise,
+        activitiesPromise,
+      ]);
+
+      const linkedCallRecords = await CallRecord.find({
+        loanQueryId: new Types.ObjectId(queryId),
+      })
+        .sort({ updatedAt: -1 })
+        .populate("channelAgency", "name mobile role status")
+        .populate("attachedLead", "fullName mobile status productType loanType")
+        .populate("assignee", "name email")
+        .populate("createdBy", "name username email")
+        .lean()
+        .exec();
 
       return res.status(200).json(
         new ApiResponse(
@@ -1986,11 +2424,8 @@ export class LoanQueryController {
             policyDetails: (query as any)?.policyDetails || {},
             customerId: customer,
             rcLookup,
-            activities: await enrichActivityActors(
-              Array.isArray(query.activities)
-                ? query.activities.slice(-100)
-                : [],
-            ),
+            activities: enrichedActivities,
+            linkedCallRecords,
           },
           "Loan query detail extras fetched successfully",
         ),
@@ -2005,12 +2440,23 @@ export class LoanQueryController {
       const actorId = (req as any).user?._id;
       const { role } = (req as any).user || {};
       const { note } = req.body;
+      const queryId = req.params.id;
 
       if (!note) {
         return res.status(400).json(new ApiError(400, "Note is required"));
       }
 
-      const query = await LoanQuery.findById(req.params.id);
+      if (!Types.ObjectId.isValid(queryId)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
+
+      const query = await LoanQuery.findById(queryId)
+        .select(
+          "customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy",
+        )
+        .lean()
+        .exec();
+
       if (!query) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
@@ -2027,23 +2473,39 @@ export class LoanQueryController {
       }
 
       const updatedByName = await resolveActorDisplayName(actorId, role);
-      if (updatedByName) {
-        query.updatedByName = updatedByName;
-      }
-      query.activities = query.activities || [];
-      query.activities.push({
+
+      const activity = {
         type: LoanQueryActivityType.NOTE_ADDED,
         description: note,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
         actorModel: resolveActivityActorModel(role),
         createdAt: new Date(),
-      });
+      };
 
-      await query.save();
+      const updatedQuery = await LoanQuery.findByIdAndUpdate(
+        queryId,
+        {
+          $set: {
+            ...(updatedByName ? { updatedByName } : {}),
+          },
+          $push: {
+            activities: activity,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        },
+      )
+        .select(
+          "status updatedByName customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency",
+        )
+        .lean()
+        .exec();
 
       return res
         .status(200)
-        .json(new ApiResponse(200, query, "Note added successfully"));
+        .json(new ApiResponse(200, updatedQuery, "Note added successfully"));
     } catch (err) {
       next(err);
     }
@@ -2054,12 +2516,23 @@ export class LoanQueryController {
       const actorId = (req as any).user?._id;
       const { role } = (req as any).user || {};
       const { status, remarks } = req.body;
+      const queryId = req.params.id;
 
       if (!status) {
         return res.status(400).json(new ApiError(400, "Status is required"));
       }
 
-      const query = await LoanQuery.findById(req.params.id);
+      if (!Types.ObjectId.isValid(queryId)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
+
+      const query = await LoanQuery.findById(queryId)
+        .select(
+          "status customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy",
+        )
+        .lean()
+        .exec();
+
       if (!query) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
@@ -2076,14 +2549,18 @@ export class LoanQueryController {
       }
 
       const oldStatus = query.status;
-      query.status = status;
-      const updatedByName = await resolveActorDisplayName(actorId, role);
-      if (updatedByName) {
-        query.updatedByName = updatedByName;
+
+      if (oldStatus === status) {
+        return res
+          .status(200)
+          .json(new ApiResponse(200, query, "Status already updated"));
       }
 
-      query.activities = query.activities || [];
-      query.activities.push({
+      const [updatedByName] = await Promise.all([
+        resolveActorDisplayName(actorId, role),
+      ]);
+
+      const activity = {
         type: LoanQueryActivityType.STATUS_CHANGED,
         description: `Status changed from ${oldStatus} to ${status}${
           remarks ? `: ${remarks}` : ""
@@ -2096,19 +2573,46 @@ export class LoanQueryController {
           remarks,
         },
         createdAt: new Date(),
-      });
+      };
 
-      await query.save();
-      if (oldStatus !== status && status === ApplicationStatus.DISBURSED) {
+      const updatedQuery = await LoanQuery.findByIdAndUpdate(
+        queryId,
+        {
+          $set: {
+            status,
+            ...(updatedByName ? { updatedByName } : {}),
+          },
+          $push: {
+            activities: activity,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        },
+      )
+        .select(
+          "status updatedByName activities customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency",
+        )
+        .lean()
+        .exec();
+
+      if (
+        oldStatus !== status &&
+        status === ApplicationStatus.DISBURSED &&
+        updatedQuery
+      ) {
         await agencyEarningsService.recordLoanDisbursalCommission(
-          query,
+          updatedQuery,
           actorId?.toString(),
         );
       }
 
       return res
         .status(200)
-        .json(new ApiResponse(200, query, "Status updated successfully"));
+        .json(
+          new ApiResponse(200, updatedQuery, "Status updated successfully"),
+        );
     } catch (err) {
       next(err);
     }
@@ -2122,8 +2626,19 @@ export class LoanQueryController {
     try {
       const actorId = (req as any).user?._id;
       const { role } = (req as any).user || {};
+      const queryId = req.params.id;
 
-      const query = await LoanQuery.findById(req.params.id);
+      if (!Types.ObjectId.isValid(queryId)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
+
+      const query = await LoanQuery.findById(queryId)
+        .select(
+          "customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy",
+        )
+        .lean()
+        .exec();
+
       if (!query) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
@@ -2139,10 +2654,8 @@ export class LoanQueryController {
           );
       }
 
-      // Handle file uploads from multer/S3 middleware
       let documentsToAdd: Record<string, string> = {};
 
-      // Files uploaded via multer middleware will be in req.body with URLs
       const documentTypes = [
         "pan_card",
         "aadhaar_card",
@@ -2159,51 +2672,77 @@ export class LoanQueryController {
       ];
 
       documentTypes.forEach((docType) => {
-        if (req.body[docType]) {
-          const urlData = req.body[docType];
-          // Extract URL from multer/S3 response format
-          const url = Array.isArray(urlData)
-            ? urlData[0]?.url
-            : urlData?.url || urlData;
-          if (url) {
-            documentsToAdd[docType] = url;
-          }
+        if (!req.body[docType]) return;
+
+        const urlData = req.body[docType];
+
+        const url = Array.isArray(urlData)
+          ? urlData[0]?.url
+          : urlData?.url || urlData;
+
+        if (url) {
+          documentsToAdd[docType] = url;
         }
       });
 
-      // Also support direct URL input via documents object
       if (req.body.documents && typeof req.body.documents === "object") {
-        documentsToAdd = { ...documentsToAdd, ...req.body.documents };
+        documentsToAdd = {
+          ...documentsToAdd,
+          ...req.body.documents,
+        };
       }
 
-      if (Object.keys(documentsToAdd).length === 0) {
+      const uploadedDocumentKeys = Object.keys(documentsToAdd);
+
+      if (!uploadedDocumentKeys.length) {
         return res.status(400).json(new ApiError(400, "No documents provided"));
       }
 
-      // Merge documents
-      query.documents = { ...query.documents, ...documentsToAdd };
       const updatedByName = await resolveActorDisplayName(actorId, role);
-      if (updatedByName) {
-        query.updatedByName = updatedByName;
-      }
 
-      query.activities = query.activities || [];
-      query.activities.push({
-        type: LoanQueryActivityType.DOCUMENT_UPLOADED,
-        description: `Documents uploaded: ${Object.keys(documentsToAdd).join(
-          ", ",
-        )}`,
-        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
-        actorModel: resolveActivityActorModel(role),
-        payload: { uploadedDocuments: Object.keys(documentsToAdd) },
-        createdAt: new Date(),
+      const updateSet: Record<string, any> = {
+        ...(updatedByName ? { updatedByName } : {}),
+      };
+
+      uploadedDocumentKeys.forEach((key) => {
+        updateSet[`documents.${key}`] = documentsToAdd[key];
       });
 
-      await query.save();
+      const activity = {
+        type: LoanQueryActivityType.DOCUMENT_UPLOADED,
+        description: `Documents uploaded: ${uploadedDocumentKeys.join(", ")}`,
+        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+        actorModel: resolveActivityActorModel(role),
+        payload: {
+          uploadedDocuments: uploadedDocumentKeys,
+        },
+        createdAt: new Date(),
+      };
+
+      const updatedQuery = await LoanQuery.findByIdAndUpdate(
+        queryId,
+        {
+          $set: updateSet,
+          $push: {
+            activities: activity,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        },
+      )
+        .select(
+          "documents updatedByName customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency",
+        )
+        .lean()
+        .exec();
 
       return res
         .status(200)
-        .json(new ApiResponse(200, query, "Documents updated successfully"));
+        .json(
+          new ApiResponse(200, updatedQuery, "Documents updated successfully"),
+        );
     } catch (err) {
       next(err);
     }
@@ -2217,8 +2756,19 @@ export class LoanQueryController {
     try {
       const actorId = (req as any).user?._id;
       const { role } = (req as any).user || {};
+      const queryId = req.params.id;
 
-      const query = await LoanQuery.findById(req.params.id);
+      if (!Types.ObjectId.isValid(queryId)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
+
+      const query = await LoanQuery.findById(queryId)
+        .select(
+          "loanType customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy",
+        )
+        .lean()
+        .exec();
+
       if (!query) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
@@ -2253,30 +2803,35 @@ export class LoanQueryController {
       ];
 
       const incoming: Record<string, any> = {};
+
       policyDocumentFields.forEach((field) => {
         const raw = req.body?.[field] || req.body?.policyDetails?.[field];
         if (!raw) return;
+
         const urls = extractFileUrls(raw);
-        if (urls.length === 0) return;
+        if (!urls.length) return;
+
         incoming[field] = urls.length === 1 ? urls[0] : urls;
       });
 
       const bankStatementUrl = extractFileUrl(req.body?.bankStatementUrl);
 
-      const allowed = allowedFieldsByFormType[query.loanType] || [];
+      const allowed = allowedFieldsByFormType[(query as any).loanType] || [];
+
       if (allowed.length > 0) {
         const invalidFields = Object.keys(incoming).filter(
           (field) => !allowed.includes(field),
         );
+
         if (invalidFields.length > 0) {
           return res
             .status(400)
             .json(
               new ApiError(
                 400,
-                `Field(s) "${invalidFields.join(
-                  ", ",
-                )}" is/are not allowed for ${query.loanType}`,
+                `Field(s) "${invalidFields.join(", ")}" is/are not allowed for ${
+                  (query as any).loanType
+                }`,
               ),
             );
         }
@@ -2288,38 +2843,58 @@ export class LoanQueryController {
           .json(new ApiError(400, "No policy documents provided"));
       }
 
-      if (Object.keys(incoming).length > 0) {
-        query.policyDetails = { ...query.policyDetails, ...incoming };
-      }
-      if (bankStatementUrl) {
-        query.bankStatementUrl = bankStatementUrl;
-      }
-      const updatedByName = await resolveActorDisplayName(actorId, role);
-      if (updatedByName) {
-        query.updatedByName = updatedByName;
-      }
-
       const uploadedFields = [
         ...Object.keys(incoming),
         ...(bankStatementUrl ? ["bankStatementUrl"] : []),
       ];
 
-      query.activities = query.activities || [];
-      query.activities.push({
+      const updatedByName = await resolveActorDisplayName(actorId, role);
+
+      const updateSet: Record<string, any> = {
+        ...(updatedByName ? { updatedByName } : {}),
+        ...(bankStatementUrl ? { bankStatementUrl } : {}),
+      };
+
+      Object.entries(incoming).forEach(([key, value]) => {
+        updateSet[`policyDetails.${key}`] = value;
+      });
+
+      const activity = {
         type: LoanQueryActivityType.DOCUMENT_UPLOADED,
         description: `Policy documents uploaded: ${uploadedFields.join(", ")}`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
         actorModel: resolveActivityActorModel(role),
         payload: { uploadedDocuments: uploadedFields },
         createdAt: new Date(),
-      });
+      };
 
-      await query.save();
+      const updatedQuery = await LoanQuery.findByIdAndUpdate(
+        queryId,
+        {
+          $set: updateSet,
+          $push: {
+            activities: activity,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        },
+      )
+        .select(
+          "loanType policyDetails bankStatementUrl updatedByName customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency",
+        )
+        .lean()
+        .exec();
 
       return res
         .status(200)
         .json(
-          new ApiResponse(200, query, "Policy documents updated successfully"),
+          new ApiResponse(
+            200,
+            updatedQuery,
+            "Policy documents updated successfully",
+          ),
         );
     } catch (err) {
       next(err);
@@ -2334,7 +2909,12 @@ export class LoanQueryController {
     try {
       const actorId = (req as any).user?._id;
       const { role } = (req as any).user || {};
+      const queryId = req.params.id;
       const policyDetails = parseMaybeJson(req.body.policyDetails);
+
+      if (!Types.ObjectId.isValid(queryId)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
 
       if (!policyDetails || typeof policyDetails !== "object") {
         return res
@@ -2342,7 +2922,13 @@ export class LoanQueryController {
           .json(new ApiError(400, "Policy details object is required"));
       }
 
-      const query = await LoanQuery.findById(req.params.id);
+      const query = await LoanQuery.findById(queryId)
+        .select(
+          "policyDetails customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy",
+        )
+        .lean()
+        .exec();
+
       if (!query) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
@@ -2358,41 +2944,62 @@ export class LoanQueryController {
           );
       }
 
-      // Merge policy details
       const normalizedPolicyDetails = {
         ...policyDetails,
         ...(policyDetails?.coApplicants
-          ? {
-              coApplicants: normalizeCoApplicants(policyDetails.coApplicants),
-            }
+          ? { coApplicants: normalizeCoApplicants(policyDetails.coApplicants) }
+          : {}),
+        ...(policyDetails?.references
+          ? { references: normalizeReferenceContacts(policyDetails.references) }
           : {}),
       };
 
-      query.policyDetails = {
-        ...query.policyDetails,
-        ...normalizedPolicyDetails,
-      };
       const updatedByName = await resolveActorDisplayName(actorId, role);
-      if (updatedByName) {
-        query.updatedByName = updatedByName;
-      }
 
-      query.activities = query.activities || [];
-      query.activities.push({
+      const activity = {
         type: LoanQueryActivityType.UPDATED,
-        description: `Policy details updated`,
+        description: "Policy details updated",
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
         actorModel: resolveActivityActorModel(role),
         payload: { updatedFields: Object.keys(policyDetails) },
         createdAt: new Date(),
+      };
+
+      const updateSet: Record<string, any> = {
+        ...(updatedByName ? { updatedByName } : {}),
+      };
+
+      Object.entries(normalizedPolicyDetails).forEach(([key, value]) => {
+        updateSet[`policyDetails.${key}`] = value;
       });
 
-      await query.save();
+      const updatedQuery = await LoanQuery.findByIdAndUpdate(
+        queryId,
+        {
+          $set: updateSet,
+          $push: {
+            activities: activity,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        },
+      )
+        .select(
+          "policyDetails updatedByName customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency",
+        )
+        .lean()
+        .exec();
 
       return res
         .status(200)
         .json(
-          new ApiResponse(200, query, "Policy details updated successfully"),
+          new ApiResponse(
+            200,
+            updatedQuery,
+            "Policy details updated successfully",
+          ),
         );
     } catch (err) {
       next(err);
@@ -2402,9 +3009,10 @@ export class LoanQueryController {
   static async reassignLander(req: Request, res: Response, next: NextFunction) {
     try {
       const { role } = (req as any).user || {};
+      const actorId = (req as any).user?._id;
       const { landerId, reason } = req.body;
+      const queryId = req.params.id;
 
-      // Only admin can reassign
       if (role !== "admin") {
         return res
           .status(403)
@@ -2415,31 +3023,36 @@ export class LoanQueryController {
         return res.status(400).json(new ApiError(400, "Lander ID is required"));
       }
 
-      const query = await LoanQuery.findById(req.params.id);
+      if (
+        !Types.ObjectId.isValid(queryId) ||
+        !Types.ObjectId.isValid(landerId)
+      ) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid query or lander id"));
+      }
+
+      const [query, lander, updatedByName] = await Promise.all([
+        LoanQuery.findById(queryId).select("assignedLander").lean().exec(),
+
+        Lander.findById(landerId).select("name email").lean().exec(),
+
+        resolveActorDisplayName(actorId, role),
+      ]);
+
       if (!query) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
 
-      const lander = await Lander.findById(landerId).select("name email");
       if (!lander) {
         return res.status(404).json(new ApiError(404, "Lander not found"));
       }
 
-      const actorId = (req as any).user?._id;
-      const previousLanderId = query.assignedLander;
-      const updatedByName = await resolveActorDisplayName(actorId, role);
+      const previousLanderId = (query as any).assignedLander;
 
-      query.assignedLander = new Types.ObjectId(landerId);
-      if (updatedByName) {
-        query.updatedByName = updatedByName;
-      }
-
-      query.activities = query.activities || [];
-      query.activities.push({
+      const activity = {
         type: LoanQueryActivityType.LANDER_ASSIGNED,
-        description: `Lander reassigned to ${lander.name}${
-          reason ? `: ${reason}` : ""
-        }`,
+        description: `Lander reassigned to ${lander.name}${reason ? `: ${reason}` : ""}`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
         actorModel: "Admin",
         payload: {
@@ -2451,25 +3064,55 @@ export class LoanQueryController {
           reason,
         },
         createdAt: new Date(),
-      });
+      };
 
-      await query.save();
+      const updatedQuery = await LoanQuery.findByIdAndUpdate(
+        queryId,
+        {
+          $set: {
+            assignedLander: new Types.ObjectId(landerId),
+            ...(updatedByName ? { updatedByName } : {}),
+          },
+          $push: {
+            activities: activity,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        },
+      )
+        .select(
+          "status updatedByName assignedLander assignedAgent assignedAgents customerId",
+        )
+        .populate("assignedLander", "name email mobile")
+        .lean()
+        .exec();
 
-      // Adjust lander loads
-      if (
-        previousLanderId &&
-        previousLanderId.toString() !== landerId.toString()
-      ) {
-        await LanderAssignmentEngine.adjustLanderLoad(previousLanderId, -1);
+      const loadUpdates: Promise<any>[] = [];
+
+      if (previousLanderId && String(previousLanderId) !== String(landerId)) {
+        loadUpdates.push(
+          LanderAssignmentEngine.adjustLanderLoad(previousLanderId, -1),
+        );
       }
-      await LanderAssignmentEngine.adjustLanderLoad(
-        new Types.ObjectId(landerId),
-        1,
-      );
+
+      if (!previousLanderId || String(previousLanderId) !== String(landerId)) {
+        loadUpdates.push(
+          LanderAssignmentEngine.adjustLanderLoad(
+            new Types.ObjectId(landerId),
+            1,
+          ),
+        );
+      }
+
+      await Promise.allSettled(loadUpdates);
 
       return res
         .status(200)
-        .json(new ApiResponse(200, query, "Lander reassigned successfully"));
+        .json(
+          new ApiResponse(200, updatedQuery, "Lander reassigned successfully"),
+        );
     } catch (err) {
       next(err);
     }
@@ -2480,9 +3123,19 @@ export class LoanQueryController {
       const { role } = (req as any).user || {};
       const actorId = (req as any).user?._id;
       const { remarks } = req.body;
+      const queryId = req.params.id;
 
-      // Only admin or assigned lander can complete a query
-      const query = await LoanQuery.findById(req.params.id);
+      if (!Types.ObjectId.isValid(queryId)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
+
+      const query = await LoanQuery.findById(queryId)
+        .select(
+          "status assignedAgent assignedAgents assignedLander customerId ownerAgency channelAgency createdBy",
+        )
+        .lean()
+        .exec();
+
       if (!query) {
         return res.status(404).json(new ApiError(404, "Loan query not found"));
       }
@@ -2498,7 +3151,6 @@ export class LoanQueryController {
           );
       }
 
-      // Check if query is in a valid state to be completed
       if (query.status === "completed") {
         return res
           .status(400)
@@ -2511,20 +3163,11 @@ export class LoanQueryController {
           .json(new ApiError(400, "Cannot complete a cancelled query"));
       }
 
-      console.log(`🏁 Completing loan query ${query._id}`);
-      console.log(`  Current status: ${query.status}`);
-      console.log(`  Completed by: ${role} (${actorId})`);
-      console.log(`  Assigned Lander: ${query.assignedLander}`);
-
       const oldStatus = query.status;
-      query.status = "completed" as any;
-      const updatedByName = await resolveActorDisplayName(actorId, role);
-      if (updatedByName) {
-        query.updatedByName = updatedByName;
-      }
 
-      query.activities = query.activities || [];
-      query.activities.push({
+      const updatedByName = await resolveActorDisplayName(actorId, role);
+
+      const activity = {
         type: LoanQueryActivityType.STATUS_CHANGED,
         description: `Query completed${remarks ? `: ${remarks}` : ""}`,
         actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
@@ -2535,28 +3178,71 @@ export class LoanQueryController {
           remarks,
         },
         createdAt: new Date(),
-      });
+      };
 
-      await query.save();
+      const updatedQuery = await LoanQuery.findOneAndUpdate(
+        {
+          _id: queryId,
+          status: { $nin: ["completed", "cancelled"] }, // prevents double complete race condition
+        },
+        {
+          $set: {
+            status: "completed",
+            ...(updatedByName ? { updatedByName } : {}),
+          },
+          $push: {
+            activities: activity,
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        },
+      )
+        .select(
+          "status updatedByName assignedAgent assignedAgents assignedLander customerId ownerAgency channelAgency",
+        )
+        .lean()
+        .exec();
 
-      // Adjust agent load - reduce by 1 for every assigned agent now that the query is completed
-      const assignedAgentIds = collectAssignedAgentIds(query);
-      await Promise.all(
-        assignedAgentIds.map((agentId) =>
-          EmployeeAssignmentEngine.adjustEmployeeLoad(agentId, -1),
-        ),
-      );
-      if (query.assignedLander) {
-        console.log(`  📉 Adjusting lander load for ${query.assignedLander}`);
-        await LanderAssignmentEngine.adjustLanderLoad(query.assignedLander, -1);
-        console.log(`  ✅ Lander load decreased`);
+      if (!updatedQuery) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Query is already completed or cancelled"));
       }
 
-      console.log(`✅ Loan query ${query._id} marked as completed`);
+      const assignedAgentIds = collectAssignedAgentIds(updatedQuery);
+
+      const loadUpdatePromises: Promise<any>[] = [];
+
+      if (assignedAgentIds.length) {
+        loadUpdatePromises.push(
+          ...assignedAgentIds.map((agentId) =>
+            EmployeeAssignmentEngine.adjustEmployeeLoad(agentId, -1),
+          ),
+        );
+      }
+
+      if (updatedQuery.assignedLander) {
+        loadUpdatePromises.push(
+          LanderAssignmentEngine.adjustLanderLoad(
+            updatedQuery.assignedLander,
+            -1,
+          ),
+        );
+      }
+
+      await Promise.allSettled(loadUpdatePromises);
 
       return res
         .status(200)
-        .json(new ApiResponse(200, query, "Loan query completed successfully"));
+        .json(
+          new ApiResponse(
+            200,
+            updatedQuery,
+            "Loan query completed successfully",
+          ),
+        );
     } catch (err) {
       next(err);
     }

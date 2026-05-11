@@ -1,18 +1,18 @@
-import { Request, Response, NextFunction } from "express";
 import { Types } from "mongoose";
 import ApiError from "../../utils/ApiError";
-import ApiResponse from "../../utils/ApiResponse";
-import { CommonService } from "../../services/common.services";
-import { CallRecord, ICallRecord } from "../../modals/callRecord.model";
 import Admin from "../../modals/admin.model";
 import Ticket from "../../modals/ticket.model";
-import { sendSingleNotification } from "../../services/notification.service";
-import { UserType } from "../../modals/notification.model";
-import { Gender, User, UserStatus } from "../../modals/user.model";
+import ApiResponse from "../../utils/ApiResponse";
 import { LoanQuery } from "../../modals/loanquery.model";
+import { Request, Response, NextFunction } from "express";
+import { UserType } from "../../modals/notification.model";
+import { CommonService } from "../../services/common.services";
+import { Gender, User, UserStatus } from "../../modals/user.model";
+import { CallRecord, ICallRecord } from "../../modals/callRecord.model";
+import { sendSingleNotification } from "../../services/notification.service";
 import {
-  InsuranceQuery,
   InsuranceType,
+  InsuranceQuery,
   InsuranceQueryActivityType,
   ApplicationStatus as InsuranceApplicationStatus,
 } from "../../modals/insurancequery.model";
@@ -21,13 +21,13 @@ import Lead, { LeadConnectorType } from "../../modals/lead.model";
 import { leadManagementService } from "../../services/leadManagement.service";
 import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
 import {
-  getLoanTypeMatchValues,
   normalizeLoanType,
+  getLoanTypeMatchValues,
 } from "../../utils/loanType";
 import {
-  DEFAULT_QUERY_TIMEZONE,
-  formatDateInTimeZone,
   parseDateInTimeZone,
+  formatDateInTimeZone,
+  DEFAULT_QUERY_TIMEZONE,
 } from "../../utils/helper";
 
 const CallRecordService = new CommonService<ICallRecord>(CallRecord as any);
@@ -96,6 +96,78 @@ const normalizeObjectIdArray = (value: any): Types.ObjectId[] => {
       return new Types.ObjectId(id);
     })
     .filter((item): item is Types.ObjectId => Boolean(item));
+};
+
+const normalizeEmploymentTypeForCallRecord = (value: any) => {
+  const key = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  if (key === "salaried" || key === "salary") return "salaried";
+  if (
+    [
+      "selfemployedprofessional",
+      "selfemployedpro",
+      "selfprofessional",
+    ].includes(key)
+  ) {
+    return "self_employed_professional";
+  }
+  if (
+    [
+      "selfemployednonprofessional",
+      "selfemployednonpro",
+      "selfnonprofessional",
+      "selfemployed",
+    ].includes(key)
+  ) {
+    return "self_employed_non_professional";
+  }
+  return key;
+};
+
+const sanitizeCallRecordPayload = (payload: Record<string, any>) => {
+  const next = { ...payload };
+  const employmentType = normalizeEmploymentTypeForCallRecord(
+    next.employmentType,
+  );
+
+  const sharedFields = [
+    "businessType",
+    "coApplicantType",
+    "totalVintage",
+    "currentVintage",
+    "btBankName",
+  ];
+  const nonProfessionalOnlyFields = ["natureOfBusiness", "gstTurnover"];
+  const professionalOnlyFields = ["natureOfProfession", "totalReceipts"];
+
+  const clearFields = (fields: string[]) => {
+    fields.forEach((field) => {
+      delete next[field];
+    });
+  };
+
+  if (employmentType === "salaried") {
+    clearFields([
+      ...sharedFields,
+      ...nonProfessionalOnlyFields,
+      ...professionalOnlyFields,
+    ]);
+    return next;
+  }
+
+  if (employmentType === "self_employed_non_professional") {
+    clearFields(professionalOnlyFields);
+    return next;
+  }
+
+  if (employmentType === "self_employed_professional") {
+    clearFields(nonProfessionalOnlyFields);
+    return next;
+  }
+
+  return next;
 };
 
 const resolveAdminDisplayName = async (adminId?: string) => {
@@ -602,7 +674,9 @@ const createLoanQueryFromCallRecord = async (
 
     const existingByContact = await LoanQuery.findOne({
       loanType,
-      status: { $nin: ["completed", "approved", "cancelled"] },
+      status: {
+        $nin: ["completed", "completed_success", "approved", "cancelled"],
+      },
       ...(primaryAssigneeId ? { assignedAgent: primaryAssigneeId } : {}),
       $or: [
         { mobile: { $regex: searchPhone, $options: "i" } },
@@ -667,7 +741,9 @@ const createLoanQueryFromCallRecord = async (
     const existingQuery = await LoanQuery.findOne({
       customerId: user._id,
       loanType: loanType,
-      status: { $nin: ["completed", "approved", "cancelled"] },
+      status: {
+        $nin: ["completed", "completed_success", "approved", "cancelled"],
+      },
       ...(primaryAssigneeId ? { assignedAgent: primaryAssigneeId } : {}),
     });
 
@@ -745,7 +821,7 @@ const createLoanQueryFromCallRecord = async (
       normalizedLoanContext.monthlyIncome ??
         callRecord.monthlySalary ??
         lead?.monthlyIncome ??
-        resolvedLoanAmountValue,
+        0,
     );
     const resolvedCompanyName =
       String(
@@ -814,7 +890,7 @@ const createLoanQueryFromCallRecord = async (
       String(normalizedLoanContext.marriedStatus || "not_specified").trim() ||
       "not_specified";
     const resolvedPan =
-      String(normalizedLoanContext.panNumber || "NA")
+      String(normalizedLoanContext.panNumber || callRecord.panNumber || "NA")
         .trim()
         .toUpperCase() || "NA";
     const resolvedAadhaar =
@@ -827,6 +903,21 @@ const createLoanQueryFromCallRecord = async (
       loanType: resolvedLoanType,
       status: "draft",
       loanAmount: resolvedLoanAmountValue,
+      disbursedAmount: Number.isFinite(
+        Number(
+          normalizedLoanContext.disbursedAmount ?? callRecord.disbursedAmount,
+        ),
+      )
+        ? Number(
+            normalizedLoanContext.disbursedAmount ?? callRecord.disbursedAmount,
+          )
+        : undefined,
+      disbursedDate:
+        normalizedLoanContext.disbursedDate || callRecord.disbursedDate
+          ? new Date(
+              normalizedLoanContext.disbursedDate || callRecord.disbursedDate,
+            )
+          : undefined,
       firstName,
       lastName,
       dateOfBirth: Number.isNaN(resolvedDob.getTime())
@@ -1400,7 +1491,7 @@ export class CallRecordController {
   static async create(req: Request | any, res: Response, next: NextFunction) {
     try {
       const adminId = req.user?._id;
-      const payload: any = { ...req.body };
+      const payload: any = sanitizeCallRecordPayload({ ...req.body });
 
       if (!payload.phoneNumber) {
         return res
@@ -1449,6 +1540,12 @@ export class CallRecordController {
         const inquiryProduct = String(payload.productService || "").trim();
         const inquiryLoanAmount = Number(payload.loanAmount);
         const inquiryMonthlySalary = Number(payload.monthlySalary);
+        const inquiryPanNumber = String(payload.panNumber || "").trim();
+        const inquiryEmploymentType = String(
+          payload.employmentType || "",
+        )
+          .trim()
+          .toLowerCase();
         if (!inquiryProduct) {
           return res
             .status(400)
@@ -1456,6 +1553,16 @@ export class CallRecordController {
               new ApiError(
                 400,
                 "Product/Service is required when inquiry creation is enabled",
+              ),
+            );
+        }
+        if (!inquiryEmploymentType) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                "Income type is required when inquiry creation is enabled",
               ),
             );
         }
@@ -1479,16 +1586,26 @@ export class CallRecordController {
               ),
             );
         }
+        if (!inquiryPanNumber) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                "PAN Card is required when inquiry creation is enabled",
+              ),
+            );
+        }
         if (
-          !Number.isFinite(inquiryMonthlySalary) ||
-          inquiryMonthlySalary <= 0
+          inquiryEmploymentType === "salaried" &&
+          (!Number.isFinite(inquiryMonthlySalary) || inquiryMonthlySalary <= 0)
         ) {
           return res
             .status(400)
             .json(
               new ApiError(
                 400,
-                "Monthly salary is required when inquiry creation is enabled",
+                "Monthly income is required for salaried inquiry creation",
               ),
             );
         }
@@ -1590,7 +1707,21 @@ export class CallRecordController {
         }
       }
 
-      if (payload.callbackAt || finalRecord?.loanQueryId) {
+      const linkedLoanQueryId =
+        payload?.loanContext?.queryId ||
+        payload?.loanContext?.loanQueryId ||
+        result?.loanQueryId;
+      if (linkedLoanQueryId) {
+        await CallRecord.findByIdAndUpdate(finalRecord?._id || result._id, {
+          $set: {
+            loanQueryId: linkedLoanQueryId,
+            loanQueryCreatedAt: result?.loanQueryCreatedAt || new Date(),
+            followUp: true,
+          },
+        });
+      }
+
+      if (payload.callbackAt || finalRecord?.loanQueryId || linkedLoanQueryId) {
         finalRecord = await CallRecord.findByIdAndUpdate(
           finalRecord?._id || result._id,
           { $set: { followUp: true } },
@@ -1957,7 +2088,7 @@ export class CallRecordController {
           "",
       ).trim();
 
-      const updateBody = { ...req.body };
+      const updateBody = sanitizeCallRecordPayload({ ...req.body });
       delete (updateBody as any).followUpNote;
       delete (updateBody as any).followUpClosingRemark;
       delete (updateBody as any).followUpRemark;
@@ -2016,6 +2147,14 @@ export class CallRecordController {
         const inquiryMonthlySalary = Number(
           updates.monthlySalary ?? record.monthlySalary ?? 0,
         );
+        const inquiryPanNumber = String(
+          updates.panNumber || record.panNumber || "",
+        ).trim();
+        const inquiryEmploymentType = String(
+          updates.employmentType || record.employmentType || "",
+        )
+          .trim()
+          .toLowerCase();
         const inquiryAssignee =
           updates.assignee || updates.assignees?.[0] || previousAssignee;
 
@@ -2049,16 +2188,36 @@ export class CallRecordController {
               ),
             );
         }
+        if (!inquiryEmploymentType) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                "Income type is required when inquiry creation is enabled",
+              ),
+            );
+        }
+        if (!inquiryPanNumber) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                "PAN Card is required when inquiry creation is enabled",
+              ),
+            );
+        }
         if (
-          !Number.isFinite(inquiryMonthlySalary) ||
-          inquiryMonthlySalary <= 0
+          inquiryEmploymentType === "salaried" &&
+          (!Number.isFinite(inquiryMonthlySalary) || inquiryMonthlySalary <= 0)
         ) {
           return res
             .status(400)
             .json(
               new ApiError(
                 400,
-                "Monthly salary is required when inquiry creation is enabled",
+                "Monthly income is required for salaried inquiry creation",
               ),
             );
         }
@@ -2140,6 +2299,65 @@ export class CallRecordController {
           .status(404)
           .json(new ApiError(404, "Failed to update call record"));
       let finalRecord: any = result;
+      const linkedLoanQueryIdFromContext =
+        req.body?.loanContext?.queryId || req.body?.loanContext?.loanQueryId;
+
+      if (linkedLoanQueryIdFromContext) {
+        if (
+          !result?.loanQueryId ||
+          String(result.loanQueryId) !== String(linkedLoanQueryIdFromContext)
+        ) {
+          finalRecord = await CallRecord.findByIdAndUpdate(
+            req.params.id,
+            {
+              $set: {
+                loanQueryId: linkedLoanQueryIdFromContext,
+                loanQueryCreatedAt:
+                  result?.loanQueryCreatedAt ||
+                  record?.loanQueryCreatedAt ||
+                  new Date(),
+                followUp: true,
+              },
+            },
+            { new: true },
+          );
+        }
+      }
+
+      console.log("--------------------------");
+
+      // Propagate disbursed fields from CallRecord -> linked LoanQuery
+      const shouldPropagateDisbursed =
+        Object.prototype.hasOwnProperty.call(updateBody, "disbursedAmount") ||
+        Object.prototype.hasOwnProperty.call(updateBody, "disbursedDate");
+
+      if (shouldPropagateDisbursed) {
+        const loanQueryId = result?.loanQueryId || record?.loanQueryId;
+        if (loanQueryId) {
+          const loanQueryUpdatePayload: Record<string, any> = {};
+          if (
+            Object.prototype.hasOwnProperty.call(updateBody, "disbursedAmount")
+          ) {
+            if (updates.disbursedAmount !== undefined) {
+              loanQueryUpdatePayload.disbursedAmount = updates.disbursedAmount;
+            }
+          }
+          if (
+            Object.prototype.hasOwnProperty.call(updateBody, "disbursedDate")
+          ) {
+            if (updates.disbursedDate !== undefined) {
+              loanQueryUpdatePayload.disbursedDate = updates.disbursedDate;
+            }
+          }
+
+          // Only update fields that were actually sent.
+          if (Object.keys(loanQueryUpdatePayload).length > 0) {
+            await LoanQuery.findByIdAndUpdate(loanQueryId, {
+              $set: loanQueryUpdatePayload,
+            });
+          }
+        }
+      }
 
       if (incomingAssignee && incomingAssignee !== previousAssignee) {
         await notifyAssignee(req, result, incomingAssignee);
@@ -2169,6 +2387,40 @@ export class CallRecordController {
             updatePayload.loanQueryId = createdInquiry._id;
             updatePayload.loanQueryCreatedAt =
               createdInquiry.createdAt || new Date();
+
+            // If disbursed was updated on the CallRecord in this same request,
+            // ensure the newly created LoanQuery reflects it.
+            if (
+              Object.prototype.hasOwnProperty.call(
+                updateBody,
+                "disbursedAmount",
+              ) ||
+              Object.prototype.hasOwnProperty.call(updateBody, "disbursedDate")
+            ) {
+              const loanQueryUpdatePayload: Record<string, any> = {};
+              if (
+                Object.prototype.hasOwnProperty.call(
+                  updateBody,
+                  "disbursedAmount",
+                )
+              ) {
+                loanQueryUpdatePayload.disbursedAmount =
+                  updates.disbursedAmount ?? undefined;
+              }
+              if (
+                Object.prototype.hasOwnProperty.call(
+                  updateBody,
+                  "disbursedDate",
+                )
+              ) {
+                loanQueryUpdatePayload.disbursedDate =
+                  updates.disbursedDate ?? undefined;
+              }
+
+              await LoanQuery.findByIdAndUpdate(createdInquiry._id, {
+                $set: loanQueryUpdatePayload,
+              });
+            }
           } else if ((createdInquiry as any).typeOfInsurance) {
             updatePayload.insuranceQueryId = createdInquiry._id;
             updatePayload.insuranceQueryCreatedAt =
@@ -2183,6 +2435,7 @@ export class CallRecordController {
             inquiryType,
             req.params.id,
           );
+          finalRecord = await CallRecord.findById(req.params.id);
         }
       }
 

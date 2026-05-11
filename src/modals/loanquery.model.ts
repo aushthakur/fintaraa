@@ -1,7 +1,7 @@
-import mongoose, { Schema, Document, Types } from "mongoose";
 import { Gender } from "./user.model";
-import { ApplicationStatus } from "./insurancequery.model";
 import { generateLoanId } from "../utils/loanId";
+import { ApplicationStatus } from "./insurancequery.model";
+import mongoose, { Schema, Document, Types } from "mongoose";
 
 export enum AllowedDocumentType {
   PAN_CARD = "pan_card",
@@ -201,6 +201,8 @@ export interface ILoanQuery extends Document {
   loanId?: string;
   // Personal Details
   loanAmount: number;
+  disbursedAmount?: number;
+  disbursedDate?: Date;
   firstName: string;
   lastName: string;
   dateOfBirth: Date;
@@ -276,6 +278,8 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     },
     // Personal Details
     loanAmount: { type: Number, required: true },
+    disbursedAmount: { type: Number },
+    disbursedDate: { type: Date },
     firstName: { type: String, required: true, trim: true },
     lastName: { type: String, required: true, trim: true },
     dateOfBirth: { type: Date, required: true },

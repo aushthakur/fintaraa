@@ -6,6 +6,7 @@ import { CommonService } from "../../services/common.services";
 import { EligibilityCriteria } from "../../modals/eligibilityCriteria.model";
 import { LoanQuery } from "../../modals/loanquery.model";
 import { createMailOptions, transporter } from "../../config/nodeMailerConfig";
+import { checkEligibilityMailAccess } from "../eligibilityMailPermission/eligibilityMailPermission.utils";
 
 const EligibilityCriteriaService = new CommonService(EligibilityCriteria);
 const formatValue = (value: any) => {
@@ -262,9 +263,10 @@ export class EligibilityCriteriaController {
 
   static async updateById(req: Request, res: Response, next: NextFunction) {
     try {
+      const payload = req.body || {};
       const result = await EligibilityCriteriaService.updateById(
         req.params.id,
-        req.body,
+        payload,
       );
       if (!result) {
         return res
@@ -348,6 +350,32 @@ export class EligibilityCriteriaController {
 
         if (loanQuery?.customerId?.cibilScore) {
           loanQuery.customerCibilScore = loanQuery.customerId.cibilScore;
+        }
+      }
+
+      if (recipientType === "rm") {
+        if (!queryId) {
+          return res
+            .status(400)
+            .json(new ApiError(400, "queryId is required for RM dispatch"));
+        }
+
+        const access = await checkEligibilityMailAccess({
+          userId: (req as any)?.user?._id,
+          userRole: (req as any)?.user?.role,
+          queryType: "loan",
+          loanType: loanQuery?.loanType,
+        });
+
+        if (!access.allowed) {
+          return res
+            .status(403)
+            .json(
+              new ApiError(
+                403,
+                access.reason || "You do not have access to send this eligibility email",
+              ),
+            );
         }
       }
 

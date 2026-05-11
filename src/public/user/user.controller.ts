@@ -889,6 +889,7 @@ export class UserController {
       const { _id: actorId, role } = req.user || {};
       const targetUserId = String(req.params?.id || "").trim();
       const docType = String(req.params?.docType || "").trim();
+      const fileUrl = String(req.body?.fileUrl || "").trim();
 
       if (!targetUserId) {
         return res
@@ -912,12 +913,16 @@ export class UserController {
       const currentVaultDocs =
         JSON.parse(JSON.stringify(user.digiLockerVault?.documents || [])) || [];
       const nextVaultDocs = currentVaultDocs.filter(
-        (doc: any) => doc?.docType !== docType,
+        (doc: any) =>
+          doc?.docType !== docType ||
+          (fileUrl && String(doc?.fileUrl || "").trim() !== fileUrl),
       );
       const currentKyc: IKycProfile =
         JSON.parse(JSON.stringify(user.kycProfile || {})) || {};
       const nextKycDocs = (currentKyc.documents || []).filter(
-        (doc: any) => doc?.docType !== docType,
+        (doc: any) =>
+          doc?.docType !== docType ||
+          (fileUrl && String(doc?.fileUrl || "").trim() !== fileUrl),
       );
 
       const updatedUser = await userService.updateById(

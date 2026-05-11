@@ -25,7 +25,15 @@ export interface IEligibilityCriteria extends Document {
   gstYears?: number;
   bankingYears?: number;
   rentalIncomeType?: string;
+  businessProgramFresh?: string;
+  gstAmount?: number;
+  bankingAmount?: number;
+  itrAmount?: number;
+  nipPdBaseAmount?: number;
+  btEmiMultiplier?: number;
+  foirAsPerReceipts?: string;
   propertyCategory?: string;
+  propertyType?: string;
   programs?: string[];
   cashProfit?: number;
   lowLtv?: number;
@@ -37,6 +45,8 @@ export interface IEligibilityCriteria extends Document {
   businessAge?: number;
   currentExperience?: number;
   totalExperience?: number;
+  totalVintage?: number;
+  currentVintage?: number;
   salaryAmount?: number;
   salaryMode?: string;
   salarySlip?: string;
@@ -49,6 +59,21 @@ export interface IEligibilityCriteria extends Document {
   netProfit?: number;
   cibilScoreWithCall?: number;
   cibilCriteria?: string;
+  empAge?: string;
+  loanTenure?: string;
+  emiAmount?: number;
+  loginFees?: number;
+  processingFees?: number;
+  legalValuation?: string;
+  insurance?: string;
+  businessType?: string;
+  natureOfBusiness?: string;
+  natureOfProfession?: string;
+  gstTurnover?: number;
+  receiptsAmount?: number;
+  totalReceipts?: number;
+  coApplicantType?: string;
+  btBankName?: string;
   catAApproved?: boolean;
   catBSemiApproved?: boolean;
   catCUnapproved?: boolean;
@@ -89,7 +114,15 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     gstYears: { type: Number },
     bankingYears: { type: Number },
     rentalIncomeType: { type: String, trim: true },
+    businessProgramFresh: { type: String, trim: true },
+    gstAmount: { type: Number },
+    bankingAmount: { type: Number },
+    itrAmount: { type: Number },
+    nipPdBaseAmount: { type: Number },
+    btEmiMultiplier: { type: Number },
+    foirAsPerReceipts: { type: String, trim: true },
     propertyCategory: { type: String, trim: true },
+    propertyType: { type: String, trim: true },
     programs: [{ type: String, trim: true }],
     cashProfit: { type: Number },
     lowLtv: { type: Number },
@@ -101,6 +134,8 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     businessAge: { type: Number },
     currentExperience: { type: Number },
     totalExperience: { type: Number },
+    totalVintage: { type: Number },
+    currentVintage: { type: Number },
     salaryAmount: { type: Number },
     salaryMode: { type: String, trim: true },
     salarySlip: { type: String, trim: true },
@@ -113,6 +148,21 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     netProfit: { type: Number },
     cibilScoreWithCall: { type: Number },
     cibilCriteria: { type: String, trim: true },
+    empAge: { type: String, trim: true },
+    loanTenure: { type: String, trim: true },
+    emiAmount: { type: Number },
+    loginFees: { type: Number },
+    processingFees: { type: Number },
+    legalValuation: { type: String, trim: true },
+    insurance: { type: String, trim: true },
+    businessType: { type: String, trim: true },
+    natureOfBusiness: { type: String, trim: true },
+    natureOfProfession: { type: String, trim: true },
+    gstTurnover: { type: Number },
+    receiptsAmount: { type: Number },
+    totalReceipts: { type: Number },
+    coApplicantType: { type: String, trim: true },
+    btBankName: { type: String, trim: true },
     catAApproved: { type: Boolean },
     catBSemiApproved: { type: Boolean },
     catCUnapproved: { type: Boolean },

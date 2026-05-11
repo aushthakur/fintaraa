@@ -17,6 +17,19 @@ export interface ICallRecord extends Document {
   productService?: string;
   loanAmount?: number;
   monthlySalary?: number;
+  panNumber?: string;
+  employmentType?: string;
+  businessType?: string;
+  natureOfBusiness?: string;
+  natureOfProfession?: string;
+  gstTurnover?: number;
+  totalReceipts?: number;
+  coApplicantType?: string;
+  totalVintage?: number;
+  currentVintage?: number;
+  btBankName?: string;
+  disbursedAmount?: number;
+  disbursedDate?: Date;
   callbackAt?: Date;
   callbackNotifiedAt?: Date;
   leadStatus?: string;
@@ -92,6 +105,19 @@ const CallRecordSchema = new Schema<ICallRecord>(
     productService: { type: String, trim: true },
     loanAmount: { type: Number },
     monthlySalary: { type: Number },
+    panNumber: { type: String, trim: true, uppercase: true },
+    employmentType: { type: String, trim: true },
+    businessType: { type: String, trim: true },
+    natureOfBusiness: { type: String, trim: true },
+    natureOfProfession: { type: String, trim: true },
+    gstTurnover: { type: Number },
+    totalReceipts: { type: Number },
+    coApplicantType: { type: String, trim: true },
+    totalVintage: { type: Number },
+    currentVintage: { type: Number },
+    btBankName: { type: String, trim: true },
+    disbursedAmount: { type: Number },
+    disbursedDate: { type: Date },
     callbackAt: { type: Date },
     callbackNotifiedAt: { type: Date },
     leadStatus: { type: String, trim: true },
