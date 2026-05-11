@@ -273,10 +273,12 @@ export class AgencyEarningsService {
 
     const monthlyIncome = toNumber(query?.monthlyIncome);
     const cibilScore = toNumber(query?.cibilScore || query?.policyDetails?.cibilScore);
+    const legacyCibilScore = (criteria as any)?.cibilScoreWithCall;
     const salaryOk =
-      !criteria.salaryAmount || monthlyIncome >= toNumber(criteria.salaryAmount);
+      !criteria.netSalary || monthlyIncome >= toNumber(criteria.netSalary);
     const cibilOk =
-      !criteria.cibilScoreWithCall || cibilScore >= toNumber(criteria.cibilScoreWithCall);
+      !(criteria.cibilScore ?? legacyCibilScore) ||
+      cibilScore >= toNumber(criteria.cibilScore ?? legacyCibilScore);
 
     return {
       eligibilityCriteriaId: criteria._id,

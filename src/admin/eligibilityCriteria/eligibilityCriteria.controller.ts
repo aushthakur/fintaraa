@@ -9,6 +9,132 @@ import { createMailOptions, transporter } from "../../config/nodeMailerConfig";
 import { checkEligibilityMailAccess } from "../eligibilityMailPermission/eligibilityMailPermission.utils";
 
 const EligibilityCriteriaService = new CommonService(EligibilityCriteria);
+
+const ELIGIBILITY_BASE_FIELDS = [
+  "loanType",
+  "bankName",
+  "salaryType",
+  "rm",
+  "rmMailId",
+  "rmMbNo",
+  "asm",
+  "asmMailId",
+  "asmMbNo",
+  "zsm",
+  "zsmMailId",
+  "zsmMbNo",
+  "remarks",
+  "status",
+  "commissionType",
+  "commissionValue",
+  "commissionMinAmount",
+  "commissionMaxAmount",
+  "commissionCapAmount",
+] as const;
+
+const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
+  salaried: [
+    "cibilScore",
+    "itrYears",
+    "totalExperience",
+    "currentExperience",
+    "netSalary",
+    "currentTotalEmi",
+    "companyCategory",
+  ],
+  selfemployed: [
+    "cibilScore",
+    "itrYears",
+    "totalVintage",
+    "currentVintage",
+    "businessProgramFresh",
+    "gstAmount",
+    "bankingAmount",
+    "itrAmount",
+    "nipPdBase",
+    "lowLtv",
+  ],
+  selfemployedprofessional: [
+    "cibilScore",
+    "itrYears",
+    "totalVintage",
+    "currentVintage",
+    "businessProgramFresh",
+    "receiptsAmount",
+    "bankingAmount",
+    "itrAmount",
+    "nipPdBase",
+    "lowLtv",
+  ],
+};
+
+const normalizeEligibilitySalaryType = (value?: any) => {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+  if (!raw) return "";
+  if (raw === "salaried" || raw === "salary") return "Salaried";
+  if (
+    [
+      "selfemployedprofessional",
+      "selfemployedpro",
+      "selfprofessional",
+    ].includes(raw)
+  ) {
+    return "Self Employed Professional";
+  }
+  if (
+    [
+      "selfemployed",
+      "selfemployednonprofessional",
+      "selfemployednonpro",
+      "selfnonprofessional",
+    ].includes(raw)
+  ) {
+    return "Self Employed";
+  }
+  return String(value || "").trim();
+};
+
+const getEligibilityFieldGroupKey = (salaryType?: any) => {
+  const normalized = normalizeEligibilitySalaryType(salaryType)
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+
+  if (normalized === "salaried") return "salaried";
+  if (normalized === "selfemployedprofessional") {
+    return "selfemployedprofessional";
+  }
+  if (normalized === "selfemployed") return "selfemployed";
+  return "";
+};
+
+const sanitizeEligibilityPayload = (payload: Record<string, any>) => {
+  const normalizedSalaryType = normalizeEligibilitySalaryType(payload.salaryType);
+  const fieldGroupKey = getEligibilityFieldGroupKey(normalizedSalaryType);
+  const allowedFields = new Set([
+    ...ELIGIBILITY_BASE_FIELDS,
+    ...(ELIGIBILITY_FIELDS_BY_SALARY_TYPE[fieldGroupKey] || []),
+  ]);
+
+  const normalizedPayload = {
+    ...payload,
+    salaryType: normalizedSalaryType,
+    cibilScore: payload.cibilScore ?? payload.cibilScoreWithCall,
+    nipPdBase: payload.nipPdBase ?? payload.nipPdBaseAmount,
+    status: String(payload.status || "").trim().toLowerCase(),
+  };
+
+  return Object.fromEntries(
+    Object.entries(normalizedPayload).filter(([key, value]) => {
+      if (!allowedFields.has(key as any)) return false;
+      return value !== undefined;
+    }),
+  );
+};
+
 const formatValue = (value: any) => {
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "boolean") return value ? "Yes" : "No";
@@ -75,7 +201,9 @@ const buildEligibilityMailHtml = (
       const rmName = formatValue(criteria.rm);
       const rmMailId = formatValue(criteria.rmMailId);
       const salaryType = formatValue(criteria.salaryType);
-      const score = formatValue(criteria.cibilScoreWithCall);
+      const score = formatValue(
+        criteria.cibilScore ?? criteria.cibilScoreWithCall,
+      );
       return `
         <tr>
           <td style="padding:6px 10px;border:1px solid #e2e8f0;font-weight:600;">${bankName}</td>
@@ -216,7 +344,7 @@ const fetchDocumentAttachment = async (
 export class EligibilityCriteriaController {
   static async create(req: Request, res: Response, next: NextFunction) {
     try {
-      const payload = req.body || {};
+      const payload = sanitizeEligibilityPayload(req.body || {});
       const result = await EligibilityCriteriaService.create(payload);
       if (!result) {
         return res
@@ -263,7 +391,7 @@ export class EligibilityCriteriaController {
 
   static async updateById(req: Request, res: Response, next: NextFunction) {
     try {
-      const payload = req.body || {};
+      const payload = sanitizeEligibilityPayload(req.body || {});
       const result = await EligibilityCriteriaService.updateById(
         req.params.id,
         payload,

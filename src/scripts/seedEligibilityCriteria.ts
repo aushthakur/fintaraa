@@ -39,13 +39,10 @@ const bankNames = [
 ];
 
 const salaryTypes = [
-  "salaried",
-  "self_employed",
-  "self_employed_professional",
-  "self_employed_non_professional",
+  "Salaried",
+  "Self Employed",
+  "Self Employed Professional",
 ];
-
-const propertyTypes = ["Residential", "Commercial", "NA"];
 
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
 const rand = (min: number, max: number) =>
@@ -53,64 +50,40 @@ const rand = (min: number, max: number) =>
 
 const buildSeed = (idx: number) => {
   const salaryType = pick(salaryTypes);
-  const minIncome = salaryType === "salaried" ? 30000 : 50000;
-  const maxIncome = salaryType === "salaried" ? 120000 : 250000;
+  const minIncome = salaryType === "Salaried" ? 30000 : 50000;
+  const maxIncome = salaryType === "Salaried" ? 120000 : 250000;
   const grossIncome = rand(minIncome, maxIncome);
   const netIncome = Math.round(grossIncome * 0.85);
-  const loanAmount = rand(200000, 2500000);
-  const tenure = rand(12, 84);
-  const roi = Number((rand(10, 24) + Math.random()).toFixed(2));
-  const emi = Math.round(loanAmount / tenure + (loanAmount * roi) / 1200);
+  const companyCategories = ["CAT A", "CAT B", "CAT C"];
 
   return {
     loanType: loanTypes[idx % loanTypes.length],
     bankName: bankNames[idx % bankNames.length],
     salaryType,
-    itrWithFinancial: idx % 2 === 0 ? "Yes" : "No",
-    gstProgram: idx % 3 === 0 ? "Yes" : "No",
-    selfEmp: salaryType !== "salaried" ? rand(1, 10) : 0,
-    salaryEmp: salaryType === "salaried" ? rand(50, 500) : 0,
-    cashProfit: rand(20000, 200000),
-    lowLtv: rand(60, 90),
+    cibilScore: rand(650, 820),
     itrYears: rand(1, 3),
-    gstYears: rand(1, 2),
-    bankingYears: rand(1, 5),
-    rentalIncomeType: pick(["Cash", "Mixed", "Banking"]),
-    propertyCategory: pick(["CAT A", "CAT B", "CAT C"]),
-    programs: [pick(["NIP", "GST", "LTV"])],
-    bankAmount: loanAmount,
-    bankingSurrogate: idx % 2 === 0 ? "Yes" : "No",
-    companyListed: idx % 4 === 0 ? "Yes" : "No",
-    foir: rand(30, 60),
-    minimumVintage: rand(6, 36),
-    businessAge: rand(1, 15),
-    grossIncome,
-    currentExperience: rand(1, 10),
-    totalExperience: rand(2, 20),
-    salaryAmount: grossIncome,
-    currentTotalEmi: rand(2000, 25000),
-    netIncome,
-    cibilScoreWithCall: rand(650, 820),
-    catAApproved: idx % 3 === 0,
-    catBSemiApproved: idx % 3 === 1,
-    catCUnapproved: idx % 3 === 2,
-    empAge: rand(21, 60),
-    loanTenure: tenure,
-    rateOfInterest: roi,
-    emiAmount: emi,
-    loginFees: rand(0, 5000),
-    processingFees: rand(1000, 15000),
-    legalValuation: rand(0, 10000),
-    insurance: rand(0, 8000),
+    totalExperience: salaryType === "Salaried" ? rand(2, 20) : undefined,
+    currentExperience: salaryType === "Salaried" ? rand(1, 10) : undefined,
+    netSalary: salaryType === "Salaried" ? netIncome : undefined,
+    currentTotalEmi: salaryType === "Salaried" ? rand(2000, 25000) : undefined,
+    companyCategory:
+      salaryType === "Salaried" ? pick(companyCategories) : undefined,
+    totalVintage: salaryType !== "Salaried" ? rand(1, 15) : undefined,
+    currentVintage: salaryType !== "Salaried" ? rand(1, 10) : undefined,
+    businessProgramFresh: salaryType !== "Salaried" ? pick(["Yes", "No"]) : undefined,
+    gstAmount: salaryType === "Self Employed" ? rand(50000, 500000) : undefined,
+    receiptsAmount:
+      salaryType === "Self Employed Professional"
+        ? rand(50000, 500000)
+        : undefined,
+    bankingAmount: salaryType !== "Salaried" ? rand(50000, 500000) : undefined,
+    itrAmount: salaryType !== "Salaried" ? rand(50000, 500000) : undefined,
+    nipPdBase: salaryType !== "Salaried" ? rand(50000, 500000) : undefined,
+    lowLtv: rand(60, 90),
     rm: `RM ${idx + 1}`,
     rmMailId: `rm${idx + 1}@fintara.test`,
-    rmMbNo: `98${rand(10000000, 99999999)}`,
-    asm: `ASM ${idx + 1}`,
-    asmMailId: `asm${idx + 1}@fintara.test`,
-    asmMbNo: `97${rand(10000000, 99999999)}`,
     zsm: `ZSM ${idx + 1}`,
     zsmMailId: `zsm${idx + 1}@fintara.test`,
-    zsmMbNo: `96${rand(10000000, 99999999)}`,
     status:
       idx % 4 === 0
         ? EligibilityCriteriaStatus.INACTIVE
