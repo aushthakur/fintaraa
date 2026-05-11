@@ -77,6 +77,11 @@ export const BankDetailsSchema = new Schema(
     accountHolderName: String,
     cancelledChequeUrl: { type: String, trim: true },
     verified: { type: Boolean, default: false },
+    verificationStatus: { type: String, trim: true },
+    verificationMessage: { type: String, trim: true },
+    verificationReferenceId: { type: String, trim: true },
+    verificationUtr: { type: String, trim: true },
+    verifiedAt: { type: Date },
   },
   { _id: false },
 );

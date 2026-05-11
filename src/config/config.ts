@@ -31,6 +31,17 @@ export const config = {
       cibilPdf: "/api/v1/credit-report-cibil/fetch-report-pdf",
       rcV2: "/api/v1/rc/rc-v2",
       mobileToPan: "/api/v1/pan/mobile-to-pan",
+      panComprehensive:
+        process.env.SUREPASS_PAN_COMPREHENSIVE_ENDPOINT ||
+        "/api/v1/pan/pan-comprehensive",
+      panToAadhaar:
+        process.env.SUREPASS_PAN_TO_AADHAAR_ENDPOINT ||
+        "/api/v1/pan/pan-to-aadhaar",
+      gstin:
+        process.env.SUREPASS_GSTIN_ENDPOINT || "/api/v1/corporate/gstin",
+      pennyDrop:
+        process.env.SUREPASS_PENNY_DROP_ENDPOINT ||
+        "/api/v1/bank-verification/penny-drop",
     },
   },
 

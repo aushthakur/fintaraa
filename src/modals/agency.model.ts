@@ -40,6 +40,39 @@ export interface IAgency extends Document {
   rmName?: string;
   rmMobile?: string;
   bankDetails?: typeof BankDetailsSchema;
+  verificationRecords?: {
+    pan?: {
+      number?: string;
+      verified?: boolean;
+      status?: string;
+      message?: string;
+      referenceId?: string;
+      linkedAadhaarMasked?: string;
+      legalName?: string;
+      verifiedAt?: Date;
+      raw?: Record<string, any>;
+    };
+    aadhaar?: {
+      number?: string;
+      verified?: boolean;
+      status?: string;
+      message?: string;
+      referenceId?: string;
+      verifiedAt?: Date;
+      raw?: Record<string, any>;
+    };
+    gst?: {
+      number?: string;
+      verified?: boolean;
+      status?: string;
+      message?: string;
+      referenceId?: string;
+      legalName?: string;
+      tradeName?: string;
+      verifiedAt?: Date;
+      raw?: Record<string, any>;
+    };
+  };
   addresses?: Types.DocumentArray<typeof AddressSchema>;
   kycProfile?: typeof KycProfileSchema;
   digiLockerVault?: IDigiLockerVault;
@@ -108,6 +141,39 @@ const AgencySchema = new Schema<IAgency>(
     rmMobile: { type: String, trim: true },
     agentProfileCompleted: { type: Boolean, default: false },
     bankDetails: { type: BankDetailsSchema },
+    verificationRecords: {
+      pan: {
+        number: { type: String, trim: true },
+        verified: { type: Boolean, default: false },
+        status: { type: String, trim: true },
+        message: { type: String, trim: true },
+        referenceId: { type: String, trim: true },
+        linkedAadhaarMasked: { type: String, trim: true },
+        legalName: { type: String, trim: true },
+        verifiedAt: { type: Date },
+        raw: { type: Object },
+      },
+      aadhaar: {
+        number: { type: String, trim: true },
+        verified: { type: Boolean, default: false },
+        status: { type: String, trim: true },
+        message: { type: String, trim: true },
+        referenceId: { type: String, trim: true },
+        verifiedAt: { type: Date },
+        raw: { type: Object },
+      },
+      gst: {
+        number: { type: String, trim: true },
+        verified: { type: Boolean, default: false },
+        status: { type: String, trim: true },
+        message: { type: String, trim: true },
+        referenceId: { type: String, trim: true },
+        legalName: { type: String, trim: true },
+        tradeName: { type: String, trim: true },
+        verifiedAt: { type: Date },
+        raw: { type: Object },
+      },
+    },
     cibilScore: { type: Number },
     cibilLastFetchedAt: { type: Date },
     cibilReport: { type: Object },
