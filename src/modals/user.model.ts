@@ -2,7 +2,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { config } from "../config/config";
-import { Counter } from "./counter.model";
+import { allocatePrefixedSequence } from "../utils/idAllocator";
 import mongoose, { Schema, Document, Types } from "mongoose";
 
 export enum UserStatus {
@@ -662,18 +662,12 @@ const allocateUniqueCustomerId = async (user: any): Promise<string> => {
   const maxAttempts = 25;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const counter = await Counter.findOneAndUpdate(
-      { key: "customerId" },
-      { $inc: { seq: 1 } },
-      {
-        new: true,
-        upsert: true,
-        setDefaultsOnInsert: true,
-        ...(session ? { session } : {}),
-      },
-    );
-
-    const candidate = `FINT${counter.seq}`;
+    const candidate = await allocatePrefixedSequence({
+      key: "customerId",
+      prefix: "FINTARAA",
+      padLength: 4,
+      session: session || undefined,
+    });
     let collisionQuery = UserModel.exists({
       customerId: candidate,
       _id: { $ne: user._id },

@@ -209,6 +209,9 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
 
 export interface IInsuranceQuery extends Document {
   customerId: Types.ObjectId;
+  isDeleted?: boolean;
+  deletedAt?: Date | null;
+  deletedBy?: Types.ObjectId | null;
   firstName: string;
   lastName: string;
   dateOfBirth: Date;
@@ -254,6 +257,18 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
       type: Schema.Types.ObjectId,
       ref: "User",
       required: true,
+    },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    deletedAt: { type: Date, default: null },
+    deletedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "Admin",
+      default: null,
+      index: true,
     },
     firstName: { type: String, required: true, trim: true },
     lastName: { type: String, required: true, trim: true },
@@ -360,6 +375,15 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
 InsuranceQuerySchema.index({ mobile: 1, email: 1 });
 InsuranceQuerySchema.index({ customerId: 1 });
 InsuranceQuerySchema.index({ ownerAgency: 1, status: 1, createdAt: -1 });
+
+InsuranceQuerySchema.pre(/^find/, function (this: any, next) {
+  const query = this.getQuery();
+  if (Object.prototype.hasOwnProperty.call(query, "isDeleted")) {
+    return next();
+  }
+  this.where({ isDeleted: { $ne: true } });
+  next();
+});
 
 export const InsuranceQuery = mongoose.model<IInsuranceQuery>(
   "InsuranceQuery",

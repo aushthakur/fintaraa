@@ -465,6 +465,7 @@ export class AgencyAdminController {
         {
           $project: {
             _id: 1,
+            agencyId: 1,
             name: 1,
             email: 1,
             mobile: 1,

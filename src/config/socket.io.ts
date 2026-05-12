@@ -469,6 +469,25 @@ export const emitSupportMessage = (payload: MessageData) => {
   return true;
 };
 
+export const emitNotificationToUser = (
+  userId: string,
+  payload: {
+    title: string;
+    body: string;
+    notificationId?: string;
+    type?: string;
+    url?: string;
+  },
+) => {
+  if (!rootIo || !userId) return false;
+
+  const receiver = userManager.getUser(userId);
+  if (!receiver?.socketId) return false;
+
+  rootIo.to(receiver.socketId).emit("new-notification", payload);
+  return true;
+};
+
 export const configureSocket = async (
   httpServer: HttpServer,
   app: Application

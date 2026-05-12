@@ -120,7 +120,8 @@ export class KnowledgeController {
       payload.editedByRole = payload.createdByRole;
       payload.createdOn = payload.createdOn || new Date();
       payload.createdBy = payload.createdBy || payload.createdByName;
-      payload.publishedOn = payload.publishedOn || (payload.isActive ? new Date() : undefined);
+      payload.publishedOn =
+        payload.publishedOn || (payload.isActive ? new Date() : undefined);
       payload.editedAt = new Date();
       payload.editedOn = payload.editedAt;
       payload.editedBy = payload.editedBy || payload.editedByName;
@@ -141,18 +142,34 @@ export class KnowledgeController {
       const { id } = req.params;
       const payload = KnowledgeController.normalizePayload(req.body || {});
       const actor = (req as any).user || {};
+      const existing = await Knowledge.findById(id).lean();
+      if (!existing) {
+        return res.status(404).json(new ApiError(404, "Not found"));
+      }
+
       payload.editedByName = actor?.name || actor?.username || actor?.email;
       payload.editedByRole = actor?.role?.name || actor?.role || undefined;
       payload.editedBy = payload.editedBy || payload.editedByName;
       payload.editedAt = new Date();
       payload.editedOn = payload.editedAt;
-      if (payload.isActive && !payload.publishedAt) {
+      if (
+        payload.isActive === true &&
+        !payload.publishedAt &&
+        !existing.publishedAt
+      ) {
         payload.publishedAt = new Date();
       }
+      if (
+        payload.isActive === true &&
+        !payload.publishedOn &&
+        !existing.publishedOn
+      ) {
+        payload.publishedOn = new Date();
+      }
+
       const item = await Knowledge.findByIdAndUpdate(id, payload, {
         new: true,
       });
-      if (!item) return res.status(404).json(new ApiError(404, "Not found"));
       return res
         .status(200)
         .json(new ApiResponse(200, item, "Knowledge content updated"));

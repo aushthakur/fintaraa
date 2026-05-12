@@ -579,7 +579,13 @@ export class InsuranceQueryController {
         },
       ];
       
-      const insuranceQueries = await insuranceQueryService.getAll(req.query, populateStages);
+      const insuranceQueries = await insuranceQueryService.getAll(
+        req.query,
+        populateStages,
+        {
+          prependStages: [{ $match: { isDeleted: { $ne: true } } }],
+        },
+      );
       return res
         .status(200)
         .json(
@@ -624,6 +630,7 @@ export class InsuranceQueryController {
       end.setHours(23, 59, 59, 0); // 23:59 PM (end of the day)
 
       const match: Record<string, any> = {
+        isDeleted: { $ne: true },
         createdAt: { $gte: start, $lte: end },
       };
 
@@ -681,6 +688,7 @@ export class InsuranceQueryController {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
       const match = buildInsuranceScopeMatch(userId, role);
+      Object.assign(match, { isDeleted: { $ne: true } });
       const rows = await InsuranceQuery.aggregate([
         { $match: match },
         {
@@ -891,7 +899,23 @@ export class InsuranceQueryController {
     next: NextFunction
   ) {
     try {
-      const result = await insuranceQueryService.deleteById(req.params.id);
+      const { role } = (req as any).user || {};
+      if (role !== "admin") {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Only admin can delete insurance queries"));
+      }
+      const result = await InsuranceQuery.findOneAndUpdate(
+        { _id: req.params.id, isDeleted: { $ne: true } },
+        {
+          $set: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: (req as any).user?._id || null,
+          },
+        },
+        { new: true },
+      ).exec();
       if (!result)
         return res
           .status(404)

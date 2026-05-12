@@ -1290,7 +1290,72 @@ export class UserController {
   ): Promise<any> {
     try {
       const { userType } = req.params;
-      const result = await userService.getAll({ ...req.query, role: userType });
+      const result: any = await userService.getAll({
+        ...req.query,
+        role: userType,
+      });
+
+      if (Array.isArray(result?.result) && result.result.length > 0) {
+        const users = result.result;
+        const userIds = users
+          .map((user: any) => String(user?._id || "").trim())
+          .filter(Boolean);
+
+        const referralEvents = await ReferralEvent.find({
+          referredUser: { $in: userIds },
+        })
+          .select("referredUser referralCode referrer")
+          .lean();
+
+        const referralEventMap = new Map<string, any>();
+        referralEvents.forEach((event: any) => {
+          const key = String(event?.referredUser || "").trim();
+          if (key && !referralEventMap.has(key)) {
+            referralEventMap.set(key, event);
+          }
+        });
+
+        const referrerIds = Array.from(
+          new Set(
+            users
+              .map((user: any) => String(user?.referredBy || "").trim())
+              .concat(
+                referralEvents.map((event: any) =>
+                  String(event?.referrer || "").trim(),
+                ),
+              )
+              .filter(Boolean),
+          ),
+        );
+
+        const referrers = referrerIds.length
+          ? await User.find({ _id: { $in: referrerIds } })
+            .select("name referralCode customerId mobile")
+            .lean()
+          : [];
+
+        const referrerMap = new Map<string, any>();
+        referrers.forEach((referrer: any) => {
+          referrerMap.set(String(referrer?._id), referrer);
+        });
+
+        result.result = users.map((user: any) => {
+          const event = referralEventMap.get(String(user?._id || ""));
+          const referrerId = String(
+            user?.referredBy || event?.referrer || "",
+          ).trim();
+          const referrer = referrerMap.get(referrerId);
+
+          return {
+            ...user,
+            referredBy: referrerId || user?.referredBy || null,
+            referredByName: referrer?.name || "-",
+            usedReferralCode:
+              event?.referralCode || referrer?.referralCode || "-",
+          };
+        });
+      }
+
       return res
         .status(200)
         .json(new ApiResponse(200, result, "Users fetched successfully"));

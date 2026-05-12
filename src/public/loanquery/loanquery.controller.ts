@@ -38,6 +38,7 @@ const normalizeRcNumber = (value: string) =>
   value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 
 const loanQueryService = new CommonService(LoanQuery);
+const ACTIVE_QUERY_MATCH = { isDeleted: { $ne: true } };
 
 const resolveDateRange = (startRaw: any, endRaw: any, days: number = 7) => {
   return buildDateRangeInTimeZone(
@@ -205,6 +206,7 @@ const loanQueryListFields = [
   "email",
   "leadBy",
   "dataSource",
+  "createdBy",
   "updatedByName",
   "assignedAgent",
   "assignedAgents",
@@ -451,6 +453,29 @@ const normalizeCoApplicants = (value: any) => {
         bankStatementFile: normalizeUploadedAttachment(
           coApplicant.bankStatementFile,
         ),
+        documents: Array.isArray(coApplicant.documents)
+          ? coApplicant.documents
+            .map((document: any) => {
+              if (!document || typeof document !== "object") return null;
+              const files = Array.isArray(document.files)
+                ? document.files
+                  .map((file: any) => normalizeUploadedAttachment(file))
+                  .filter(Boolean)
+                : [];
+              const key = String(document.key || "").trim();
+              const label = String(
+                document.label || document.name || document.key || "",
+              ).trim();
+              if (!key && !label && files.length === 0) return null;
+              return {
+                ...document,
+                key: key || label.toLowerCase().replace(/\s+/g, "_"),
+                label: label || key,
+                files,
+              };
+            })
+            .filter(Boolean)
+          : [],
       };
     })
     .filter(Boolean);
@@ -941,6 +966,10 @@ export class LoanQueryController {
       const customerId = (req as any).user?._id;
       const role = (req as any).user?.role;
       const session = (req as any).mongoSession;
+      const adminActorId =
+        role === "admin" || role === "agent"
+          ? toObjectId((req as any).user?._id)
+          : null;
 
       if (!customerId) {
         return res
@@ -1063,6 +1092,9 @@ export class LoanQueryController {
       if (isDraft) {
         const draftData = {
           ...req.body,
+          ...(adminActorId
+            ? { createdBy: adminActorId, updatedBy: adminActorId }
+            : {}),
           status: ApplicationStatus.DRAFT,
           activities: [activity],
         };
@@ -1072,6 +1104,9 @@ export class LoanQueryController {
       } else {
         const createData = {
           ...req.body,
+          ...(adminActorId
+            ? { createdBy: adminActorId, updatedBy: adminActorId }
+            : {}),
           activities: [activity],
         };
 
@@ -1155,6 +1190,7 @@ export class LoanQueryController {
       }
 
       const prependStages: any[] = [];
+      prependStages.push({ $match: ACTIVE_QUERY_MATCH });
 
       // For agents, show queries assigned to them either as primary or secondary assignee
       if (role === "agent" && userId) {
@@ -1224,6 +1260,34 @@ export class LoanQueryController {
           },
         },
         {
+          $lookup: {
+            from: "admins",
+            localField: "createdBy",
+            foreignField: "_id",
+            as: "createdByData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$createdByData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "roles",
+            localField: "createdByData.role",
+            foreignField: "_id",
+            as: "createdByRoleData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$createdByRoleData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
           $addFields: {
             assignedAgent: {
               $cond: {
@@ -1270,6 +1334,23 @@ export class LoanQueryController {
                 else: "$assignedLander",
               },
             },
+            createdBy: {
+              $cond: {
+                if: { $ifNull: ["$createdByData", false] },
+                then: {
+                  _id: "$createdByData._id",
+                  name: "$createdByData.name",
+                  username: "$createdByData.username",
+                  email: "$createdByData.email",
+                  mobile: "$createdByData.mobile",
+                  role: {
+                    _id: "$createdByRoleData._id",
+                    name: "$createdByRoleData.name",
+                  },
+                },
+                else: "$createdBy",
+              },
+            },
           },
         },
         {
@@ -1277,6 +1358,8 @@ export class LoanQueryController {
             assignedAgentData: 0,
             assignedAgentsData: 0,
             assignedLanderData: 0,
+            createdByData: 0,
+            createdByRoleData: 0,
           },
         },
       ];
@@ -1419,6 +1502,7 @@ export class LoanQueryController {
 
       const buildScopeMatch = () => {
         const m: Record<string, any> = {
+          ...ACTIVE_QUERY_MATCH,
           status: ApplicationStatus.COMPLETED,
           disbursedDate: {
             $gte: previousStart,
@@ -1587,6 +1671,7 @@ export class LoanQueryController {
       end.setHours(23, 59, 59, 0); // 23:59 PM (end of the day)
 
       const match: Record<string, any> = {
+        ...ACTIVE_QUERY_MATCH,
         createdAt: { $gte: start, $lte: end },
       };
 
@@ -1653,6 +1738,7 @@ export class LoanQueryController {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
       const match = buildLoanScopeMatch(userId, role);
+      Object.assign(match, ACTIVE_QUERY_MATCH);
       const rows = await LoanQuery.aggregate([
         { $match: match },
         {
@@ -1952,7 +2038,17 @@ export class LoanQueryController {
           .status(403)
           .json(new ApiError(403, "Only admin can delete loan queries"));
       }
-      const result = await loanQueryService.deleteById(req.params.id);
+      const result = await LoanQuery.findOneAndUpdate(
+        { _id: req.params.id, isDeleted: { $ne: true } },
+        {
+          $set: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: (req as any).user?._id || null,
+          },
+        },
+        { new: true },
+      ).exec();
       if (!result)
         return res
           .status(404)
@@ -2413,7 +2509,11 @@ export class LoanQueryController {
         .populate("channelAgency", "name mobile role status")
         .populate("attachedLead", "fullName mobile status productType loanType")
         .populate("assignee", "name email")
-        .populate("createdBy", "name username email")
+        .populate({
+          path: "createdBy",
+          select: "name username email role",
+          populate: { path: "role", select: "name" },
+        })
         .lean()
         .exec();
 

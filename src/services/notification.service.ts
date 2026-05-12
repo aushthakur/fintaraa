@@ -10,6 +10,7 @@ import ApiResponse from "../utils/ApiResponse";
 import { sendEmail } from "../utils/emailService";
 import { paginationResult } from "../utils/helper";
 import { Request, Response, NextFunction } from "express";
+import { emitNotificationToUser } from "../config/socket.io";
 import { UserType, Notification } from "../modals/notification.model";
 import { NotificationMessages } from "./../config/notificationMessages";
 
@@ -133,6 +134,14 @@ export const NotificationService = {
             })
         );
       }
+
+      emitNotificationToUser(toUserId, {
+        title,
+        body: message,
+        type,
+        notificationId: notification._id.toString(),
+        url: "/dashboard/notifications",
+      });
 
       // --- Email Notification ---
       // Email notifications are OTP-only in the current email service.

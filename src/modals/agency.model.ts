@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import mongoose, { Schema, Document, Types } from "mongoose";
+import { allocatePrefixedSequence } from "../utils/idAllocator";
 import {
   AddressSchema,
   BankDetailsSchema,
@@ -16,6 +17,7 @@ import {
 export type AgencyRole = "agency" | "agency_member";
 
 export interface IAgency extends Document {
+  agencyId?: string;
   name: string;
   email: string;
   mobile: string;
@@ -97,6 +99,7 @@ type AgencyDocument = mongoose.HydratedDocument<IAgency>;
 const AgencySchema = new Schema<IAgency>(
   {
     name: { type: String, required: true, trim: true },
+    agencyId: { type: String, unique: true, sparse: true, index: true },
     email: {
       type: String,
       index: true,
@@ -204,7 +207,39 @@ const AgencySchema = new Schema<IAgency>(
   { timestamps: true }
 );
 
+const allocateUniqueAgencyId = async (agency: AgencyDocument): Promise<string> => {
+  const session = agency.$session();
+  const AgencyModel = agency.constructor as typeof Agency;
+  const maxAttempts = 25;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const candidate = await allocatePrefixedSequence({
+      key: "agencyId",
+      prefix: "FINTARAADAS",
+      padLength: 4,
+      session: session || undefined,
+    });
+
+    let collisionQuery = AgencyModel.exists({
+      agencyId: candidate,
+      _id: { $ne: agency._id },
+    });
+    if (session) {
+      collisionQuery = collisionQuery.session(session);
+    }
+    const collision = await collisionQuery;
+    if (!collision) {
+      return candidate;
+    }
+  }
+
+  throw new Error("Unable to allocate a unique agency ID");
+};
+
 AgencySchema.pre("save", async function (this: AgencyDocument, next) {
+  if (this.isNew && !this.agencyId) {
+    this.agencyId = await allocateUniqueAgencyId(this);
+  }
   if (!this.isModified("password")) return next();
   if (!this.password) return next();
   const salt = await bcrypt.genSalt(10);

@@ -42,7 +42,11 @@ const toObjectId = (value: any): Types.ObjectId | null => {
   }
 };
 
-const buildCallRecordScopeMatch = (userId: any, role?: string) => {
+const buildCallRecordScopeMatch = (
+  userId: any,
+  role?: string,
+  scope: "created" | "assigned" = "assigned",
+) => {
   const match: Record<string, any> = {};
   if (role === "admin") return match;
 
@@ -50,7 +54,11 @@ const buildCallRecordScopeMatch = (userId: any, role?: string) => {
   if (!objectId) return { _id: null };
 
   if (role === "agent") {
-    match.$or = [{ assignee: objectId }, { assignees: objectId }];
+    if (scope === "created") {
+      match.createdBy = objectId;
+    } else {
+      match.$or = [{ assignee: objectId }, { assignees: objectId }];
+    }
   } else {
     match.createdBy = objectId;
   }
@@ -902,6 +910,12 @@ const createLoanQueryFromCallRecord = async (
       customerId: user._id,
       loanType: resolvedLoanType,
       status: "draft",
+      ...(toObjectId(context?.actorId || callRecord.createdBy)
+        ? {
+            createdBy: toObjectId(context?.actorId || callRecord.createdBy),
+            updatedBy: toObjectId(context?.actorId || callRecord.createdBy),
+          }
+        : {}),
       loanAmount: resolvedLoanAmountValue,
       disbursedAmount: Number.isFinite(
         Number(
@@ -1672,6 +1686,7 @@ export class CallRecordController {
           finalRecord || result,
           {
             ...(payload.loanContext || {}),
+            actorId: adminId?.toString?.(),
             updatedByName: actorDisplayName || undefined,
             productService: payload.productService || result?.productService,
             assignee: payload.assignee || result?.assignee,
@@ -1842,6 +1857,20 @@ export class CallRecordController {
         },
         {
           $lookup: {
+            from: "roles",
+            localField: "createdBy.role",
+            foreignField: "_id",
+            as: "createdByRole",
+          },
+        },
+        {
+          $unwind: {
+            path: "$createdByRole",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
             from: "admins",
             localField: "updatedBy",
             foreignField: "_id",
@@ -1854,6 +1883,32 @@ export class CallRecordController {
             preserveNullAndEmptyArrays: true,
           },
         },
+        {
+          $lookup: {
+            from: "roles",
+            localField: "updatedBy.role",
+            foreignField: "_id",
+            as: "updatedByRole",
+          },
+        },
+        {
+          $unwind: {
+            path: "$updatedByRole",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $addFields: {
+            "createdBy.role": {
+              _id: "$createdByRole._id",
+              name: "$createdByRole.name",
+            },
+            "updatedBy.role": {
+              _id: "$updatedByRole._id",
+              name: "$updatedByRole.name",
+            },
+          },
+        },
       ];
 
       // Handle callback date range and follow-up bucket filters
@@ -1864,9 +1919,19 @@ export class CallRecordController {
         productService,
         loanType,
         includeCustomerContext,
+        scope,
         ...queryParams
       } = req.query as Record<string, any>;
       const requestTimeZone = (req as any)?.timezone || DEFAULT_QUERY_TIMEZONE;
+      const userId = (req as any)?.user?._id;
+      const { role } = (req as any)?.user || {};
+      const scopeMatch = buildCallRecordScopeMatch(
+        userId,
+        role,
+        scope === "created" ? "created" : "assigned",
+      );
+
+      Object.assign(queryParams, scopeMatch);
 
       const followUpBucketFilter = getFollowUpBucketFilter(
         followUpBucket,
@@ -2003,7 +2068,9 @@ export class CallRecordController {
     try {
       const userId = (req as any)?.user?._id;
       const { role } = (req as any)?.user || {};
-      const match = buildCallRecordScopeMatch(userId, role);
+      const scope =
+        (req.query?.scope as string) === "created" ? "created" : "assigned";
+      const match = buildCallRecordScopeMatch(userId, role, scope);
       const requestTimeZone = (req as any)?.timezone || DEFAULT_QUERY_TIMEZONE;
       const followupsFilter = getFollowUpBucketFilter(
         "followups",
@@ -2371,6 +2438,7 @@ export class CallRecordController {
         );
         const createdInquiry = await createInquiryFromCallRecord(result, {
           ...(req.body?.loanContext || {}),
+          actorId: adminId?.toString?.(),
           updatedByName: actorDisplayName || undefined,
           productService: incomingProduct || result?.productService,
           assignee: req.body?.assignee || result?.assignee,

@@ -199,6 +199,9 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
 export interface ILoanQuery extends Document {
   customerId: Types.ObjectId;
   loanId?: string;
+  isDeleted?: boolean;
+  deletedAt?: Date | null;
+  deletedBy?: Types.ObjectId | null;
   // Personal Details
   loanAmount: number;
   disbursedAmount?: number;
@@ -255,6 +258,8 @@ export interface ILoanQuery extends Document {
   assignedLander?: Types.ObjectId;
   channelAgency?: Types.ObjectId;
   ownerAgency?: Types.ObjectId;
+  createdBy?: Types.ObjectId;
+  updatedBy?: Types.ObjectId;
   activities: ILoanQueryActivity[];
 
   // Commission tracking
@@ -349,6 +354,18 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
       unique: true,
       sparse: true,
     },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    deletedAt: { type: Date, default: null },
+    deletedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "Admin",
+      default: null,
+      index: true,
+    },
     loanType: {
       type: String,
       enum: Object.values(LoanType),
@@ -423,6 +440,16 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
       ref: "Agency",
       index: true,
     },
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: "Admin",
+      index: true,
+    },
+    updatedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "Admin",
+      index: true,
+    },
     activities: {
       type: [
         {
@@ -465,6 +492,15 @@ LoanQuerySchema.index({ customerId: 1 });
 LoanQuerySchema.index({ loanType: 1, createdAt: -1 });
 LoanQuerySchema.index({ loanType: 1, status: 1, createdAt: -1 });
 LoanQuerySchema.index({ ownerAgency: 1, status: 1, createdAt: -1 });
+
+LoanQuerySchema.pre(/^find/, function (this: any, next) {
+  const query = this.getQuery();
+  if (Object.prototype.hasOwnProperty.call(query, "isDeleted")) {
+    return next();
+  }
+  this.where({ isDeleted: { $ne: true } });
+  next();
+});
 
 LoanQuerySchema.pre("save", async function (next) {
   const doc = this as ILoanQuery;

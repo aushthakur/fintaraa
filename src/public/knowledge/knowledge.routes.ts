@@ -18,6 +18,12 @@ router.get(
   authorize("admin"),
   asyncHandler(KnowledgeController.getAllAdmin)
 );
+router.get(
+  "/admin/:id",
+  authenticateToken,
+  authorize("admin"),
+  asyncHandler(KnowledgeController.getById)
+);
 router.get("/slug/:slug", asyncHandler(KnowledgeController.getBySlug));
 router.get("/:id", asyncHandler(KnowledgeController.getById));
 
