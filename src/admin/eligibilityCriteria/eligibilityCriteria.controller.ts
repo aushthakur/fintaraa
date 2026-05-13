@@ -14,6 +14,13 @@ const ELIGIBILITY_BASE_FIELDS = [
   "loanType",
   "bankName",
   "salaryType",
+  "roi",
+  "minAge",
+  "maxAge",
+  "maxTenureYears",
+  "processingFees",
+  "insurance",
+  "loginFees",
   "rm",
   "rmMailId",
   "rmMbNo",
@@ -37,6 +44,7 @@ const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
     "cibilScore",
     "itrYears",
     "totalExperience",
+    "totalExperienceMonths",
     "currentExperience",
     "netSalary",
     "currentTotalEmi",
@@ -65,6 +73,55 @@ const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
     "itrAmount",
     "nipPdBase",
     "lowLtv",
+  ],
+};
+
+const ELIGIBILITY_HOME_PROPERTY_LOAN_TYPES = new Set([
+  "home loan",
+  "homeloan",
+  "loan against property",
+  "loanagainstproperty",
+]);
+
+const ELIGIBILITY_PROPERTY_FIELDS = [
+  "cashRental",
+  "bankRental",
+  "mixRental",
+  "residentialCatALtv",
+  "residentialCatBLtv",
+  "residentialCatCLtv",
+  "commercialCatALtv",
+  "commercialCatBLtv",
+  "commercialCatCLtv",
+  "industrialCatALtv",
+  "industrialCatBLtv",
+  "industrialCatCLtv",
+] as const;
+
+const ELIGIBILITY_FOIR_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
+  salaried: [
+    "salaryFoir0To25000",
+    "salaryFoir25000To50000",
+    "salaryFoir50000To75000",
+    "salaryFoir75000Above",
+  ],
+  selfemployed: [
+    "businessFoir0To600000",
+    "businessFoir600000To1000000",
+    "businessFoir1000000Above",
+    "btMultiplier0To1Year",
+    "btMultiplier1To3Years",
+    "btMultiplier3YearsAbove",
+  ],
+  selfemployedprofessional: [
+    "itrFoir0To600000",
+    "itrFoir600000To1000000",
+    "itrFoir1000000Above",
+    "btMultiplier0To1Year",
+    "btMultiplier1To3Years",
+    "btMultiplier3YearsAbove",
+    "receiptMultiplier0To1Year",
+    "receiptMultiplier1To3Years",
   ],
 };
 
@@ -111,12 +168,41 @@ const getEligibilityFieldGroupKey = (salaryType?: any) => {
   return "";
 };
 
+const shouldAllowEligibilityPropertyFields = (loanType?: any) => {
+  const normalized = String(loanType || "")
+    .trim()
+    .toLowerCase();
+  return ELIGIBILITY_HOME_PROPERTY_LOAN_TYPES.has(normalized);
+};
+
+const validateMonthField = (
+  payload: Record<string, any>,
+  field: string,
+  label: string,
+) => {
+  const value = payload[field];
+  if (value === undefined || value === null || value === "") return;
+  const numberValue = Number(value);
+  if (
+    !Number.isFinite(numberValue) ||
+    !Number.isInteger(numberValue) ||
+    numberValue < 0 ||
+    numberValue > 11
+  ) {
+    throw new ApiError(400, `${label} must be a whole number from 0 to 11`);
+  }
+};
+
 const sanitizeEligibilityPayload = (payload: Record<string, any>) => {
   const normalizedSalaryType = normalizeEligibilitySalaryType(payload.salaryType);
   const fieldGroupKey = getEligibilityFieldGroupKey(normalizedSalaryType);
   const allowedFields = new Set([
     ...ELIGIBILITY_BASE_FIELDS,
     ...(ELIGIBILITY_FIELDS_BY_SALARY_TYPE[fieldGroupKey] || []),
+    ...(ELIGIBILITY_FOIR_FIELDS_BY_SALARY_TYPE[fieldGroupKey] || []),
+    ...(shouldAllowEligibilityPropertyFields(payload.loanType)
+      ? ELIGIBILITY_PROPERTY_FIELDS
+      : []),
   ]);
 
   const normalizedPayload = {
@@ -126,6 +212,12 @@ const sanitizeEligibilityPayload = (payload: Record<string, any>) => {
     nipPdBase: payload.nipPdBase ?? payload.nipPdBaseAmount,
     status: String(payload.status || "").trim().toLowerCase(),
   };
+
+  validateMonthField(
+    normalizedPayload,
+    "totalExperienceMonths",
+    "Total experience months",
+  );
 
   return Object.fromEntries(
     Object.entries(normalizedPayload).filter(([key, value]) => {

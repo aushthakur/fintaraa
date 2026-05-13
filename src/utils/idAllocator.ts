@@ -16,14 +16,16 @@ export const allocatePrefixedSequence = async ({
 }: AllocationOptions) => {
   const counter = await Counter.findOneAndUpdate(
     { key },
-    {
-      $inc: { seq: 1 },
-      $setOnInsert: { seq: 0 },
-    },
+    [
+      {
+        $set: {
+          seq: { $add: [{ $ifNull: ["$seq", 0] }, 1] },
+        },
+      },
+    ],
     {
       new: true,
       upsert: true,
-      setDefaultsOnInsert: false,
       ...(session ? { session } : {}),
     },
   );

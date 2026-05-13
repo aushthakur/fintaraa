@@ -662,13 +662,18 @@ const createLoanQueryFromCallRecord = async (
         ? normalizedPhone.slice(-10)
         : normalizedPhone;
 
-    const loanType = normalizeLoanType(callRecord.productService);
+    const normalizedLoanContext = context || {};
+    const requestedProductService = String(
+      normalizedLoanContext.productService || callRecord.productService || "",
+    ).trim();
+    const loanType =
+      normalizeLoanType(normalizedLoanContext.loanType) ||
+      normalizeLoanType(requestedProductService);
     if (!loanType) return null;
     const primaryAssigneeId = toObjectId(
       context?.assignee || callRecord.assignee || callRecord.assignees?.[0],
     );
 
-    const normalizedLoanContext = context || {};
     const contextQueryId = String(
       normalizedLoanContext.queryId ||
         normalizedLoanContext.loanQueryId ||
@@ -677,7 +682,26 @@ const createLoanQueryFromCallRecord = async (
     ).trim();
     if (contextQueryId) {
       const existingById = await LoanQuery.findById(contextQueryId);
-      if (existingById) return existingById;
+      if (existingById && existingById.loanType === loanType) {
+        return existingById;
+      }
+      if (existingById && existingById.loanType !== loanType) {
+        console.log(
+          "[CallRecord] Existing loan context has different loan type; creating new loan query",
+          {
+            existingLoanType: existingById.loanType,
+            requestedLoanType: loanType,
+            contextQueryId,
+          },
+        );
+      }
+    }
+
+    if (callRecord.loanQueryId) {
+      const linkedLoanQuery = await LoanQuery.findById(callRecord.loanQueryId);
+      if (linkedLoanQuery && linkedLoanQuery.loanType === loanType) {
+        return linkedLoanQuery;
+      }
     }
 
     const existingByContact = await LoanQuery.findOne({
@@ -983,7 +1007,7 @@ const createLoanQueryFromCallRecord = async (
       activities: [
         {
           type: "created",
-          description: `Loan query created from Call Record (${callRecord.productService})`,
+          description: `Loan query created from Call Record (${requestedProductService || callRecord.productService})`,
           actor: callRecord.createdBy,
           actorModel: "Admin",
           createdAt: new Date(),
@@ -1088,12 +1112,17 @@ const createInsuranceQueryFromCallRecord = async (
         ? normalizedPhone.slice(-10)
         : normalizedPhone;
 
+    const normalizedInsuranceContext = context || {};
+    const requestedProductService = String(
+      normalizedInsuranceContext.productService ||
+        callRecord.productService ||
+        "",
+    ).trim();
     const insuranceType = normalizeInsuranceTypeFromProductService(
-      callRecord.productService,
+      requestedProductService,
     );
     if (!insuranceType) return null;
 
-    const normalizedInsuranceContext = context || {};
     const contextQueryId = String(
       normalizedInsuranceContext.queryId ||
         normalizedInsuranceContext.insuranceQueryId ||
@@ -1102,7 +1131,31 @@ const createInsuranceQueryFromCallRecord = async (
     ).trim();
     if (contextQueryId) {
       const existingById = await InsuranceQuery.findById(contextQueryId);
-      if (existingById) return existingById;
+      if (existingById && existingById.typeOfInsurance === insuranceType) {
+        return existingById;
+      }
+      if (existingById && existingById.typeOfInsurance !== insuranceType) {
+        console.log(
+          "[CallRecord] Existing insurance context has different type; creating new insurance query",
+          {
+            existingType: existingById.typeOfInsurance,
+            requestedType: insuranceType,
+            contextQueryId,
+          },
+        );
+      }
+    }
+
+    if (callRecord.insuranceQueryId) {
+      const linkedInsuranceQuery = await InsuranceQuery.findById(
+        callRecord.insuranceQueryId,
+      );
+      if (
+        linkedInsuranceQuery &&
+        linkedInsuranceQuery.typeOfInsurance === insuranceType
+      ) {
+        return linkedInsuranceQuery;
+      }
     }
 
     const primaryAssigneeId = toObjectId(
@@ -1318,6 +1371,7 @@ const createInsuranceQueryFromCallRecord = async (
         ...(normalizedInsuranceContext.policyDetails || {}),
         purpose:
           normalizedInsuranceContext.purpose ||
+          requestedProductService ||
           callRecord.productService ||
           "Not Specified",
         requestedCoverage:
@@ -1335,7 +1389,7 @@ const createInsuranceQueryFromCallRecord = async (
       activities: [
         {
           type: InsuranceQueryActivityType.CREATED,
-          description: `Insurance query created from Call Record (${callRecord.productService})`,
+          description: `Insurance query created from Call Record (${requestedProductService || callRecord.productService})`,
           actor: callRecord.createdBy,
           actorModel: "Admin",
           payload: {
@@ -1717,9 +1771,13 @@ export class CallRecordController {
               createdInquiry.createdAt || new Date();
           }
 
-          await CallRecord.findByIdAndUpdate(finalRecord?._id || result._id, {
-            $set: updatePayload,
-          });
+          finalRecord = await CallRecord.findByIdAndUpdate(
+            finalRecord?._id || result._id,
+            {
+              $set: updatePayload,
+            },
+            { new: true },
+          );
           console.log(
             "[CallRecord] Inquiry ensured during create:",
             inquiryType,
