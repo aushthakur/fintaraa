@@ -44,6 +44,8 @@ export interface ICallRecord extends Document {
   createAccount?: boolean;
   createInquiry?: boolean;
   comment?: string;
+  commentBy?: Types.ObjectId;
+  commentedAt?: Date;
   contactActionStatus?: string;
   followUpHistory?: Array<{
     openedBy?: Types.ObjectId;
@@ -132,6 +134,8 @@ const CallRecordSchema = new Schema<ICallRecord>(
     createAccount: { type: Boolean, default: false },
     createInquiry: { type: Boolean, default: false },
     comment: { type: String, trim: true },
+    commentBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+    commentedAt: { type: Date },
     contactActionStatus: { type: String, trim: true },
     followUpHistory: {
       type: [

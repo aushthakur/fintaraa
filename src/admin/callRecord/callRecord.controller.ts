@@ -1506,6 +1506,8 @@ export class CallRecordController {
     try {
       const adminId = req.user?._id;
       const payload: any = sanitizeCallRecordPayload({ ...req.body });
+      delete payload.commentBy;
+      delete payload.commentedAt;
 
       if (!payload.phoneNumber) {
         return res
@@ -1647,6 +1649,10 @@ export class CallRecordController {
       if (adminId) {
         payload.createdBy = adminId;
         payload.updatedBy = adminId;
+        if (String(payload.comment || "").trim()) {
+          payload.commentBy = adminId;
+          payload.commentedAt = new Date();
+        }
       }
 
       const result = await CallRecordService.create(payload);
@@ -1866,6 +1872,20 @@ export class CallRecordController {
         {
           $unwind: {
             path: "$createdByRole",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "admins",
+            localField: "commentBy",
+            foreignField: "_id",
+            as: "commentBy",
+          },
+        },
+        {
+          $unwind: {
+            path: "$commentBy",
             preserveNullAndEmptyArrays: true,
           },
         },
@@ -2159,11 +2179,34 @@ export class CallRecordController {
       delete (updateBody as any).followUpNote;
       delete (updateBody as any).followUpClosingRemark;
       delete (updateBody as any).followUpRemark;
+      delete (updateBody as any).commentBy;
+      delete (updateBody as any).commentedAt;
 
       const updates: any = {
         ...updateBody,
       };
       if (adminId) updates.updatedBy = adminId;
+
+      if (Object.prototype.hasOwnProperty.call(updateBody, "comment")) {
+        const previousComment = String(record.comment || "").trim();
+        const nextComment = String(updateBody.comment || "").trim();
+        if (
+          adminId &&
+          nextComment &&
+          (nextComment !== previousComment ||
+            !record.commentBy ||
+            !record.commentedAt)
+        ) {
+          updates.commentBy = adminId;
+          updates.commentedAt = new Date();
+        } else if (!nextComment && previousComment) {
+          updates.$unset = {
+            ...(updates.$unset || {}),
+            commentBy: "",
+            commentedAt: "",
+          };
+        }
+      }
 
       if (Object.prototype.hasOwnProperty.call(updateBody, "phoneNumber")) {
         const primaryPhoneDigits = normalizePhoneDigits(updateBody.phoneNumber);
