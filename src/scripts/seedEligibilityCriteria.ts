@@ -63,11 +63,13 @@ const buildSeed = (idx: number) => {
     cibilScore: rand(650, 820),
     itrYears: rand(1, 3),
     totalExperience: salaryType === "Salaried" ? rand(2, 20) : undefined,
-    currentExperience: salaryType === "Salaried" ? rand(1, 10) : undefined,
     netSalary: salaryType === "Salaried" ? netIncome : undefined,
     currentTotalEmi: salaryType === "Salaried" ? rand(2000, 25000) : undefined,
     companyCategory:
-      salaryType === "Salaried" ? pick(companyCategories) : undefined,
+      salaryType === "Salaried" ? [pick(companyCategories)] : undefined,
+    abb: rand(10000, 150000),
+    maximumLoanAmount:
+      salaryType === "Salaried" ? rand(100000, 2500000) : undefined,
     totalVintage: salaryType !== "Salaried" ? rand(1, 15) : undefined,
     currentVintage: salaryType !== "Salaried" ? rand(1, 10) : undefined,
     businessProgramFresh: salaryType !== "Salaried" ? pick(["Yes", "No"]) : undefined,

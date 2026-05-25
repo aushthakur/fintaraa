@@ -61,7 +61,9 @@ export interface IEligibilityCriteria extends Document {
   processingFees?: number;
   insurance?: string;
   loginFees?: string;
-  companyCategory?: string;
+  companyCategory?: string[];
+  abb?: number;
+  maximumLoanAmount?: number;
   currentExperience?: number;
   totalExperience?: number;
   totalExperienceMonths?: number;
@@ -141,7 +143,9 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     processingFees: { type: Number },
     insurance: { type: String, trim: true },
     loginFees: { type: String, trim: true },
-    companyCategory: { type: String, trim: true },
+    companyCategory: [{ type: String, trim: true }],
+    abb: { type: Number },
+    maximumLoanAmount: { type: Number },
     currentExperience: { type: Number },
     totalExperience: { type: Number },
     totalExperienceMonths: { type: Number },

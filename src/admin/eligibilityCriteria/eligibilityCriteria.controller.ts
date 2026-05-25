@@ -49,6 +49,8 @@ const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
     "netSalary",
     "currentTotalEmi",
     "companyCategory",
+    "abb",
+    "maximumLoanAmount",
   ],
   selfemployed: [
     "cibilScore",
@@ -57,6 +59,7 @@ const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
     "currentVintage",
     "businessProgramFresh",
     "gstAmount",
+    "abb",
     "bankingAmount",
     "itrAmount",
     "nipPdBase",
@@ -69,6 +72,7 @@ const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
     "currentVintage",
     "businessProgramFresh",
     "receiptsAmount",
+    "abb",
     "bankingAmount",
     "itrAmount",
     "nipPdBase",
@@ -208,6 +212,11 @@ const sanitizeEligibilityPayload = (payload: Record<string, any>) => {
   const normalizedPayload = {
     ...payload,
     salaryType: normalizedSalaryType,
+    companyCategory: Array.isArray(payload.companyCategory)
+      ? payload.companyCategory
+      : payload.companyCategory
+        ? [payload.companyCategory]
+        : payload.companyCategory,
     cibilScore: payload.cibilScore ?? payload.cibilScoreWithCall,
     nipPdBase: payload.nipPdBase ?? payload.nipPdBaseAmount,
     status: String(payload.status || "").trim().toLowerCase(),
