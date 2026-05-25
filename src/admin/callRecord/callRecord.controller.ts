@@ -140,6 +140,19 @@ const sanitizeCallRecordPayload = (payload: Record<string, any>) => {
     next.employmentType,
   );
 
+  if (Object.prototype.hasOwnProperty.call(next, "callbackAt")) {
+    const callbackAt = parseDateInTimeZone(
+      next.callbackAt,
+      "start",
+      DEFAULT_QUERY_TIMEZONE,
+    );
+    if (callbackAt) {
+      next.callbackAt = callbackAt;
+    } else {
+      delete next.callbackAt;
+    }
+  }
+
   const sharedFields = [
     "businessType",
     "coApplicantType",
@@ -2300,6 +2313,10 @@ export class CallRecordController {
 
       if (updates.callbackAt) {
         updates.followUp = true;
+        updates.$unset = {
+          ...(updates.$unset || {}),
+          callbackNotifiedAt: "",
+        };
       }
       if (rawFollowUpNote) {
         updates.followUp = true;

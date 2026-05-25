@@ -79,6 +79,7 @@ export interface ILeadFollowUp {
   dueAt: Date;
   channel: string;
   reminderAt?: Date;
+  reminderNotifiedAt?: Date;
   status: LeadFollowUpStatus;
   addedBy: Types.ObjectId;
   addedByModel: "Admin" | "Agent";
@@ -223,6 +224,7 @@ const LeadFollowUpSchema = new Schema<ILeadFollowUp>(
     dueAt: { type: Date, required: true },
     channel: { type: String, default: "call" },
     reminderAt: { type: Date },
+    reminderNotifiedAt: { type: Date },
     status: {
       type: String,
       enum: Object.values(LeadFollowUpStatus),

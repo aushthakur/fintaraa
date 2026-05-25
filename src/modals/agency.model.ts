@@ -1,6 +1,9 @@
 import bcrypt from "bcryptjs";
 import mongoose, { Schema, Document, Types } from "mongoose";
-import { allocatePrefixedSequence } from "../utils/idAllocator";
+import {
+  allocatePrefixedSequence,
+  formatDaySequencePrefix,
+} from "../utils/idAllocator";
 import {
   AddressSchema,
   BankDetailsSchema,
@@ -213,9 +216,10 @@ const allocateUniqueAgencyId = async (agency: AgencyDocument): Promise<string> =
   const maxAttempts = 25;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const datePrefix = formatDaySequencePrefix(new Date());
     const candidate = await allocatePrefixedSequence({
-      key: "agencyId",
-      prefix: "FINTARAADAS",
+      key: `agencyId:${datePrefix}`,
+      prefix: `FINTARADSA${datePrefix}`,
       padLength: 4,
       session: session || undefined,
     });

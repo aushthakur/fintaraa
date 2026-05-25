@@ -266,6 +266,16 @@ const sanitizeAgencyCreatePayload = (payload: any = {}) => {
     privacyPolicyAccepted: normalizeBoolean(payload.privacyPolicyAccepted, true),
   };
 
+  if (payload.rmName !== undefined) next.rmName = String(payload.rmName).trim();
+  if (payload.rmMobile !== undefined)
+    next.rmMobile = String(payload.rmMobile).trim();
+  if (payload.agentProfileCompleted !== undefined) {
+    next.agentProfileCompleted = normalizeBoolean(
+      payload.agentProfileCompleted,
+      false,
+    );
+  }
+
   const bankDetails = sanitizeBankDetails(payload);
   if (bankDetails) next.bankDetails = bankDetails;
 
@@ -289,6 +299,15 @@ const sanitizeAgencyUpdatePayload = (
   if (payload.email !== undefined)
     next.email = String(payload.email).trim().toLowerCase();
   if (payload.mobile !== undefined) next.mobile = payload.mobile;
+  if (payload.rmName !== undefined) next.rmName = String(payload.rmName).trim();
+  if (payload.rmMobile !== undefined)
+    next.rmMobile = String(payload.rmMobile).trim();
+  if (payload.agentProfileCompleted !== undefined) {
+    next.agentProfileCompleted = normalizeBoolean(
+      payload.agentProfileCompleted,
+      false,
+    );
+  }
   if (payload.gender !== undefined) {
     const gender = normalizeGender(payload.gender);
     if (!gender) throw new ApiError(400, "Invalid gender");
@@ -474,12 +493,17 @@ export class AgencyAdminController {
             gender: 1,
             parentAgency: 1,
             parentAgencyName: "$parentAgencyData.name",
+            rmName: 1,
+            rmMobile: 1,
+            agentProfileCompleted: 1,
             agreedToTerms: 1,
             privacyPolicyAccepted: 1,
             isEmailVerified: 1,
             isMobileVerified: 1,
             bankDetails: 1,
             verificationRecords: 1,
+            kycProfile: 1,
+            digiLockerVault: 1,
             createdAt: 1,
             updatedAt: 1,
             totalCommission: "$commissionStats.totalCommission",
@@ -584,6 +608,26 @@ export class AgencyAdminController {
       return res
         .status(200)
         .json(new ApiResponse(200, result, "Channel status updated successfully"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async deleteById(req: Request, res: Response, next: NextFunction) {
+    try {
+      const childCount = await Agency.countDocuments({
+        parentAgency: req.params.id,
+      });
+      if (childCount > 0) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Channel has members and cannot be deleted"));
+      }
+
+      const result = await agencyService.deleteById(req.params.id);
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Channel deleted successfully"));
     } catch (error) {
       next(error);
     }

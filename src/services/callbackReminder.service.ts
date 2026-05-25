@@ -1,49 +1,151 @@
 import mongoose from "mongoose";
 import Admin from "../modals/admin.model";
 import { UserType } from "../modals/notification.model";
+import Lead, { LeadFollowUpStatus } from "../modals/lead.model";
 import { CallRecord, ICallRecord } from "../modals/callRecord.model";
 import { sendSingleNotification } from "../services/notification.service";
 
 const CHECK_INTERVAL_MINUTES = 1;
 const REMINDER_MINUTES_BEFORE = 15;
+const INDIA_TIME_ZONE = "Asia/Kolkata";
+
+const indiaDateTimeFormatter = new Intl.DateTimeFormat("en-IN", {
+  timeZone: INDIA_TIME_ZONE,
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: true,
+});
+
+const getReminderWindow = () => {
+  const now = new Date();
+  return {
+    start: now,
+    end: new Date(now.getTime() + REMINDER_MINUTES_BEFORE * 60 * 1000),
+  };
+};
+
+const formatIndiaTime = (date?: Date | string | null) =>
+  date ? indiaDateTimeFormatter.format(new Date(date)) : "scheduled time";
+
+const formatWindowLog = (date: Date) =>
+  `${formatIndiaTime(date)} (${date.toISOString()})`;
+
+const getAdminIds = async () => {
+  const admins = await Admin.aggregate([
+    { $match: { status: true } },
+    {
+      $lookup: {
+        from: "roles",
+        localField: "role",
+        foreignField: "_id",
+        as: "roleData",
+      },
+    },
+    { $unwind: { path: "$roleData", preserveNullAndEmptyArrays: true } },
+    {
+      $match: {
+        "roleData.name": { $not: /^agent$|^lander$/i },
+      },
+    },
+    { $project: { _id: 1 } },
+  ]);
+  return admins.map((admin) => admin._id.toString());
+};
+
+const toIdString = (value: any) => {
+  if (!value) return "";
+  if (value instanceof mongoose.Types.ObjectId) return value.toString();
+  return String(value?._id || value || "").trim();
+};
+
+const getAssignedAgentIds = (record: any) => {
+  const ids = new Set<string>();
+  const primary = toIdString(record?.assignee);
+  if (primary) ids.add(primary);
+
+  if (Array.isArray(record?.assignees)) {
+    record.assignees.forEach((assignee: any) => {
+      const id = toIdString(assignee);
+      if (id) ids.add(id);
+    });
+  }
+
+  return Array.from(ids);
+};
 
 /**
  * Process callback reminders - sends notifications to agents and admins
- * for call records with callbacks scheduled in the next 5 minutes
+ * for call records with callbacks scheduled in 15 minutes.
  */
 export const processCallbackReminders = async (): Promise<void> => {
   try {
-    const now = new Date();
-    const reminderWindowStart = new Date(
-      now.getTime() + (REMINDER_MINUTES_BEFORE - 1) * 60 * 1000,
-    );
-    const reminderWindowEnd = new Date(
-      now.getTime() + (REMINDER_MINUTES_BEFORE + 1) * 60 * 1000,
-    );
-
-    // Find call records with callbacks in the reminder window that haven't been notified yet
-    const callRecords = await CallRecord.find({
+    const { start: reminderWindowStart, end: reminderWindowEnd } =
+      getReminderWindow();
+    const baseFilter = {
       callbackAt: {
-        $gte: reminderWindowStart,
+        $gt: reminderWindowStart,
         $lte: reminderWindowEnd,
       },
-      callbackNotifiedAt: { $exists: false },
+    };
+    const notNotifiedFilter = {
+      $or: [
+        { callbackNotifiedAt: { $exists: false } },
+        { callbackNotifiedAt: null },
+      ],
+    };
+
+    console.log(
+      `[CallbackReminder] Window IST ${formatWindowLog(reminderWindowStart)} -> ${formatWindowLog(reminderWindowEnd)}`,
+    );
+
+    // Find upcoming callbacks now within the 15-minute reminder horizon.
+    const callRecords = await CallRecord.find({
+      ...baseFilter,
+      ...notNotifiedFilter,
     }).lean();
 
     if (callRecords.length === 0) {
-      console.log("[CallbackReminder] No callbacks to remind about");
+      const [windowTotal, nextCallbacks] = await Promise.all([
+        CallRecord.countDocuments(baseFilter),
+        CallRecord.find({
+          callbackAt: { $gt: reminderWindowStart },
+        })
+          .select("_id phoneNumber firstName lastName productService callbackAt callbackNotifiedAt")
+          .sort({ callbackAt: 1 })
+          .limit(5)
+          .lean(),
+      ]);
+      const nextSummary = nextCallbacks
+        .map((record: any) => {
+          const callbackAt = record?.callbackAt
+            ? new Date(record.callbackAt)
+            : null;
+          const minutesAway = callbackAt
+            ? Math.round(
+                (callbackAt.getTime() - reminderWindowStart.getTime()) /
+                  60000,
+              )
+            : "-";
+          return `${record._id} at ${formatIndiaTime(record.callbackAt)} (${minutesAway}m) notified=${Boolean(record.callbackNotifiedAt)}`;
+        })
+        .join(" | ");
+
+      console.log(
+        `[CallbackReminder] No callbacks to remind. inWindow=${windowTotal}, next=${nextSummary || "none"}`,
+      );
       return;
     }
 
     console.log(
-      `[CallbackReminder] Found ${callRecords.length} callbacks to remind`,
+      `[CallbackReminder] Found ${callRecords.length} callbacks to remind: ${callRecords
+        .map((record: any) => `${record._id}@${formatIndiaTime(record.callbackAt)}`)
+        .join(", ")}`,
     );
 
-    // Get all admin users to notify
-    const admins = await Admin.find({ role: { $in: ["admin", "manager"] } })
-      .select("_id")
-      .lean();
-    const adminIds = admins.map((admin) => admin._id.toString());
+    const adminIds = await getAdminIds();
 
     // Process each call record
     for (const record of callRecords) {
@@ -59,29 +161,28 @@ export const processCallbackReminders = async (): Promise<void> => {
             `${record.firstName || ""} ${record.lastName || ""}`.trim() ||
             record.phoneNumber,
           product: record.productService || "Call Record",
-          callbackTime: record.callbackAt
-            ? new Date(record.callbackAt).toLocaleString()
-            : "scheduled time",
+          callbackTime: formatIndiaTime(record.callbackAt),
         };
 
-        // Get agent ID if assignee exists
-        const assigneeId = record.assignee
-          ? record.assignee instanceof mongoose.Types.ObjectId
-            ? record.assignee.toString()
-            : (record.assignee as string)
-          : null;
+        const assignedAgentIds = getAssignedAgentIds(record);
 
-        // Send notification to assigned agent
-        if (assigneeId) {
-          await sendSingleNotification({
-            type: "callback-reminder",
-            toUserId: assigneeId,
-            toRole: UserType.AGENT,
-            context,
-          });
-          console.log(
-            `[CallbackReminder] Notified agent ${assigneeId} for callback ${recordId}`,
-          );
+        for (const assigneeId of assignedAgentIds) {
+          try {
+            await sendSingleNotification({
+              type: "callback-reminder",
+              toUserId: assigneeId,
+              toRole: UserType.AGENT,
+              context,
+            });
+            console.log(
+              `[CallbackReminder] Notified assigned agent ${assigneeId} for callback ${recordId}`,
+            );
+          } catch (error) {
+            console.error(
+              `[CallbackReminder] Error notifying assigned agent ${assigneeId}:`,
+              error,
+            );
+          }
         }
 
         // Send notifications to all admins
@@ -128,27 +229,151 @@ export const processCallbackReminders = async (): Promise<void> => {
 };
 
 /**
+ * Process lead follow-up reminders using the same 15-minute reminder window.
+ */
+export const processLeadFollowUpReminders = async (): Promise<void> => {
+  try {
+    const { start: reminderWindowStart, end: reminderWindowEnd } =
+      getReminderWindow();
+
+    const leads = await Lead.find({
+      followUps: {
+        $elemMatch: {
+          reminderAt: {
+            $gt: reminderWindowStart,
+            $lte: reminderWindowEnd,
+          },
+          status: LeadFollowUpStatus.PENDING,
+          $or: [
+            { reminderNotifiedAt: { $exists: false } },
+            { reminderNotifiedAt: null },
+          ],
+        },
+      },
+    })
+      .select("fullName mobile productType assignment.current followUps")
+      .lean();
+
+    if (leads.length === 0) {
+      console.log("[FollowUpReminder] No follow-ups to remind about");
+      return;
+    }
+
+    const adminIds = await getAdminIds();
+    let processedCount = 0;
+
+    for (const lead of leads) {
+      const followUps = ((lead.followUps || []) as any[]).filter(
+        (followUp) =>
+          followUp?.status === LeadFollowUpStatus.PENDING &&
+          followUp?.reminderAt &&
+          !followUp?.reminderNotifiedAt &&
+          new Date(followUp.reminderAt) > reminderWindowStart &&
+          new Date(followUp.reminderAt) <= reminderWindowEnd,
+      );
+
+      for (const followUp of followUps) {
+        try {
+          const leadId =
+            lead._id instanceof mongoose.Types.ObjectId
+              ? lead._id.toString()
+              : (lead._id as string);
+          const followUpId =
+            followUp._id instanceof mongoose.Types.ObjectId
+              ? followUp._id.toString()
+              : (followUp._id as string);
+          const assignee = lead.assignment?.current?.agent;
+          const assigneeId = assignee
+            ? assignee instanceof mongoose.Types.ObjectId
+              ? assignee.toString()
+              : (assignee as string)
+            : null;
+
+          const context = {
+            name: lead.fullName || lead.mobile || "Lead",
+            phone: lead.mobile,
+            product: lead.productType || "Lead",
+            followUpTime: formatIndiaTime(followUp.reminderAt),
+          };
+
+          if (assigneeId) {
+            await sendSingleNotification({
+              type: "follow-up-reminder",
+              toUserId: assigneeId,
+              toRole: UserType.AGENT,
+              context,
+            });
+          }
+
+          for (const adminId of adminIds) {
+            try {
+              await sendSingleNotification({
+                type: "follow-up-reminder",
+                toUserId: adminId,
+                toRole: UserType.ADMIN,
+                context,
+              });
+            } catch (error) {
+              console.error(
+                `[FollowUpReminder] Error notifying admin ${adminId}:`,
+                error,
+              );
+            }
+          }
+
+          await Lead.updateOne(
+            { _id: leadId, "followUps._id": followUpId },
+            { $set: { "followUps.$.reminderNotifiedAt": new Date() } },
+          );
+          processedCount += 1;
+        } catch (error) {
+          console.error(
+            `[FollowUpReminder] Error processing follow-up ${followUp?._id}:`,
+            error,
+          );
+        }
+      }
+    }
+
+    console.log(
+      `[FollowUpReminder] Processed ${processedCount} follow-up reminders`,
+    );
+  } catch (error) {
+    console.error("[FollowUpReminder] Error in reminder process:", error);
+  }
+};
+
+/**
  * Start the callback reminder scheduler
  * Runs every minute to check for upcoming callbacks
  */
 export const startCallbackReminderScheduler = (): NodeJS.Timeout => {
   console.log(
-    `[CallbackReminder] Scheduler started - checking every ${CHECK_INTERVAL_MINUTES} minute(s)`,
+    `[CallbackReminder] Scheduler started - checking every ${CHECK_INTERVAL_MINUTES} minute(s), aligned to minute boundary`,
   );
 
   // Run immediately on start
   processCallbackReminders();
+  processLeadFollowUpReminders();
 
-  // Then run every minute
-  return setInterval(
-    () => {
+  const intervalMs = CHECK_INTERVAL_MINUTES * 60 * 1000;
+  const msUntilNextMinute = intervalMs - (Date.now() % intervalMs);
+  let interval: NodeJS.Timeout;
+  const initialTimeout = setTimeout(() => {
+    const run = () => {
       processCallbackReminders();
-    },
-    CHECK_INTERVAL_MINUTES * 60 * 1000,
-  );
+      processLeadFollowUpReminders();
+    };
+
+    run();
+    interval = setInterval(run, intervalMs);
+  }, msUntilNextMinute);
+
+  return initialTimeout as unknown as NodeJS.Timeout;
 };
 
 export default {
   processCallbackReminders,
+  processLeadFollowUpReminders,
   startCallbackReminderScheduler,
 };

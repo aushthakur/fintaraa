@@ -1,8 +1,10 @@
 import bcrypt from "bcrypt";
 import mongoose, { Document, Schema, Model } from "mongoose";
 import { LoanProductType } from "./user.model";
+import { allocatePrefixedSequence } from "../utils/idAllocator";
 
 export interface IAgent extends Document {
+  agentId?: string;
   name: string;
   bio?: string;
   email: string;
@@ -29,6 +31,7 @@ export interface IAgent extends Document {
 
 const AgentSchema: Schema<IAgent> = new Schema(
   {
+    agentId: { type: String, unique: true, sparse: true, index: true },
     name: {
       type: String,
       required: true,
@@ -128,11 +131,21 @@ AgentSchema.methods.comparePassword = async function (
 
 // 🔒 Pre-save hook to hash password if modified
 AgentSchema.pre<IAgent>("save", async function (next) {
-  if (!this.isModified("password")) return next();
-
   try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
+    if (this.isNew && !this.agentId) {
+      this.agentId = await allocatePrefixedSequence({
+        key: "agentId",
+        prefix: "FIN",
+        padLength: 4,
+        session: this.$session() || undefined,
+      });
+    }
+
+    if (this.isModified("password")) {
+      const salt = await bcrypt.genSalt(10);
+      this.password = await bcrypt.hash(this.password, salt);
+    }
+
     return next();
   } catch (err) {
     return next(err as Error);

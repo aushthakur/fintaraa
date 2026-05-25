@@ -28,6 +28,11 @@ import { Agency } from "../../modals/agency.model";
 import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
 import { agencyEarningsService } from "../../services/agencyEarnings.service";
 import {
+  notifyLoanApplicationCreated,
+  notifyLoanDocumentsUploaded,
+  notifyLoanStageUpdated,
+} from "../../services/loanCustomerNotification.service";
+import {
   DEFAULT_QUERY_TIMEZONE,
   buildDateRangeInTimeZone,
   parseDateInTimeZone,
@@ -36,6 +41,109 @@ import {
 const RC_CACHE_TTL_DAYS = 365;
 const normalizeRcNumber = (value: string) =>
   value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+
+const getRcLookupFailureResponse = (err: any, rcNumber?: string) => {
+  const providerData = err?.data || err?.response?.data || {};
+  const providerMessage =
+    providerData?.message ||
+    providerData?.data?.message ||
+    err?.message ||
+    "Verification failed";
+  const messageCode =
+    providerData?.message_code || providerData?.data?.message_code || "";
+  const upstreamStatus =
+    Number(providerData?.status_code || providerData?.data?.status_code) ||
+    Number(err?.statusCode || err?.status) ||
+    422;
+  const safeStatus = upstreamStatus >= 400 && upstreamStatus < 500 ? upstreamStatus : 422;
+  const vehicleNumber =
+    providerData?.data?.rc_number || providerData?.rc_number || rcNumber || "";
+
+  const userMessage =
+    messageCode === "verification_failed" ||
+    String(providerMessage).toLowerCase().includes("verification failed")
+      ? `No RC details found for ${vehicleNumber || "this vehicle number"}. Please check the registration number and try again.`
+      : `Unable to fetch RC details${vehicleNumber ? ` for ${vehicleNumber}` : ""}. ${providerMessage}`;
+
+  return {
+    status: safeStatus,
+    message: userMessage,
+    data: {
+      rcNumber: vehicleNumber,
+      provider: "surepass",
+      providerMessage,
+      providerCode: messageCode || undefined,
+      providerStatus: upstreamStatus,
+    },
+  };
+};
+
+const buildLoanRcLookupSnapshot = ({
+  idNumber,
+  report,
+  payload,
+  environment,
+  fetchedAt,
+  cached,
+  lookupId,
+}: {
+  idNumber: string;
+  report: Record<string, any>;
+  payload?: Record<string, any>;
+  environment?: string;
+  fetchedAt: Date;
+  cached: boolean;
+  lookupId?: any;
+}) => ({
+  idNumber,
+  report,
+  payload: payload || {},
+  environment,
+  fetchedAt,
+  cached,
+  lookupId,
+  updatedAt: new Date(),
+});
+
+const attachRcLookupToLoanQuery = async ({
+  queryId,
+  actorId,
+  role,
+  rcLookup,
+}: {
+  queryId?: any;
+  actorId?: any;
+  role?: string;
+  rcLookup: Record<string, any>;
+}) => {
+  if (!queryId || !mongoose.Types.ObjectId.isValid(String(queryId))) return null;
+
+  const query = await LoanQuery.findById(queryId)
+    .select(
+      "customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy policyDetails",
+    )
+    .lean()
+    .exec();
+
+  if (!query) throw new ApiError(404, "Loan query not found");
+  if (!(await canAccessLoanQuery(query, actorId, role))) {
+    throw new ApiError(403, "You can only update RC data for accessible queries");
+  }
+
+  const update: Record<string, any> = {
+    rcLookup,
+    "policyDetails.carRegistrationNumber": rcLookup.idNumber,
+  };
+
+  return LoanQuery.findByIdAndUpdate(
+    queryId,
+    { $set: update },
+    { new: true, runValidators: false },
+  )
+    .select("rcLookup policyDetails.carRegistrationNumber")
+    .lean()
+    .exec();
+};
 
 const loanQueryService = new CommonService(LoanQuery);
 const ACTIVE_QUERY_MATCH = { isDeleted: { $ne: true } };
@@ -618,10 +726,13 @@ const normalizeAccountType = (value?: string) => {
 
 export class LoanQueryController {
   static async fetchRcDetails(req: Request, res: Response, next: NextFunction) {
+    let idNumber = "";
     try {
       const userId = (req as any).user?._id;
+      const role = (req as any).user?.role;
+      const queryId = req.body?.queryId || req.body?.loanQueryId;
       const payload = prepareSurepassRcPayload(req.body || {});
-      const idNumber = normalizeRcNumber(payload.id_number);
+      idNumber = normalizeRcNumber(payload.id_number);
       const now = new Date();
       const cached = await VehicleRcLookup.findOne({ idNumber }).lean();
       if (cached?.fetchedAt) {
@@ -636,6 +747,21 @@ export class LoanQueryController {
             accessUpdate.$set.lastAccessedBy = userId;
           }
           await VehicleRcLookup.updateOne({ _id: cached._id }, accessUpdate);
+          const rcLookup = buildLoanRcLookupSnapshot({
+            idNumber,
+            report: cached.report,
+            payload: cached.payload,
+            environment: cached.environment,
+            fetchedAt: new Date(cached.fetchedAt),
+            cached: true,
+            lookupId: cached._id,
+          });
+          await attachRcLookupToLoanQuery({
+            queryId,
+            actorId: userId,
+            role,
+            rcLookup,
+          });
           return res.status(200).json(
             new ApiResponse(
               200,
@@ -644,6 +770,7 @@ export class LoanQueryController {
                 data: cached.report,
                 cached: true,
                 lastFetchedAt: cached.fetchedAt,
+                rcLookup,
               },
               "RC details fetched successfully",
             ),
@@ -667,22 +794,40 @@ export class LoanQueryController {
         update.$set.lastFetchedBy = userId;
         update.$set.lastAccessedBy = userId;
       }
-      await VehicleRcLookup.findOneAndUpdate({ idNumber }, update, {
+      const lookup = await VehicleRcLookup.findOneAndUpdate({ idNumber }, update, {
         upsert: true,
         new: true,
         setDefaultsOnInsert: true,
+      }).lean();
+      const rcLookup = buildLoanRcLookupSnapshot({
+        idNumber,
+        report: result.data,
+        payload,
+        environment: result.environment,
+        fetchedAt: now,
+        cached: false,
+        lookupId: lookup?._id,
+      });
+      await attachRcLookupToLoanQuery({
+        queryId,
+        actorId: userId,
+        role,
+        rcLookup,
       });
       return res
         .status(200)
         .json(
           new ApiResponse(
             200,
-            { ...result, cached: false, lastFetchedAt: now },
+            { ...result, cached: false, lastFetchedAt: now, rcLookup },
             "RC details fetched successfully",
           ),
         );
-    } catch (err) {
-      next(err);
+    } catch (err: any) {
+      const failure = getRcLookupFailureResponse(err, idNumber);
+      return res
+        .status(failure.status)
+        .json(new ApiError(failure.status, failure.message, failure.data));
     }
   }
 
@@ -1142,6 +1287,10 @@ export class LoanQueryController {
         return res
           .status(400)
           .json(new ApiError(400, "Failed to create loan query"));
+      }
+
+      if (!isDraft) {
+        await notifyLoanApplicationCreated(result);
       }
 
       return res
@@ -1688,24 +1837,62 @@ export class LoanQueryController {
             _id: "$status",
             count: { $sum: 1 },
             amount: { $sum: { $ifNull: ["$loanAmount", 0] } },
+            disbursedAmount: {
+              $sum: { $ifNull: ["$disbursedAmount", 0] },
+            },
+          },
+        },
+      ]);
+
+      const disbursedMatch: Record<string, any> = {
+        ...ACTIVE_QUERY_MATCH,
+        disbursedDate: { $gte: start, $lte: end },
+        disbursedAmount: { $gt: 0 },
+      };
+
+      if (normalizedLoanType) {
+        disbursedMatch.loanType = normalizedLoanType;
+      }
+
+      Object.assign(disbursedMatch, buildLoanScopeMatch(userId, role));
+
+      const disbursedAgg = await LoanQuery.aggregate([
+        { $match: disbursedMatch },
+        {
+          $group: {
+            _id: null,
+            totalDisbursedCount: { $sum: 1 },
+            totalDisbursedAmount: {
+              $sum: { $ifNull: ["$disbursedAmount", 0] },
+            },
           },
         },
       ]);
 
       const byStatus: Record<string, number> = {};
       const amountByStatus: Record<string, number> = {};
+      const disbursedAmountByStatus: Record<string, number> = {};
       let total = 0;
       let totalAmount = 0;
+      let createdAtDisbursedAmount = 0;
 
       rows.forEach((row: any) => {
         const key = row?._id ? String(row._id) : "unknown";
         const count = Number(row?.count) || 0;
         const amount = Number(row?.amount) || 0;
+        const disbursedAmount = Number(row?.disbursedAmount) || 0;
         byStatus[key] = count;
         amountByStatus[key] = amount;
+        disbursedAmountByStatus[key] = disbursedAmount;
         total += count;
         totalAmount += amount;
+        createdAtDisbursedAmount += disbursedAmount;
       });
+
+      const totalDisbursedAmount =
+        Number(disbursedAgg?.[0]?.totalDisbursedAmount) || 0;
+      const totalDisbursedCount =
+        Number(disbursedAgg?.[0]?.totalDisbursedCount) || 0;
 
       return res.status(200).json(
         new ApiResponse(
@@ -1718,8 +1905,14 @@ export class LoanQueryController {
             },
             total,
             totalAmount,
+            totalDisbursedAmount,
+            disbursedAmount: totalDisbursedAmount,
+            totalDisbursed: totalDisbursedAmount,
+            totalDisbursedCount,
+            createdAtDisbursedAmount,
             byStatus,
             amountByStatus,
+            disbursedAmountByStatus,
           },
           "Loan query stats fetched successfully",
         ),
@@ -2010,6 +2203,10 @@ export class LoanQueryController {
           updatedResult,
           customerId?.toString(),
         );
+      }
+
+      if (existingResult.status !== updatedResult.status) {
+        await notifyLoanStageUpdated(updatedResult);
       }
 
       return res
@@ -2708,6 +2905,10 @@ export class LoanQueryController {
         );
       }
 
+      if (oldStatus !== status && updatedQuery) {
+        await notifyLoanStageUpdated(updatedQuery);
+      }
+
       return res
         .status(200)
         .json(
@@ -2833,10 +3034,14 @@ export class LoanQueryController {
         },
       )
         .select(
-          "documents updatedByName customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency",
+          "documents updatedByName customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency loanId loanType firstName lastName",
         )
         .lean()
         .exec();
+
+      if (updatedQuery) {
+        await notifyLoanDocumentsUploaded(updatedQuery, uploadedDocumentKeys);
+      }
 
       return res
         .status(200)

@@ -96,7 +96,7 @@ export class CommonService<T extends Document> {
       );
       const usePagination = toBoolean(query.pagination ?? "true");
       const page = Math.max(parseInt(query.page, 10) || 1, 1);
-      const limit = Math.max(parseInt(query.limit, 10) || 10, 1);
+      const limit = Math.max(parseInt(query.limit, 10) || 20, 1);
 
       const aggregateOptions = {
         ...options,

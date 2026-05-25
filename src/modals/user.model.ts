@@ -2,7 +2,10 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { config } from "../config/config";
-import { allocatePrefixedSequence } from "../utils/idAllocator";
+import {
+  allocatePrefixedSequence,
+  formatDaySequencePrefix,
+} from "../utils/idAllocator";
 import mongoose, { Schema, Document, Types } from "mongoose";
 
 export enum UserStatus {
@@ -662,9 +665,10 @@ const allocateUniqueCustomerId = async (user: any): Promise<string> => {
   const maxAttempts = 25;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const datePrefix = formatDaySequencePrefix(new Date());
     const candidate = await allocatePrefixedSequence({
-      key: "customerId",
-      prefix: "FINTARAA",
+      key: `customerId:${datePrefix}`,
+      prefix: `FIN${datePrefix}`,
       padLength: 4,
       session: session || undefined,
     });

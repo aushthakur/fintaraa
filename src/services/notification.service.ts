@@ -13,6 +13,7 @@ import { Request, Response, NextFunction } from "express";
 import { emitNotificationToUser } from "../config/socket.io";
 import { UserType, Notification } from "../modals/notification.model";
 import { NotificationMessages } from "./../config/notificationMessages";
+import { sendWebPushToUser } from "./webPush.service";
 
 interface SendNotificationOptions {
   type: string;
@@ -41,6 +42,11 @@ interface SingleNotifyOptions {
   fromUser?: { _id: string; role: UserType };
 }
 
+const buildDashboardUrl = () => {
+  const baseUrl = String(config.frontendUrl || "").trim().replace(/\/+$/, "");
+  return baseUrl ? `${baseUrl}/dashboard` : "/dashboard";
+};
+
 export const NotificationService = {
   async send(
     options: SendNotificationOptions,
@@ -48,8 +54,6 @@ export const NotificationService = {
   ) {
     const { type, title, message, toRole, toUserId, fromUser } = options;
     const sender = fromUser || authUser;
-
-    if (!sender) throw new Error("Sender information is missing.");
 
     let notification: any;
 
@@ -60,7 +64,9 @@ export const NotificationService = {
         title,
         message,
         to: { user: new Types.ObjectId(toUserId), role: toRole },
-        from: { user: new Types.ObjectId(sender._id), role: sender.role },
+        ...(sender
+          ? { from: { user: new Types.ObjectId(sender._id), role: sender.role } }
+          : {}),
       });
 
       const resolveUserByRole = async (id: string, role: UserType) => {
@@ -85,11 +91,12 @@ export const NotificationService = {
       // Fetch sender and recipient
       const [recipient, senderUser]: any = await Promise.all([
         resolveUserByRole(toUserId, toRole),
-        resolveUserByRole(sender._id, sender.role),
+        sender ? resolveUserByRole(sender._id, sender.role) : Promise.resolve(null),
       ]);
 
       if (!recipient) throw new Error(`Recipient not found: ${toUserId}`);
-      if (!senderUser) throw new Error(`Sender not found: ${sender._id}`);
+      if (sender && !senderUser)
+        throw new Error(`Sender not found: ${sender._id}`);
 
       const isUserRole = [
         "user",
@@ -108,6 +115,7 @@ export const NotificationService = {
 
       const tasks: Promise<any>[] = [];
       const { fcmToken, mobile, email }: any = recipient;
+      const dashboardUrl = buildDashboardUrl();
 
       // --- Push Notification ---
       if (pushAllowed && fcmToken && admin && config?.notification?.enabled) {
@@ -135,12 +143,32 @@ export const NotificationService = {
         );
       }
 
+      if (pushAllowed && config?.notification?.enabled) {
+        tasks.push(
+          sendWebPushToUser({
+            userId: toUserId,
+            role: toRole,
+            payload: {
+              title,
+              body: message,
+              icon: "/favicon.ico",
+              badge: "/favicon.ico",
+              data: {
+                type,
+                notificationId: notification._id.toString(),
+                url: dashboardUrl,
+              },
+            },
+          }),
+        );
+      }
+
       emitNotificationToUser(toUserId, {
         title,
         body: message,
         type,
         notificationId: notification._id.toString(),
-        url: "/dashboard/notifications",
+        url: dashboardUrl,
       });
 
       // --- Email Notification ---

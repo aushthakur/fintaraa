@@ -199,6 +199,7 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
 export interface ILoanQuery extends Document {
   customerId: Types.ObjectId;
   loanId?: string;
+  rcLookup?: Record<string, any>;
   isDeleted?: boolean;
   deletedAt?: Date | null;
   deletedBy?: Types.ObjectId | null;
@@ -469,6 +470,10 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
         },
       ],
       default: [],
+    },
+    rcLookup: {
+      type: Schema.Types.Mixed,
+      default: null,
     },
     // Commission tracking
     commissionRecorded: { type: Boolean, default: false, index: true },

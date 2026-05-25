@@ -38,5 +38,6 @@ router.put(
 router.get("/:id", asyncHandler(AgencyAdminController.getById));
 router.put("/:id", asyncHandler(AgencyAdminController.updateById));
 router.put("/:id/status", asyncHandler(AgencyAdminController.updateStatus));
+router.delete("/:id", asyncHandler(AgencyAdminController.deleteById));
 
 export default router;

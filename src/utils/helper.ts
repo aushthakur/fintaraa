@@ -51,7 +51,7 @@ const zonedTimeToUtc = (
   },
   timeZone = DEFAULT_QUERY_TIMEZONE,
 ) => {
-  let utcGuess = Date.UTC(
+  const targetAsUtc = Date.UTC(
     parts.year,
     parts.month - 1,
     parts.day,
@@ -60,6 +60,7 @@ const zonedTimeToUtc = (
     parts.second,
     parts.millisecond ?? 0,
   );
+  let utcGuess = targetAsUtc;
 
   for (let i = 0; i < 2; i += 1) {
     const zonedParts = getTimeZoneParts(new Date(utcGuess), timeZone);
@@ -72,9 +73,9 @@ const zonedTimeToUtc = (
       zonedParts.second,
       parts.millisecond ?? 0,
     );
-    const offset = zonedAsUtc - utcGuess;
-    if (offset === 0) break;
-    utcGuess -= offset;
+    const diff = targetAsUtc - zonedAsUtc;
+    if (diff === 0) break;
+    utcGuess += diff;
   }
 
   return new Date(utcGuess);
@@ -189,7 +190,7 @@ export const getPipeline = (
 ) => {
   const {
     page = 1,
-    limit = 10,
+    limit = 20,
     pagination = "true",
 
     search = "",

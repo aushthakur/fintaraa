@@ -314,8 +314,63 @@ export const NotificationMessages: Record<string, DualNotificationTemplate> = {
       message: `You set a callback reminder for ${ctx?.phone || "a lead"} at ${ctx?.callbackTime || "the scheduled time"}.`,
     }),
     receiver: (ctx) => ({
-      title: "⏰ Callback in 15 Minutes",
-      message: `Reminder: You have a callback scheduled in 15 minutes for ${ctx?.name || ctx?.phone || "a lead"}${ctx?.product ? ` (${ctx.product})` : ""}.`,
+      title: "Callback Due in 15 Minutes",
+      message: `You have a follow-up callback with ${ctx?.name || ctx?.phone || "this customer"} in 15 minutes${ctx?.product ? ` for ${ctx.product}` : ""}. Please be ready to connect.`,
+    }),
+  },
+
+  "follow-up-reminder": {
+    sender: (ctx) => ({
+      title: "Follow-up Reminder Set",
+      message: `You set a follow-up reminder for ${ctx?.name || "a lead"} at ${ctx?.followUpTime || "the scheduled time"}.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Follow-up in 15 Minutes",
+      message: `You have a follow-up with ${ctx?.name || ctx?.phone || "this customer"} in 15 minutes${ctx?.product ? ` for ${ctx.product}` : ""}. Please be ready to connect.`,
+    }),
+  },
+
+  "documents-requested": {
+    sender: (ctx) => ({
+      title: "Documents Requested",
+      message: `Requested documents from ${ctx?.name || "a customer"}.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Documents Required",
+      message: `Please upload ${ctx?.documents || "the requested documents"}${ctx?.loanId ? ` for application ${ctx.loanId}` : ""}.`,
+    }),
+  },
+
+  "loan-application-created": {
+    sender: (ctx) => ({
+      title: "Loan Application Created",
+      message: `Loan application ${ctx?.loanId || ""} was created.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Loan Application Created",
+      message: `Your ${ctx?.loanType || "loan"} application${ctx?.loanId ? ` (${ctx.loanId})` : ""} has been created.`,
+    }),
+  },
+
+  "loan-stage-updated": {
+    sender: (ctx) => ({
+      title: "Loan Stage Updated",
+      message: `Loan application ${ctx?.loanId || ""} moved to ${ctx?.stage || "next stage"}.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Loan Application Update",
+      message: `Your loan application${ctx?.loanId ? ` (${ctx.loanId})` : ""} is now at ${ctx?.stage || "the next stage"}.`,
+    }),
+  },
+
+  "loan-documents-uploaded": {
+    sender: (ctx) => ({
+      title: "Documents Uploaded",
+      message: `${ctx?.name || "Customer"} uploaded ${ctx?.documents || "documents"}.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Documents Received",
+      message: `We received ${ctx?.documents || "your documents"}${ctx?.loanId ? ` for application ${ctx.loanId}` : ""}.`,
     }),
   },
 };

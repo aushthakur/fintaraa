@@ -112,6 +112,13 @@ export const config = {
       serverKey: process.env.FIREBASE_SERVER_KEY!,
       projectId: process.env.FIREBASE_PROJECT_ID!,
     },
+    vapid: {
+      publicKey: process.env.VAPID_PUBLIC_KEY || "",
+      privateKey: process.env.VAPID_PRIVATE_KEY || "",
+      subject:
+        process.env.VAPID_SUBJECT ||
+        (process.env.EMAIL_USER ? `mailto:${process.env.EMAIL_USER}` : ""),
+    },
   },
 
   payment: {
