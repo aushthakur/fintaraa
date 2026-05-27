@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   fetchPaidCreditScore,
   fetchCibilReport,
+  fetchCibilPdfReport,
   fetchCibilReportWithMiddleware,
   fetchEncryptedCibilReportController,
   searchCustomerCreditScore,
@@ -22,6 +23,7 @@ const router = Router();
 
 router.get("/pricing", asyncHandler(getCreditScorePricing));
 router.post("/fetch", asyncHandler(fetchCibilReport));
+router.post("/fetch-pdf", authenticateToken, asyncHandler(fetchCibilPdfReport));
 router.post("/search", authenticateToken, asyncHandler(searchCustomerCreditScore));
 router.post(
   "/payment/order",

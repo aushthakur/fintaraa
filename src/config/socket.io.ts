@@ -458,6 +458,7 @@ export const emitSupportMessage = (payload: MessageData) => {
   userManager.updateActivity(payload.senderId);
 
   const status = deliverMessageToReceiver(rootIo, enrichedMessage, true);
+  rootIo.emit("supportTicketMessage", enrichedMessage);
 
   SocketLogger.info("Support message emitted", {
     from: payload.senderId,

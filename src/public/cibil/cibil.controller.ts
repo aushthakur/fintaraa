@@ -881,6 +881,70 @@ export const fetchCibilReport = async (
   }
 };
 
+export const fetchCibilPdfReport = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const userId = (req as any).user?._id;
+    if (!userId) {
+      return next(new ApiError(401, "Unauthorized"));
+    }
+
+    const payload = prepareSurepassCibilPayload(req.body);
+    const requestedEnv =
+      (req.query?.environment as string)?.toLowerCase() ||
+      (req.body?.environment as string)?.toLowerCase();
+
+    const normalizedEnv =
+      requestedEnv === "production"
+        ? "production"
+        : requestedEnv === "sandbox"
+          ? "sandbox"
+          : undefined;
+
+    const report = await fetchSurepassCibilPdfReport(payload, {
+      environment: normalizedEnv,
+    });
+
+    const pdfUrl =
+      report.data?.data?.credit_report_link ||
+      report.data?.data?.creditReportLink ||
+      report.data?.credit_report_link ||
+      report.data?.creditReportLink ||
+      null;
+
+    await recordBureauHistory({
+      req,
+      bureau: "cibil",
+      lookupSource: "pdf_lookup",
+      payload,
+      response: { report: report.data, payload },
+      report: report.data,
+      customerName: payload.name,
+      customerMobile: payload.mobile,
+      customerPan: payload.pan,
+      customerGender: payload.gender,
+      paymentStatus: "waived",
+      pdfUrl,
+    });
+
+    return res.status(200).json(
+      new ApiResponse(200, {
+        payload,
+        cached: false,
+        report: report.data,
+        pdfUrl,
+        environment: report.environment,
+        lastFetchedAt: new Date(),
+      }),
+    );
+  } catch (error) {
+    return next(error);
+  }
+};
+
 export const fetchCibilReportWithMiddleware = (
   req: Request,
   res: Response,

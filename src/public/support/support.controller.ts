@@ -13,6 +13,7 @@ import ApiResponse from "../../utils/ApiResponse";
 import { Agency } from "../../modals/agency.model";
 import { deleteFromS3 } from "../../config/s3Uploader";
 import { LoanQuery } from "../../modals/loanquery.model";
+import Role from "../../modals/role.model";
 import { Request, Response, NextFunction } from "express";
 import { UserType } from "../../modals/notification.model";
 import { emitSupportMessage } from "../../config/socket.io";
@@ -63,6 +64,55 @@ const normalizeLabel = (value: unknown, fallback = "Loan") => {
   return source
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (part) => part.toUpperCase());
+};
+
+const resolveSupportAssignee = async (assigneeId: any) => {
+  const normalizedId = normalizeObjectId(assigneeId);
+  if (!normalizedId) return null;
+
+  const legacyAgent = await Agent.findById(normalizedId)
+    .select("_id name email mobile availability skills")
+    .lean();
+  if (legacyAgent) return legacyAgent;
+
+  const supportEmployee = await Admin.findById(normalizedId)
+    .select("_id username name email mobile availability department role")
+    .populate("role", "name")
+    .lean();
+  if (!supportEmployee) return null;
+
+  return {
+    ...supportEmployee,
+    role:
+      typeof supportEmployee.role === "object"
+        ? (supportEmployee.role as any)?.name
+        : supportEmployee.role,
+  };
+};
+
+const findDefaultSupportAssignee = async () => {
+  const supportRole = await Role.findOne({ name: "support" })
+    .select("_id")
+    .lean();
+  if (supportRole?._id) {
+    const supportEmployee = await Admin.findOne({
+      role: supportRole._id,
+      status: true,
+      availability: true,
+    })
+      .sort({ updatedAt: -1, createdAt: 1 })
+      .lean();
+    if (supportEmployee?._id) {
+      return { assignee: supportEmployee, model: "Admin" as const };
+    }
+  }
+
+  const legacyAgent = await Agent.findOne({ availability: true })
+    .sort({ activeTickets: 1, resolvedTickets: -1, createdAt: 1 })
+    .lean();
+  if (legacyAgent?._id) return { assignee: legacyAgent, model: "Agent" as const };
+
+  return null;
 };
 
 const resolveAgencyScope = async (agencyId: any) => {
@@ -154,7 +204,11 @@ const findEligibleAgentForTicket = async (tags: string[]) => {
 const assignTicketDocument = async (
   ticket: any,
   agent: any,
+  assigneeModel: "Agent" | "Admin" = "Agent",
 ): Promise<{ assigned: boolean; ticket: any; agent: any }> => {
+  const previousAssignee = ticket.assignee?.toString();
+  const nextAssignee = agent._id?.toString();
+
   ticket.assignee = agent._id;
   ticket.status =
     ticket.status === "open" || ticket.status === "re_assigned"
@@ -162,7 +216,20 @@ const assignTicketDocument = async (
       : ticket.status;
   await ticket.save();
 
-  await Agent.updateOne({ _id: agent._id }, { $inc: { activeTickets: 1 } });
+  if (previousAssignee !== nextAssignee) {
+    if (previousAssignee) {
+      await Agent.updateOne(
+        { _id: previousAssignee, activeTickets: { $gt: 0 } },
+        { $inc: { activeTickets: -1 } },
+      );
+    }
+    if (assigneeModel === "Agent") {
+      await Agent.updateOne(
+        { _id: agent._id },
+        { $inc: { activeTickets: 1 } },
+      );
+    }
+  }
 
   return { assigned: true, ticket, agent };
 };
@@ -201,18 +268,31 @@ const assignTicketToAgent = async (
     throw new ApiError(404, "Ticket not found");
   }
 
-  if (ticket.assignee) {
-    return { assigned: false, ticket, reason: "already_assigned" };
-  }
-
   if (agentId) {
+    const supportRole = await Role.findOne({ name: "support" })
+      .select("_id")
+      .lean();
+    const supportEmployee = supportRole?._id
+      ? await Admin.findOne({
+          _id: agentId,
+          role: supportRole._id,
+          status: true,
+          availability: true,
+        })
+      : null;
+
+    if (supportEmployee) {
+      return assignTicketDocument(ticket, supportEmployee, "Admin");
+    }
+
     const agent = await Agent.findOne({
       _id: agentId,
       availability: true,
+      ...(supportRole?._id ? { role: supportRole._id } : {}),
     });
 
     if (!agent) {
-      throw new ApiError(404, "Agent not found or inactive");
+      throw new ApiError(404, "Support agent not found or inactive");
     }
 
     const tags = ensureTagArray(ticket.tags);
@@ -518,9 +598,8 @@ export const getTicket = async (
 ): Promise<any> => {
   try {
     const { role, _id: userId } = req.user;
-    const result = await Ticket.findById(req.params.id)
+    const result: any = await Ticket.findById(req.params.id)
       .populate("requester", "fullName name email mobile")
-      .populate("assignee", "name email mobile availability skills")
       .populate("listingId", "title name productType type")
       .populate("transactionId", "title name productType type")
       .populate("relatedTickets", "title status")
@@ -531,6 +610,10 @@ export const getTicket = async (
     const assigneeId =
       (result as any)?.assignee?._id?.toString?.() ||
       result?.assignee?.toString?.();
+    if (result?.assignee) {
+      result.assignee =
+        (await resolveSupportAssignee(result.assignee)) || result.assignee;
+    }
 
     if (role === "agent") {
       if (assigneeId !== userId.toString()) {
@@ -705,6 +788,14 @@ export const getTickets = async (
         },
       },
       {
+        $lookup: {
+          from: "admins",
+          localField: "assignee",
+          foreignField: "_id",
+          as: "assigneeAdminInfo",
+        },
+      },
+      {
         $addFields: {
           requesterInfo: {
             $ifNull: [
@@ -712,7 +803,12 @@ export const getTickets = async (
               { $arrayElemAt: ["$requesterAgency", 0] },
             ],
           },
-          assigneeInfo: { $arrayElemAt: ["$assigneeInfo", 0] },
+          assigneeInfo: {
+            $ifNull: [
+              { $arrayElemAt: ["$assigneeInfo", 0] },
+              { $arrayElemAt: ["$assigneeAdminInfo", 0] },
+            ],
+          },
         },
       },
       {
@@ -731,8 +827,31 @@ export const getTickets = async (
           assigneeName: "$assigneeInfo.name",
           assigneeEmail: "$assigneeInfo.email",
           assigneeMobile: "$assigneeInfo.mobile",
+          requesterName: {
+            $trim: {
+              input: {
+                $ifNull: [
+                  "$requesterInfo.fullName",
+                  {
+                    $ifNull: [
+                      "$requesterInfo.name",
+                      {
+                        $concat: [
+                          { $ifNull: ["$requesterInfo.firstName", ""] },
+                          " ",
+                          { $ifNull: ["$requesterInfo.lastName", ""] },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
           requesterEmail: "$requesterInfo.email",
-          requesterNumber: "$requesterInfo.mobile",
+          requesterNumber: {
+            $ifNull: ["$requesterInfo.mobile", "$requesterInfo.phone"],
+          },
           requesterLastName: "$requesterInfo.lastName",
           requesterFirstName: "$requesterInfo.firstName",
         },
@@ -804,7 +923,94 @@ export const getAgents = async (
         .json(new ApiResponse(200, agents, "Data fetched successfully"));
     }
 
-    const result = await agentService.getAll(req.query);
+    const { roleName, role: roleFilter, ...query } = req.query || {};
+    const requestedRole = String(roleName || roleFilter || "")
+      .trim()
+      .toLowerCase();
+
+    if (requestedRole === "support") {
+      const supportRole = await Role.findOne({ name: "support" })
+        .select("_id name")
+        .lean();
+      if (!supportRole?._id) {
+        return res
+          .status(200)
+          .json(new ApiResponse(200, [], "Data fetched successfully"));
+      }
+
+      const availability =
+        query.availability === undefined
+          ? undefined
+          : String(query.availability).toLowerCase() === "true";
+      const status =
+        query.status === undefined
+          ? true
+          : String(query.status).toLowerCase() === "true";
+      const supportEmployees = await Admin.find({
+        role: supportRole._id,
+        status,
+        ...(availability === undefined ? {} : { availability }),
+      })
+        .select(
+          "_id username name email mobile department location availability status profilePictureUrl role createdAt updatedAt",
+        )
+        .sort({ name: 1, username: 1, createdAt: -1 })
+        .lean();
+
+      const result = supportEmployees.map((employee: any) => ({
+        ...employee,
+        id: employee._id,
+        roleId: supportRole._id,
+        role: supportRole.name,
+      }));
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Data fetched successfully"));
+    }
+
+    const roleLookupPipeline: any[] = [
+      {
+        $lookup: {
+          from: "roles",
+          localField: "role",
+          foreignField: "_id",
+          as: "roleInfo",
+        },
+      },
+      { $unwind: { path: "$roleInfo", preserveNullAndEmptyArrays: true } },
+      ...(requestedRole && !Types.ObjectId.isValid(requestedRole)
+        ? [{ $match: { "roleInfo.name": requestedRole } }]
+        : []),
+      {
+        $project: {
+          _id: 1,
+          agentId: 1,
+          name: 1,
+          email: 1,
+          mobile: 1,
+          skills: 1,
+          department: 1,
+          availability: 1,
+          activeTickets: 1,
+          resolvedTickets: 1,
+          profilePictureUrl: 1,
+          roleId: "$roleInfo._id",
+          role: "$roleInfo.name",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    ];
+    const result = await agentService.getAll(
+      {
+        ...query,
+        ...(requestedRole && Types.ObjectId.isValid(requestedRole)
+          ? { role: requestedRole }
+          : {}),
+      },
+      roleLookupPipeline,
+    );
     return res
       .status(200)
       .json(new ApiResponse(200, result, "Data fetched successfully"));
@@ -1026,6 +1232,17 @@ export const addInteraction = async (
         if (!effectiveReceiver && ticket.assignee) {
           effectiveReceiver = ticket.assignee;
         }
+        if (!effectiveReceiver) {
+          const fallbackAssignee = await findDefaultSupportAssignee();
+          if (fallbackAssignee?.assignee?._id) {
+            ticket.assignee = fallbackAssignee.assignee._id;
+            ticket.status =
+              ticket.status === "open" || ticket.status === "re_assigned"
+                ? "in_progress"
+                : ticket.status;
+            effectiveReceiver = fallbackAssignee.assignee._id;
+          }
+        }
       }
     } else {
       // Admin context: receiver should be the requester for admin-to-user messaging
@@ -1038,8 +1255,13 @@ export const addInteraction = async (
     const agentIdToCheck = isRequesterRole ? effectiveReceiver : initiator;
     if (agentIdToCheck && !isAdmin) {
       const agentExist = await Agent.findById({ _id: agentIdToCheck });
-      if (!agentExist)
-        return res.status(404).json(new ApiError(404, "Agent not found"));
+      const adminEmployeeExist = !agentExist
+        ? await Admin.findById({ _id: agentIdToCheck }).select("_id").lean()
+        : null;
+      if (!agentExist && !adminEmployeeExist)
+        return res
+          .status(404)
+          .json(new ApiError(404, "Support assignee not found"));
     }
 
     let attachments: any[] = [];
@@ -1062,9 +1284,13 @@ export const addInteraction = async (
       receiverType = requesterModel;
     } else if (isRequesterRole) {
       initiatorType = requesterModel;
-      receiverType = "Agent";
+      const receiverIsAdmin = effectiveReceiver
+        ? await Admin.exists({ _id: effectiveReceiver })
+        : null;
+      receiverType = receiverIsAdmin ? "Admin" : "Agent";
     } else {
-      initiatorType = "Agent";
+      const initiatorIsAdmin = await Admin.exists({ _id: initiator });
+      initiatorType = initiatorIsAdmin ? "Admin" : "Agent";
       receiverType = requesterModel;
     }
 
@@ -1135,7 +1361,6 @@ export const manualAssignTicketToAgent = async (
 const getData = async (id: any, role: any): Promise<any> => {
   let ticketData: any = await Ticket.findById({ _id: id })
     .populate("requester", "fullName name email mobile")
-    .populate("assignee", "name email mobile")
     .populate("listingId", "title name productType type")
     .populate("transactionId", "title name productType type")
     .populate("relatedTickets", "title status");
@@ -1143,6 +1368,11 @@ const getData = async (id: any, role: any): Promise<any> => {
   if (!ticketData) throw new Error("Ticket Doesn not exist: ");
 
   ticketData = JSON.parse(JSON.stringify(ticketData));
+  if (ticketData?.assignee) {
+    ticketData.assignee =
+      (await resolveSupportAssignee(ticketData.assignee)) ||
+      ticketData.assignee;
+  }
 
   const interaction: any = [];
   if (ticketData?.interactions?.length > 0) {
