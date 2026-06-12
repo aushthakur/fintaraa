@@ -75,6 +75,7 @@ export const BankDetailsSchema = new Schema(
     ifscCode: String,
     bankName: String,
     branchName: String,
+    branchCity: String,
     accountType: String,
     accountNumber: String,
     accountHolderName: String,

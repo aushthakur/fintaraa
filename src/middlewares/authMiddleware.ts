@@ -44,7 +44,7 @@ export const authenticateToken = async (
     (req as AuthenticatedRequest).user = {
       role: decoded.role,
       email: decoded.email,
-      _id: decoded._id || decoded._id,
+      _id: decoded._id || decoded.id,
     };
     return next();
   } catch (err) {

@@ -3,25 +3,25 @@ import { Gender } from "./user.model";
 
 export enum InsuranceType {
   LIFE = "life",
+  SHOP = "shop",
+  TERM = "term",
+  STOCK = "stock",
+  TRAVEL = "travel",
   HEALTH = "health",
   VEHICLE = "vehicle",
   PROPERTY = "property",
-  STOCK = "stock",
   MACHINERY = "machinery",
-  TERM = "term",
-  TRAVEL = "travel",
   RETIREMENT = "retirement",
-  SHOP = "shop",
 }
 
 export enum InsuranceQueryActivityType {
   CREATED = "created",
   UPDATED = "updated",
-  STATUS_CHANGED = "status_changed",
-  LANDER_ASSIGNED = "lander_assigned",
-  AGENT_ASSIGNED = "agent_assigned",
-  DOCUMENT_UPLOADED = "document_uploaded",
   NOTE_ADDED = "note_added",
+  STATUS_CHANGED = "status_changed",
+  AGENT_ASSIGNED = "agent_assigned",
+  LANDER_ASSIGNED = "lander_assigned",
+  DOCUMENT_UPLOADED = "document_uploaded",
 }
 
 export interface IInsuranceQueryActivity {
@@ -238,7 +238,7 @@ export interface IInsuranceQuery extends Document {
   channelAgency?: Types.ObjectId;
   ownerAgency?: Types.ObjectId;
   activities: IInsuranceQueryActivity[];
-  
+
   // Commission tracking
   commissionRecorded: boolean;
   commissionRecordedAt?: Date;
@@ -246,7 +246,7 @@ export interface IInsuranceQuery extends Document {
   agencyCommissionRecorded?: boolean;
   agencyCommissionRecordedAt?: Date;
   agencyCommissionTransactionId?: Types.ObjectId;
-  
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -361,7 +361,10 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
     // Commission tracking
     commissionRecorded: { type: Boolean, default: false, index: true },
     commissionRecordedAt: { type: Date },
-    commissionTransactionId: { type: Schema.Types.ObjectId, ref: "WalletTransaction" },
+    commissionTransactionId: {
+      type: Schema.Types.ObjectId,
+      ref: "WalletTransaction",
+    },
     agencyCommissionRecorded: { type: Boolean, default: false, index: true },
     agencyCommissionRecordedAt: { type: Date },
     agencyCommissionTransactionId: {
@@ -369,7 +372,7 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
       ref: "AgencyCommissionTransaction",
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 InsuranceQuerySchema.index({ mobile: 1, email: 1 });
@@ -387,5 +390,5 @@ InsuranceQuerySchema.pre(/^find/, function (this: any, next) {
 
 export const InsuranceQuery = mongoose.model<IInsuranceQuery>(
   "InsuranceQuery",
-  InsuranceQuerySchema
+  InsuranceQuerySchema,
 );

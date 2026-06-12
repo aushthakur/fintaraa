@@ -1804,7 +1804,10 @@ export class UserController {
         req.body.financialDetails,
         {},
       ) as Record<string, any>;
-      const bankDetails = parseJSONSafely(req.body.bankDetails, {});
+      const bankDetails = parseJSONSafely(req.body.bankDetails, {}) as Record<
+        string,
+        any
+      >;
       const verification = parseJSONSafely(req.body.verification, {}) as Record<
         string,
         any
@@ -1824,7 +1827,18 @@ export class UserController {
       ];
 
       const normalizeAddress = (addr: any) => {
-        if (!addr || typeof addr !== "object") return undefined;
+        if (!addr) return undefined;
+        if (typeof addr === "string") {
+          const street = addr.trim();
+          if (!street) return undefined;
+          return {
+            street,
+            country: "India",
+            label: "home",
+            isDefault: true,
+          };
+        }
+        if (typeof addr !== "object") return undefined;
         const hasValue = [
           "street",
           "address",
@@ -1977,6 +1991,9 @@ export class UserController {
         updatePayload.aadhaarCard = personalDetails.aadhaarNumber;
 
       if (bankDetails && Object.keys(bankDetails).length > 0) {
+        if (!bankDetails.branchCity && (bankDetails.city || bankDetails.branchName)) {
+          bankDetails.branchCity = bankDetails.city || bankDetails.branchName;
+        }
         updatePayload.bankDetails = {
           ...(user.bankDetails?.toObject
             ? user.bankDetails.toObject()
@@ -2056,7 +2073,10 @@ export class UserController {
     next: NextFunction,
   ): Promise<any> {
     try {
-      const { _id: userId } = (req as any).user;
+      const { _id: userId, role } = (req as any).user || {};
+      if (!userId || role !== "user") {
+        throw new ApiError(401, "User session required");
+      }
       let result: any = await userService.getById(userId);
       if (!result?.referralCode) {
         const referralCode = await generateReferralCode();
