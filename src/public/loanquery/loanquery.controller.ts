@@ -1329,7 +1329,12 @@ export class LoanQueryController {
         role === "admin" || role === "agent" || role === "lander";
       if (req.query.status === "all") {
         delete req.query.status;
-      } else if (requiresStatus && !req.query.status) {
+      } else if (
+        requiresStatus &&
+        !req.query.status &&
+        !req.query.status__ne &&
+        !req.query.status__nin
+      ) {
         req.query.status = ApplicationStatus.SUBMITTED;
       }
 
@@ -1649,24 +1654,18 @@ export class LoanQueryController {
         ? normalizeLoanType(String(loanType))
         : "";
 
-      const buildScopeMatch = () => {
-        const m: Record<string, any> = {
-          ...ACTIVE_QUERY_MATCH,
-          status: ApplicationStatus.COMPLETED,
-          disbursedDate: {
-            $gte: previousStart,
-            $lte: previousEnd,
-          },
-        };
-        return m;
-      };
-
       const scopeForRole = (extra: Record<string, any>) => {
         Object.assign(extra, buildLoanScopeMatch(userId, role));
         return extra;
       };
 
+      const completedMatch: Record<string, any> = {
+        ...ACTIVE_QUERY_MATCH,
+        status: ApplicationStatus.COMPLETED,
+      };
+
       const currentMatch: Record<string, any> = {
+        ...ACTIVE_QUERY_MATCH,
         status: ApplicationStatus.COMPLETED,
         disbursedDate: {
           $gte: currentStart,
@@ -1674,18 +1673,50 @@ export class LoanQueryController {
         },
       };
 
-      const previousMatch: Record<string, any> = buildScopeMatch();
+      const previousMatch: Record<string, any> = {
+        ...ACTIVE_QUERY_MATCH,
+        status: ApplicationStatus.COMPLETED,
+        disbursedDate: {
+          $gte: previousStart,
+          $lte: previousEnd,
+        },
+      };
 
       if (normalizedLoanType) {
+        completedMatch.loanType = normalizedLoanType;
         currentMatch.loanType = normalizedLoanType;
         previousMatch.loanType = normalizedLoanType;
       }
 
+      scopeForRole(completedMatch);
       scopeForRole(currentMatch);
       scopeForRole(previousMatch);
 
-      // Assigned in view (same filtered set)
-      const [currentAgg, previousAgg] = await Promise.all([
+      const [completedAgg, currentAgg, previousAgg] = await Promise.all([
+        LoanQuery.aggregate([
+          { $match: completedMatch },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: 1 },
+              totalLoanAmount: { $sum: { $ifNull: ["$loanAmount", 0] } },
+              assignedCount: {
+                $sum: {
+                  $cond: [
+                    {
+                      $or: [
+                        { $ne: ["$assignedLander", null] },
+                        { $ne: ["$assignedLander", undefined] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+            },
+          },
+        ]),
         LoanQuery.aggregate([
           { $match: currentMatch },
           {
@@ -1742,6 +1773,12 @@ export class LoanQueryController {
         ]),
       ]);
 
+      const completed = completedAgg?.[0] || {
+        total: 0,
+        totalLoanAmount: 0,
+        assignedCount: 0,
+      };
+
       const cur = currentAgg?.[0] || {
         total: 0,
         totalLoanAmount: 0,
@@ -1784,10 +1821,10 @@ export class LoanQueryController {
               startDate: previousStart.toISOString(),
               endDate: previousEnd.toISOString(),
             },
-            totalCompleted: cur.total,
-            totalLoanAmount: cur.totalLoanAmount,
+            totalCompleted: completed.total,
+            totalLoanAmount: completed.totalLoanAmount,
             totalDisbursedAmount: cur.totalDisbursedAmount,
-            assignedInView: cur.assignedCount,
+            assignedInView: completed.assignedCount,
             disbursedGrowthPercent,
           },
           "Completed loan premium stats fetched successfully",
@@ -1814,15 +1851,30 @@ export class LoanQueryController {
         return res.status(400).json(new ApiError(400, "Invalid loanType"));
       }
 
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      start.setHours(0, 0, 0, 0); // 12:00 AM
-      end.setHours(23, 59, 59, 0); // 23:59 PM (end of the day)
+      const hasDateRange = Boolean(startDate && endDate);
+      const start = hasDateRange ? new Date(startDate) : null;
+      const end = hasDateRange ? new Date(endDate) : null;
+
+      if (
+        hasDateRange &&
+        (!start ||
+          !end ||
+          Number.isNaN(start.getTime()) ||
+          Number.isNaN(end.getTime()))
+      ) {
+        return res.status(400).json(new ApiError(400, "Invalid date range"));
+      }
+
+      start?.setHours(0, 0, 0, 0); // 12:00 AM
+      end?.setHours(23, 59, 59, 0); // 23:59 PM (end of the day)
 
       const match: Record<string, any> = {
         ...ACTIVE_QUERY_MATCH,
-        createdAt: { $gte: start, $lte: end },
       };
+
+      if (start && end) {
+        match.createdAt = { $gte: start, $lte: end };
+      }
 
       if (normalizedLoanType) {
         match.loanType = normalizedLoanType;
@@ -1830,25 +1882,14 @@ export class LoanQueryController {
 
       Object.assign(match, buildLoanScopeMatch(userId, role));
 
-      const rows = await LoanQuery.aggregate([
-        { $match: match },
-        {
-          $group: {
-            _id: "$status",
-            count: { $sum: 1 },
-            amount: { $sum: { $ifNull: ["$loanAmount", 0] } },
-            disbursedAmount: {
-              $sum: { $ifNull: ["$disbursedAmount", 0] },
-            },
-          },
-        },
-      ]);
-
       const disbursedMatch: Record<string, any> = {
         ...ACTIVE_QUERY_MATCH,
-        disbursedDate: { $gte: start, $lte: end },
         disbursedAmount: { $gt: 0 },
       };
+
+      if (start && end) {
+        disbursedMatch.disbursedDate = { $gte: start, $lte: end };
+      }
 
       if (normalizedLoanType) {
         disbursedMatch.loanType = normalizedLoanType;
@@ -1856,63 +1897,159 @@ export class LoanQueryController {
 
       Object.assign(disbursedMatch, buildLoanScopeMatch(userId, role));
 
-      const disbursedAgg = await LoanQuery.aggregate([
-        { $match: disbursedMatch },
-        {
-          $group: {
-            _id: null,
-            totalDisbursedCount: { $sum: 1 },
-            totalDisbursedAmount: {
-              $sum: { $ifNull: ["$disbursedAmount", 0] },
+      const buildStats = async (
+        baseMatch: Record<string, any>,
+        baseDisbursedMatch: Record<string, any>,
+      ) => {
+        const [rows, disbursedAgg] = await Promise.all([
+          LoanQuery.aggregate([
+            { $match: baseMatch },
+            {
+              $group: {
+                _id: "$status",
+                count: { $sum: 1 },
+                amount: { $sum: { $ifNull: ["$loanAmount", 0] } },
+                disbursedAmount: {
+                  $sum: { $ifNull: ["$disbursedAmount", 0] },
+                },
+              },
             },
-          },
-        },
-      ]);
+          ]),
+          LoanQuery.aggregate([
+            { $match: baseDisbursedMatch },
+            {
+              $group: {
+                _id: null,
+                totalDisbursedCount: { $sum: 1 },
+                totalDisbursedAmount: {
+                  $sum: { $ifNull: ["$disbursedAmount", 0] },
+                },
+              },
+            },
+          ]),
+        ]);
 
-      const byStatus: Record<string, number> = {};
-      const amountByStatus: Record<string, number> = {};
-      const disbursedAmountByStatus: Record<string, number> = {};
-      let total = 0;
-      let totalAmount = 0;
-      let createdAtDisbursedAmount = 0;
+        const byStatus: Record<string, number> = {};
+        const amountByStatus: Record<string, number> = {};
+        const disbursedAmountByStatus: Record<string, number> = {};
+        let total = 0;
+        let totalAmount = 0;
+        let createdAtDisbursedAmount = 0;
 
-      rows.forEach((row: any) => {
-        const key = row?._id ? String(row._id) : "unknown";
-        const count = Number(row?.count) || 0;
-        const amount = Number(row?.amount) || 0;
-        const disbursedAmount = Number(row?.disbursedAmount) || 0;
-        byStatus[key] = count;
-        amountByStatus[key] = amount;
-        disbursedAmountByStatus[key] = disbursedAmount;
-        total += count;
-        totalAmount += amount;
-        createdAtDisbursedAmount += disbursedAmount;
-      });
+        rows.forEach((row: any) => {
+          const key = row?._id ? String(row._id) : "unknown";
+          const count = Number(row?.count) || 0;
+          const amount = Number(row?.amount) || 0;
+          const disbursedAmount = Number(row?.disbursedAmount) || 0;
+          byStatus[key] = count;
+          amountByStatus[key] = amount;
+          disbursedAmountByStatus[key] = disbursedAmount;
+          total += count;
+          totalAmount += amount;
+          createdAtDisbursedAmount += disbursedAmount;
+        });
+        byStatus.not_completed = Math.max(
+          0,
+          total - (byStatus[ApplicationStatus.COMPLETED] || 0),
+        );
 
-      const totalDisbursedAmount =
-        Number(disbursedAgg?.[0]?.totalDisbursedAmount) || 0;
-      const totalDisbursedCount =
-        Number(disbursedAgg?.[0]?.totalDisbursedCount) || 0;
+        const totalDisbursedAmount =
+          Number(disbursedAgg?.[0]?.totalDisbursedAmount) || 0;
+        const totalDisbursedCount =
+          Number(disbursedAgg?.[0]?.totalDisbursedCount) || 0;
+
+        return {
+          total,
+          totalAmount,
+          totalDisbursedAmount,
+          totalDisbursedCount,
+          createdAtDisbursedAmount,
+          byStatus,
+          amountByStatus,
+          disbursedAmountByStatus,
+        };
+      };
+
+      const calculateChangePercent = (current: number, previous: number) => {
+        if (!previous) return current ? 100 : 0;
+        return ((current - previous) / previous) * 100;
+      };
+
+      const currentStats = await buildStats(match, disbursedMatch);
+
+      let previousStats: Awaited<ReturnType<typeof buildStats>> | null = null;
+      let previousRange: { startDate: string; endDate: string } | null = null;
+
+      if (start && end) {
+        const previousEnd = new Date(start.getTime() - 1);
+        const previousStart = new Date(
+          previousEnd.getTime() - (end.getTime() - start.getTime()),
+        );
+        previousRange = {
+          startDate: previousStart.toISOString(),
+          endDate: previousEnd.toISOString(),
+        };
+
+        const previousMatch = {
+          ...match,
+          createdAt: { $gte: previousStart, $lte: previousEnd },
+        };
+        const previousDisbursedMatch = {
+          ...disbursedMatch,
+          disbursedDate: { $gte: previousStart, $lte: previousEnd },
+        };
+        previousStats = await buildStats(previousMatch, previousDisbursedMatch);
+      }
 
       return res.status(200).json(
         new ApiResponse(
           200,
           {
             loanType: normalizedLoanType || "all",
-            range: {
-              startDate: start.toISOString(),
-              endDate: end.toISOString(),
-            },
-            total,
-            totalAmount,
-            totalDisbursedAmount,
-            disbursedAmount: totalDisbursedAmount,
-            totalDisbursed: totalDisbursedAmount,
-            totalDisbursedCount,
-            createdAtDisbursedAmount,
-            byStatus,
-            amountByStatus,
-            disbursedAmountByStatus,
+            range:
+              start && end
+                ? {
+                    startDate: start.toISOString(),
+                    endDate: end.toISOString(),
+                  }
+                : null,
+            previousRange,
+            total: currentStats.total,
+            totalAmount: currentStats.totalAmount,
+            totalDisbursedAmount: currentStats.totalDisbursedAmount,
+            disbursedAmount: currentStats.totalDisbursedAmount,
+            totalDisbursed: currentStats.totalDisbursedAmount,
+            totalDisbursedCount: currentStats.totalDisbursedCount,
+            createdAtDisbursedAmount: currentStats.createdAtDisbursedAmount,
+            byStatus: currentStats.byStatus,
+            amountByStatus: currentStats.amountByStatus,
+            disbursedAmountByStatus: currentStats.disbursedAmountByStatus,
+            previous: previousStats
+              ? {
+                  total: previousStats.total,
+                  totalAmount: previousStats.totalAmount,
+                  totalDisbursedAmount: previousStats.totalDisbursedAmount,
+                  disbursedAmount: previousStats.totalDisbursedAmount,
+                  totalDisbursed: previousStats.totalDisbursedAmount,
+                  totalDisbursedCount: previousStats.totalDisbursedCount,
+                }
+              : null,
+            changePercent: previousStats
+              ? {
+                  total: calculateChangePercent(
+                    currentStats.total,
+                    previousStats.total,
+                  ),
+                  totalAmount: calculateChangePercent(
+                    currentStats.totalAmount,
+                    previousStats.totalAmount,
+                  ),
+                  totalDisbursedAmount: calculateChangePercent(
+                    currentStats.totalDisbursedAmount,
+                    previousStats.totalDisbursedAmount,
+                  ),
+                }
+              : null,
           },
           "Loan query stats fetched successfully",
         ),
