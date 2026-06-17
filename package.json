@@ -7,7 +7,8 @@
     "start": "nodemon src/server.ts",
     "generate": "node src/generateModule.js",
     "dev": "nodemon --watch .env --watch src --ext ts --exec ts-node src/server.ts",
-    "seed:eligibility": "ts-node src/scripts/seedEligibilityCriteria.ts"
+    "seed:eligibility": "ts-node src/scripts/seedEligibilityCriteria.ts",
+    "seed:seo-content": "ts-node src/scripts/seedSeoContent.ts"
   },
   "keywords": [],
   "author": "",

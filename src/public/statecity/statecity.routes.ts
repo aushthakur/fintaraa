@@ -25,6 +25,20 @@ const {
   updateCityById,
   deleteCityById,
 
+  // Pincode
+  createPincode,
+  getAllPincodes,
+  getPincodeById,
+  updatePincodeById,
+  deletePincodeById,
+
+  // Area
+  createArea,
+  getAllAreas,
+  getAreaById,
+  updateAreaById,
+  deleteAreaById,
+
   // Combined
   createStateCity,
   getAllStateCitys,
@@ -58,6 +72,24 @@ router.get("/city", authenticateToken, asyncHandler(getAllCity));
 router.get("/city/:id", authenticateToken, asyncHandler(getCityById));
 router.put("/city/:id", authenticateToken, asyncHandler(updateCityById));
 router.delete("/city/:id", authenticateToken, asyncHandler(deleteCityById));
+
+// ==============================
+// 📮 Pincode Routes
+// ==============================
+router.post("/pincode", authenticateToken, asyncHandler(createPincode));
+router.get("/pincode", authenticateToken, asyncHandler(getAllPincodes));
+router.get("/pincode/:id", authenticateToken, asyncHandler(getPincodeById));
+router.put("/pincode/:id", authenticateToken, asyncHandler(updatePincodeById));
+router.delete("/pincode/:id", authenticateToken, asyncHandler(deletePincodeById));
+
+// ==============================
+// 🧭 Area Routes
+// ==============================
+router.post("/area", authenticateToken, asyncHandler(createArea));
+router.get("/area", authenticateToken, asyncHandler(getAllAreas));
+router.get("/area/:id", authenticateToken, asyncHandler(getAreaById));
+router.put("/area/:id", authenticateToken, asyncHandler(updateAreaById));
+router.delete("/area/:id", authenticateToken, asyncHandler(deleteAreaById));
 
 // ==============================
 // 🌐 Combined Route (Optional)

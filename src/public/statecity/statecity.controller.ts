@@ -3,12 +3,14 @@ import ApiResponse from "../../utils/ApiResponse";
 import { NextFunction, Request, Response } from "express";
 import { CommonService } from "../../services/common.services";
 import { indianCountries, indianStates, region } from "../../config/data";
-import { City, Country, State } from "../../modals/statecity.model";
+import { Area, City, Country, Pincode, State } from "../../modals/statecity.model";
 import mongoose from "mongoose";
 
 const cityService = new CommonService(City);
 const stateService = new CommonService(State);
 const countryService = new CommonService(Country);
+const pincodeService = new CommonService(Pincode);
+const areaService = new CommonService(Area);
 
 export class StateCityController {
   static async createStateCity(
@@ -524,6 +526,285 @@ export class StateCityController {
       const result = await countryService.deleteById(req.params.id);
       if (!result)
         return res.status(404).json(new ApiError(404, "Failed to delete country"));
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Deleted successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getAllPincodes(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const pipeline = [
+        {
+          $lookup: {
+            from: "cities",
+            localField: "cityId",
+            foreignField: "_id",
+            as: "cityData",
+          },
+        },
+        { $unwind: "$cityData" },
+        {
+          $lookup: {
+            from: "states",
+            localField: "stateId",
+            foreignField: "_id",
+            as: "stateData",
+          },
+        },
+        { $unwind: "$stateData" },
+        {
+          $lookup: {
+            from: "countries",
+            localField: "countryId",
+            foreignField: "_id",
+            as: "countryData",
+          },
+        },
+        { $unwind: "$countryData" },
+        {
+          $project: {
+            _id: 1,
+            code: 1,
+            cityId: 1,
+            stateId: 1,
+            countryId: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            cityName: "$cityData.name",
+            stateName: "$stateData.name",
+            stateCode: "$stateData.code",
+            countryName: "$countryData.name",
+            countryCode: "$countryData.code",
+          },
+        },
+      ];
+      const result = await pincodeService.getAll(req.query, pipeline);
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Pincodes fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async createPincode(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const result = await pincodeService.create(req.body);
+      if (!result)
+        return res
+          .status(400)
+          .json(new ApiError(400, "Failed to create pincode"));
+      return res
+        .status(201)
+        .json(new ApiResponse(201, result, "Created successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getPincodeById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const result = await pincodeService.getById(req.params.id);
+      if (!result)
+        return res.status(404).json(new ApiError(404, "Pincode not found"));
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Data fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async updatePincodeById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const result = await pincodeService.updateById(req.params.id, req.body);
+      if (!result)
+        return res
+          .status(404)
+          .json(new ApiError(404, "Failed to update pincode"));
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Updated successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async deletePincodeById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const result = await pincodeService.deleteById(req.params.id);
+      if (!result)
+        return res
+          .status(404)
+          .json(new ApiError(404, "Failed to delete pincode"));
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Deleted successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getAllAreas(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const pipeline = [
+        {
+          $lookup: {
+            from: "pincodes",
+            localField: "pincodeId",
+            foreignField: "_id",
+            as: "pincodeData",
+          },
+        },
+        { $unwind: "$pincodeData" },
+        {
+          $lookup: {
+            from: "cities",
+            localField: "cityId",
+            foreignField: "_id",
+            as: "cityData",
+          },
+        },
+        { $unwind: "$cityData" },
+        {
+          $lookup: {
+            from: "states",
+            localField: "stateId",
+            foreignField: "_id",
+            as: "stateData",
+          },
+        },
+        { $unwind: "$stateData" },
+        {
+          $lookup: {
+            from: "countries",
+            localField: "countryId",
+            foreignField: "_id",
+            as: "countryData",
+          },
+        },
+        { $unwind: "$countryData" },
+        {
+          $project: {
+            _id: 1,
+            name: 1,
+            pincodeId: 1,
+            cityId: 1,
+            stateId: 1,
+            countryId: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            pincode: "$pincodeData.code",
+            cityName: "$cityData.name",
+            stateName: "$stateData.name",
+            stateCode: "$stateData.code",
+            countryName: "$countryData.name",
+            countryCode: "$countryData.code",
+          },
+        },
+      ];
+      const result = await areaService.getAll(req.query, pipeline);
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Areas fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async createArea(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const result = await areaService.create(req.body);
+      if (!result)
+        return res
+          .status(400)
+          .json(new ApiError(400, "Failed to create area"));
+      return res
+        .status(201)
+        .json(new ApiResponse(201, result, "Created successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getAreaById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const result = await areaService.getById(req.params.id);
+      if (!result)
+        return res.status(404).json(new ApiError(404, "Area not found"));
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Data fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async updateAreaById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const result = await areaService.updateById(req.params.id, req.body);
+      if (!result)
+        return res
+          .status(404)
+          .json(new ApiError(404, "Failed to update area"));
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Updated successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async deleteAreaById(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const result = await areaService.deleteById(req.params.id);
+      if (!result)
+        return res
+          .status(404)
+          .json(new ApiError(404, "Failed to delete area"));
       return res
         .status(200)
         .json(new ApiResponse(200, result, "Deleted successfully"));
