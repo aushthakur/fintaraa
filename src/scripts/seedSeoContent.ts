@@ -253,9 +253,7 @@ const upsertSeoPages = async (seededAreas: Array<Record<string, string>>) => {
         tabs: buildTabs(loanType, scopedLoan),
         formFields: buildFormFields(),
         status:
-          index % 4 === 0
-            ? LoanSeoPageStatus.DRAFT
-            : LoanSeoPageStatus.ACTIVE,
+          index % 4 === 0 ? LoanSeoPageStatus.DRAFT : LoanSeoPageStatus.ACTIVE,
         isIndexable: index % 4 !== 0,
         isFeatured: index === 0,
         priority: 10 + index,
