@@ -16,6 +16,7 @@ const buildPublicQuery = (query: Record<string, any>) => {
   return {
     ...query,
     ...(normalizedType ? { type: normalizedType } : {}),
+    ...(query.sectionKey ? { sectionKey: query.sectionKey } : {}),
     isActive: true,
   };
 };

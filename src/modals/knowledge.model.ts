@@ -4,6 +4,8 @@ import mongoose, { Document, Schema, Model, model } from "mongoose";
 export type KnowledgeType =
   | "blog"
   | "article"
+  | "testimonial"
+  | "press_release"
   | "video"
   | "product_info"
   | "tutorial";
@@ -14,6 +16,18 @@ export interface IKnowledge extends Document {
   type: KnowledgeType;
   summary?: string;
   content?: string;
+  excerpt?: string;
+  category?: string;
+  sectionKey?: string;
+  authorName?: string;
+  authorRole?: string;
+  authorAvatarUrl?: string;
+  location?: string;
+  rating?: number;
+  readTime?: string;
+  accent?: string;
+  videoUrl?: string;
+  buttonLabel?: string;
   coverImageUrl?: string;
   linkUrl?: string;
   leadSource?: string;
@@ -44,11 +58,31 @@ const KnowledgeSchema: Schema<IKnowledge> = new Schema(
     type: {
       type: String,
       required: true,
-      enum: ["blog", "article", "video", "product_info", "tutorial"],
+      enum: [
+        "blog",
+        "article",
+        "testimonial",
+        "press_release",
+        "video",
+        "product_info",
+        "tutorial",
+      ],
       index: true,
     },
     summary: { type: String, trim: true },
     content: { type: String },
+    excerpt: { type: String, trim: true },
+    category: { type: String, trim: true, index: true },
+    sectionKey: { type: String, trim: true, index: true },
+    authorName: { type: String, trim: true },
+    authorRole: { type: String, trim: true },
+    authorAvatarUrl: { type: String, trim: true },
+    location: { type: String, trim: true },
+    rating: { type: Number, min: 0, max: 5 },
+    readTime: { type: String, trim: true },
+    accent: { type: String, trim: true },
+    videoUrl: { type: String, trim: true },
+    buttonLabel: { type: String, trim: true },
     coverImageUrl: { type: String, trim: true, default: "" },
     linkUrl: { type: String, trim: true },
     leadSource: { type: String, trim: true },
