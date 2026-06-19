@@ -509,9 +509,17 @@ const parseMaybeJson = (value: any) => {
   }
 };
 
-const normalizeUploadedAttachment = (value: any) => {
+const normalizeUploadedAttachment = (value: any): Record<string, any> | null => {
   const parsed = parseMaybeJson(value);
   if (!parsed) return null;
+
+  if (Array.isArray(parsed)) {
+    return (
+      parsed
+        .map((item): Record<string, any> | null => normalizeUploadedAttachment(item))
+        .find(Boolean) || null
+    );
+  }
 
   if (typeof parsed === "string") {
     return { url: parsed };
@@ -544,6 +552,14 @@ const normalizeUploadedAttachment = (value: any) => {
       parsed.filename ||
       undefined,
   };
+};
+
+const normalizeUploadedAttachments = (value: any): Record<string, any>[] => {
+  const parsed = parseMaybeJson(value);
+  const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  return list
+    .map((item) => normalizeUploadedAttachment(item))
+    .filter(Boolean) as Record<string, any>[];
 };
 
 const normalizeCoApplicants = (value: any) => {
@@ -638,6 +654,61 @@ const processFileUploads = (req: Request) => {
     req.body.policyDetails.references = normalizeReferenceContacts(
       req.body.policyDetails.references,
     );
+  }
+
+  const coApplicants = Array.isArray(req.body.policyDetails.coApplicants)
+    ? req.body.policyDetails.coApplicants
+    : req.body.policyDetails.coApplicants
+      ? normalizeCoApplicants(req.body.policyDetails.coApplicants)
+      : [];
+
+  Array.from({ length: 10 }).forEach((_, index) => {
+    const uploadFields = [
+      "aadhaarFile",
+      "panFile",
+      "bankStatementFile",
+    ] as const;
+
+    uploadFields.forEach((field) => {
+      const uploadKey = `coApplicant_${index}_${field}`;
+      if (!req.body[uploadKey]) return;
+      const attachment = normalizeUploadedAttachment(req.body[uploadKey]);
+      if (!attachment) {
+        delete req.body[uploadKey];
+        return;
+      }
+
+      if (!coApplicants[index]) coApplicants[index] = {};
+      coApplicants[index][field] = attachment;
+      delete req.body[uploadKey];
+    });
+
+    Array.from({ length: 20 }).forEach((__, documentIndex) => {
+      const uploadKey = `coApplicant_${index}_extra_${documentIndex}_files`;
+      if (!req.body[uploadKey]) return;
+
+      const attachments = normalizeUploadedAttachments(req.body[uploadKey]);
+      if (attachments.length > 0) {
+        if (!coApplicants[index]) coApplicants[index] = {};
+        const documents = Array.isArray(coApplicants[index].documents)
+          ? [...coApplicants[index].documents]
+          : [];
+        const existing = documents[documentIndex] || {};
+        documents[documentIndex] = {
+          ...existing,
+          key: existing.key || `extra_${documentIndex + 1}`,
+          label: existing.label || existing.key || `Extra Document ${documentIndex + 1}`,
+          files: attachments,
+        };
+        coApplicants[index].documents = documents;
+      }
+
+      delete req.body[uploadKey];
+    });
+  });
+
+  if (coApplicants.length > 0) {
+    req.body.policyDetails.coApplicants = normalizeCoApplicants(coApplicants);
   }
 
   // Process bankStatementUrl (main field)

@@ -10,6 +10,16 @@ import {
 
 const router = Router();
 
+const coApplicantUploadFields = Array.from({ length: 10 }).flatMap((_, index) => [
+  { name: `coApplicant_${index}_aadhaarFile`, maxCount: 1 },
+  { name: `coApplicant_${index}_panFile`, maxCount: 1 },
+  { name: `coApplicant_${index}_bankStatementFile`, maxCount: 1 },
+  ...Array.from({ length: 20 }).map((__, documentIndex) => ({
+    name: `coApplicant_${index}_extra_${documentIndex}_files`,
+    maxCount: 10,
+  })),
+]);
+
 const loanUploadFields = [
   { name: "bankStatementUrl", maxCount: 1 },
   { name: "salarySlipUrl", maxCount: 1 },
@@ -39,6 +49,7 @@ const loanUploadFields = [
   { name: "gst_returns", maxCount: 1 },
   { name: "shop_act", maxCount: 1 },
   { name: "govt_license", maxCount: 1 },
+  ...coApplicantUploadFields,
 ];
 
 // All routes require authentication
@@ -82,36 +93,7 @@ router.get("/", asyncHandler(LoanQueryController.getAllQueries));
 router.get("/:id", asyncHandler(LoanQueryController.getQueryById));
 router.put(
   "/:id",
-  dynamicUpload([
-    { name: "bankStatementUrl", maxCount: 1 },
-    { name: "salarySlipUrl", maxCount: 1 },
-    { name: "admissionLetterUrl", maxCount: 1 },
-    { name: "feeStructureUrl", maxCount: 1 },
-    { name: "rcCopyUrl", maxCount: 1 },
-    { name: "goldPhotosUrl", maxCount: 10 },
-    { name: "carInsuranceUrl", maxCount: 1 },
-    { name: "lastMonthBankStatementUrl", maxCount: 1 },
-    { name: "propertyDocumentsUrl", maxCount: 10 },
-    { name: "propertyOwnershipProofUrl", maxCount: 1 },
-    { name: "renovationEstimateUrl", maxCount: 1 },
-    { name: "itrUrl", maxCount: 1 },
-    { name: "gstReturnsUrl", maxCount: 1 },
-    { name: "dematStatementOrFdCopyUrl", maxCount: 1 },
-    { name: "proformaInvoiceOrQuotationUrl", maxCount: 1 },
-    { name: "businessRegistrationCertificateUrl", maxCount: 1 },
-    { name: "pan_card", maxCount: 1 },
-    { name: "aadhaar_card", maxCount: 1 },
-    { name: "photo", maxCount: 1 },
-    { name: "itr_form_16", maxCount: 1 },
-    { name: "salary_slip", maxCount: 1 },
-    { name: "offer_letter", maxCount: 1 },
-    { name: "relieving_letter", maxCount: 1 },
-    { name: "bank_statement", maxCount: 1 },
-    { name: "gst_certificate", maxCount: 1 },
-    { name: "gst_returns", maxCount: 1 },
-    { name: "shop_act", maxCount: 1 },
-    { name: "govt_license", maxCount: 1 },
-  ]),
+  dynamicUpload(loanUploadFields),
   s3UploaderMiddleware("loan-query"),
   asyncHandler(LoanQueryController.updateQueryById),
 );

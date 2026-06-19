@@ -77,10 +77,22 @@ const extractFileUrl = (file: any): string | undefined => {
   return file.url || file;
 };
 
+const parseMaybeJson = (value: any) => {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+};
+
 // Helper function to process uploaded files and map to request body
 const processFileUploads = (req: Request) => {
   // Initialize policyDetails if it doesn't exist
-  if (!req.body.policyDetails) {
+  req.body.policyDetails = parseMaybeJson(req.body.policyDetails);
+  if (!req.body.policyDetails || typeof req.body.policyDetails !== "object") {
     req.body.policyDetails = {};
   }
 
