@@ -1,12 +1,38 @@
 import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
-import { Banner } from "../../modals/banner.model";
+import {
+  Banner,
+  BannerStatus,
+  BannerType,
+} from "../../modals/banner.model";
 import { NextFunction, Request, Response } from "express";
 import { CommonService } from "../../services/common.services";
 
 const BannerService = new CommonService(Banner);
 
 export class BannerController {
+  static async getPublicHomepageBanners(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const result = await Banner.find({
+        type: BannerType.HOMEPAGE,
+        status: BannerStatus.ACTIVE,
+      })
+        .sort({ priority: 1, createdAt: -1 })
+        .limit(Math.max(Math.min(Number(req.query.limit || 10), 20), 1))
+        .lean();
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Banners fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
   static async createBanner(req: Request, res: Response, next: NextFunction) {
     try {
       const result = await BannerService.create(req.body);

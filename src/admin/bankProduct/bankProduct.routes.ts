@@ -17,11 +17,21 @@ const {
   deleteBankProductById,
   getPublicBankProducts,
   getPublicBankProductById,
+  getPublicBankProductFilters,
+  trackPublicBankProductClick,
+  getCreditCardEligibility,
 } = BankProductController;
 
 const router = express.Router();
 
 router.get("/public", asyncHandler(getPublicBankProducts));
+router.get("/public/filters", asyncHandler(getPublicBankProductFilters));
+router.post("/public/:id/click", asyncHandler(trackPublicBankProductClick));
+router.get(
+  "/public/:id/eligibility",
+  authenticateToken,
+  asyncHandler(getCreditCardEligibility)
+);
 router.get("/public/:id", asyncHandler(getPublicBankProductById));
 
 router

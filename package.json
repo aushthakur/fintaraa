@@ -10,7 +10,10 @@
     "seed:eligibility": "ts-node src/scripts/seedEligibilityCriteria.ts",
     "seed:seo-content": "ts-node src/scripts/seedSeoContent.ts",
     "seed:website-knowledge": "ts-node src/scripts/seedWebsiteKnowledge.ts",
-    "seed:seo-metadata": "ts-node src/scripts/seedSeoMetadata.ts"
+    "seed:seo-metadata": "ts-node src/scripts/seedSeoMetadata.ts",
+    "seed:credit-cards": "ts-node src/scripts/seedCreditCards.ts",
+    "seed:page-faqs": "ts-node src/scripts/seedPageFaqs.ts",
+    "seed:careers": "ts-node src/scripts/seedCareers.ts"
   },
   "keywords": [],
   "author": "",

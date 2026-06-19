@@ -5,6 +5,7 @@ import { authenticateToken } from "../../middlewares/authMiddleware";
 
 const router = express.Router();
 
+router.post("/track-visit", asyncHandler(ReferralController.trackVisit));
 router.get(
   "/summary",
   authenticateToken,

@@ -15,9 +15,12 @@ const {
   getBannerById,
   updateBannerById,
   deleteBannerById,
+  getPublicHomepageBanners,
 } = BannerController;
 
 const router = express.Router();
+
+router.get("/public/homepage", asyncHandler(getPublicHomepageBanners));
 
 router
   .get("/", authenticateToken, asyncHandler(getAllBanners))

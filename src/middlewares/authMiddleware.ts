@@ -94,6 +94,31 @@ export const authenticateToken = async (
   }
 };
 
+export const optionalAuthenticateToken = async (
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const accessToken = req.header("Authorization")?.replace("Bearer ", "");
+  if (!accessToken) {
+    next();
+    return;
+  }
+
+  try {
+    const decoded = jwt.verify(accessToken, config.jwt.secret) as any;
+    (req as AuthenticatedRequest).user = {
+      role: decoded.role,
+      email: decoded.email,
+      _id: decoded._id || decoded.id,
+    };
+  } catch (_err) {
+    // Public endpoints should still work when an optional session is stale.
+  }
+
+  next();
+};
+
 export const authorize =
   (...allowedRoles: Role[]): RequestHandler =>
   (req: Request, res: Response, next: NextFunction): void => {
