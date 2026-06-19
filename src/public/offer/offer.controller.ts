@@ -197,6 +197,30 @@ const deriveOfferCategory = (payload: Partial<IOffer>) => {
 };
 
 export class OfferController {
+  static async getPublicOffers(req: Request, res: Response, next: NextFunction) {
+    try {
+      const query: Record<string, any> = { status: "active" };
+      if (req.query?.productCategory) {
+        query.productCategory = req.query.productCategory;
+      }
+      if (req.query?.productType) {
+        query.productType = req.query.productType;
+      }
+
+      const offers = await Offer.find(query)
+        .sort({ validTo: 1, updatedAt: -1 })
+        .limit(Math.min(Number(req.query?.limit) || 50, 100))
+        .lean();
+      const activeOffers = offers.filter((offer: any) => isOfferActive(offer));
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, activeOffers, "Offers fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
   static async createOffer(req: Request, res: Response, next: NextFunction) {
     try {
       const adminId = (req as any)?.user?._id;

@@ -3,6 +3,9 @@ import { Document, Schema, Types, model } from "mongoose";
 export enum ServiceRequestType {
   GST = "gst_registration",
   ITR = "itr_filing",
+  COMPANY = "company_registration",
+  FRANCHISE = "franchise_partner",
+  DSA = "dsa_partner",
 }
 
 export enum ServiceRequestStatus {

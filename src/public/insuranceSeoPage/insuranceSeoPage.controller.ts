@@ -222,6 +222,32 @@ const normalizePayload = (body: Record<string, any>) => ({
 });
 
 export class InsuranceSeoPageController {
+  static async listPublicPages(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const pages = await InsuranceSeoPage.find({
+        status: InsuranceSeoPageStatus.ACTIVE,
+      })
+        .select(
+          "insuranceType insuranceTypeSlug title subtitle canonicalPath priority updatedAt",
+        )
+        .sort({ priority: 1, updatedAt: -1 })
+        .limit(Math.min(Number(req.query?.limit) || 200, 300))
+        .lean();
+
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(200, pages, "Insurance pages fetched successfully"),
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+
   static async resolvePublicPage(
     req: Request,
     res: Response,

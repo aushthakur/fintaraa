@@ -6,6 +6,11 @@ import { InsuranceSeoPageController } from "./insuranceSeoPage.controller";
 const router = express.Router();
 
 router.get(
+  "/public",
+  asyncHandler(InsuranceSeoPageController.listPublicPages),
+);
+
+router.get(
   "/public/:insuranceType",
   asyncHandler(InsuranceSeoPageController.resolvePublicPage),
 );

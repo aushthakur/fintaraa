@@ -32,8 +32,50 @@ const ITR_STAGES = [
   "Completed",
 ];
 
+const COMPANY_STAGES = [
+  "Inquiry Submitted",
+  "Expert Assigned",
+  "Requirements Reviewed",
+  "Documents Pending",
+  "Documents Received",
+  "Application Prepared",
+  "Client Approval",
+  "Filing Submitted",
+  "Completed",
+];
+
+const FRANCHISE_STAGES = [
+  "Inquiry Submitted",
+  "Partnership Team Assigned",
+  "Profile Review",
+  "Location Review",
+  "Commercial Discussion",
+  "Documentation",
+  "Agreement Shared",
+  "Onboarding",
+  "Completed",
+];
+
+const DSA_STAGES = [
+  "Inquiry Submitted",
+  "Partnership Team Assigned",
+  "Profile Review",
+  "KYC Pending",
+  "KYC Completed",
+  "Agreement Shared",
+  "Training Scheduled",
+  "Partner Activated",
+  "Completed",
+];
+
 const stageList = (serviceType: ServiceRequestType) =>
-  serviceType === ServiceRequestType.GST ? GST_STAGES : ITR_STAGES;
+  ({
+    [ServiceRequestType.GST]: GST_STAGES,
+    [ServiceRequestType.ITR]: ITR_STAGES,
+    [ServiceRequestType.COMPANY]: COMPANY_STAGES,
+    [ServiceRequestType.FRANCHISE]: FRANCHISE_STAGES,
+    [ServiceRequestType.DSA]: DSA_STAGES,
+  })[serviceType] || GST_STAGES;
 
 const buildTimeline = (
   serviceType: ServiceRequestType,
@@ -56,11 +98,32 @@ const normalizeServiceType = (value: unknown) => {
   if (raw === "gst" || raw === "gst_registration")
     return ServiceRequestType.GST;
   if (raw === "itr" || raw === "itr_filing") return ServiceRequestType.ITR;
+  if (
+    raw === "company" ||
+    raw === "company_registration" ||
+    raw === "company-registration"
+  )
+    return ServiceRequestType.COMPANY;
+  if (
+    raw === "franchise" ||
+    raw === "franchise_partner" ||
+    raw === "franchise-partner"
+  )
+    return ServiceRequestType.FRANCHISE;
+  if (raw === "dsa" || raw === "dsa_partner" || raw === "dsa-partner")
+    return ServiceRequestType.DSA;
   return undefined;
 };
 
 const makeQueryId = (serviceType: ServiceRequestType) => {
-  const prefix = serviceType === ServiceRequestType.GST ? "GST" : "ITR";
+  const prefix =
+    {
+      [ServiceRequestType.GST]: "GST",
+      [ServiceRequestType.ITR]: "ITR",
+      [ServiceRequestType.COMPANY]: "CMP",
+      [ServiceRequestType.FRANCHISE]: "FRN",
+      [ServiceRequestType.DSA]: "DSA",
+    }[serviceType] || "SR";
   const date = new Date();
   const datePart = [
     date.getFullYear(),

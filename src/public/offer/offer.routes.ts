@@ -5,6 +5,8 @@ import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
 
 const router = express.Router();
 
+router.get("/public", asyncHandler(OfferController.getPublicOffers));
+
 router.get(
   "/eligible",
   authenticateToken,

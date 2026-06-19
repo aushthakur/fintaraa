@@ -267,6 +267,28 @@ const normalizePayload = (body: Record<string, any>) => ({
 });
 
 export class LoanSeoPageController {
+  static async listPublicPages(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const pages = await LoanSeoPage.find({
+        status: LoanSeoPageStatus.ACTIVE,
+      })
+        .select("loanType loanTypeSlug title subtitle canonicalPath priority updatedAt")
+        .sort({ priority: 1, updatedAt: -1 })
+        .limit(Math.min(Number(req.query?.limit) || 200, 300))
+        .lean();
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, pages, "Loan pages fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
   static async resolvePublicPage(
     req: Request,
     res: Response,

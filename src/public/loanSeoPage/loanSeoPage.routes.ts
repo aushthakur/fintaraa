@@ -6,6 +6,11 @@ import { LoanSeoPageController } from "./loanSeoPage.controller";
 const router = express.Router();
 
 router.get(
+  "/public",
+  asyncHandler(LoanSeoPageController.listPublicPages),
+);
+
+router.get(
   "/public/:loanType",
   asyncHandler(LoanSeoPageController.resolvePublicPage),
 );
