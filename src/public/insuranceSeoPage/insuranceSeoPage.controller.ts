@@ -211,6 +211,10 @@ const scorePage = (page: any, target: Record<string, string>) => {
   );
 };
 
+const pageTime = (page: any) =>
+  new Date(page?.updatedAt || page?.publishedAt || page?.createdAt || 0).getTime() ||
+  0;
+
 const normalizePayload = (body: Record<string, any>) => ({
   ...body,
   insuranceTypeSlug: slugify(body.insuranceTypeSlug || body.insuranceType),
@@ -267,7 +271,12 @@ export class InsuranceSeoPageController {
       const best = candidates
         .map((page) => ({ page, score: scorePage(page, location) }))
         .filter((item) => item.score >= 0)
-        .sort((a, b) => b.score - a.score || a.page.priority - b.page.priority)
+        .sort(
+          (a, b) =>
+            b.score - a.score ||
+            pageTime(b.page) - pageTime(a.page) ||
+            (a.page.priority || 999) - (b.page.priority || 999),
+        )
         .at(0)?.page;
 
       return res
