@@ -45,6 +45,14 @@ export enum LoginMethodType {
   APPLE = "apple",
 }
 
+export enum AccountSource {
+  WEBSITE = "website",
+  APP = "app",
+  ADMIN = "admin",
+  CRM = "crm",
+  UNKNOWN = "unknown",
+}
+
 export enum EmploymentType {
   SALARIED = "salaried",
   SELF_EMPLOYED = "self_employed",
@@ -499,6 +507,7 @@ export interface IUser extends Document {
   referralCode?: string;
   referralPoints?: number;
   referredBy?: Types.ObjectId;
+  accountSource?: AccountSource;
   createdAt: Date;
   updatedAt: Date;
   password: string;
@@ -556,6 +565,12 @@ export interface IUser extends Document {
 const UserSchema = new Schema<IUser>(
   {
     avatar: { type: String },
+    accountSource: {
+      type: String,
+      enum: Object.values(AccountSource),
+      default: AccountSource.UNKNOWN,
+      index: true,
+    },
     referralCode: { type: String, unique: true, sparse: true, trim: true },
     referredBy: { type: Schema.Types.ObjectId, ref: "User" },
     referralPoints: { type: Number, default: 0 },
@@ -652,6 +667,7 @@ const UserSchema = new Schema<IUser>(
 );
 
 UserSchema.index({ email: 1, status: 1 });
+UserSchema.index({ accountSource: 1, createdAt: -1 });
 
 export const generateReferralCode = (userId: string) => {
   const prefix = "REF";

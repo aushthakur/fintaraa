@@ -7,7 +7,12 @@ import { LoanQuery } from "../../modals/loanquery.model";
 import { Request, Response, NextFunction } from "express";
 import { UserType } from "../../modals/notification.model";
 import { CommonService } from "../../services/common.services";
-import { Gender, User, UserStatus } from "../../modals/user.model";
+import {
+  Gender,
+  User,
+  UserStatus,
+  AccountSource,
+} from "../../modals/user.model";
 import { CallRecord, ICallRecord } from "../../modals/callRecord.model";
 import { sendSingleNotification } from "../../services/notification.service";
 import {
@@ -769,6 +774,7 @@ const createLoanQueryFromCallRecord = async (
         agreedToTerms: true,
         privacyPolicyAccepted: true,
         gender: Gender.PREFER_NOT_TO_SAY,
+        accountSource: AccountSource.ADMIN,
         status: UserStatus.PENDING_VERIFICATION,
       } as any);
 
@@ -1235,6 +1241,7 @@ const createInsuranceQueryFromCallRecord = async (
         agreedToTerms: true,
         privacyPolicyAccepted: true,
         gender: Gender.PREFER_NOT_TO_SAY,
+        accountSource: AccountSource.ADMIN,
         status: UserStatus.PENDING_VERIFICATION,
       } as any);
 
@@ -1548,6 +1555,7 @@ const ensureUserAccountFromCallRecord = async (record: ICallRecord) => {
     email: normalizedEmail || undefined,
     role: "user",
     status: UserStatus.PENDING_VERIFICATION,
+    accountSource: AccountSource.ADMIN,
     agreedToTerms: true,
     privacyPolicyAccepted: true,
   } as any;

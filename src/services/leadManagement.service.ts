@@ -15,6 +15,7 @@ import {
   User,
   Gender,
   UserStatus,
+  AccountSource,
   LoanProductType,
 } from "../modals/user.model";
 import {
@@ -1025,6 +1026,7 @@ export class LeadManagementService {
         agreedToTerms: true,
         privacyPolicyAccepted: true,
         gender: Gender.PREFER_NOT_TO_SAY,
+        accountSource: AccountSource.CRM,
         status: UserStatus.PENDING_VERIFICATION,
       } as any);
       console.log(

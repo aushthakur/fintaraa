@@ -12,6 +12,7 @@ import {
   User,
   UserStatus,
   IKycProfile,
+  AccountSource,
   LoanProductType,
   LoginMethodType,
   KycVerificationStatus,
@@ -165,6 +166,37 @@ const normalizeLoginMethodType = (method?: string): LoginMethodType | null => {
   return (match as LoginMethodType) || null;
 };
 
+const normalizeAccountSource = (value?: unknown): AccountSource => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+
+  if (["website", "web", "browser"].includes(normalized)) {
+    return AccountSource.WEBSITE;
+  }
+  if (["app", "mobile_app", "mobile", "android", "ios"].includes(normalized)) {
+    return AccountSource.APP;
+  }
+  if (["admin", "panel", "dashboard"].includes(normalized)) {
+    return AccountSource.ADMIN;
+  }
+  if (["crm", "lead", "call_center", "call_record"].includes(normalized)) {
+    return AccountSource.CRM;
+  }
+  return AccountSource.UNKNOWN;
+};
+
+const resolveAccountSource = (req: Request): AccountSource => {
+  return normalizeAccountSource(
+    req.body?.accountSource ||
+      req.body?.createdFrom ||
+      req.body?.sourcePlatform ||
+      req.get("x-account-source") ||
+      req.get("x-client-platform"),
+  );
+};
+
 const generateReferralCode = async () => {
   const prefix = "FINTARA";
   const maxAttempts = 10;
@@ -313,6 +345,7 @@ export class UserController {
         req?.body?.cancelledChequeOrPassbook?.[0]?.url;
       const avatar = req?.body?.avatar?.[0]?.url;
       const normalizedPanCard = normalizePanCard(panCard);
+      const accountSource = resolveAccountSource(req);
 
       if (!email || !mobile || !name) {
         return res
@@ -382,6 +415,7 @@ export class UserController {
         isMobileVerified: false,
         cancelledChequeOrPassbook,
         kycProfile,
+        accountSource,
         notification: resolveNotificationPayload(req.body),
         status:
           role === "user" ? UserStatus.ACTIVE : UserStatus.PENDING_VERIFICATION,
@@ -428,6 +462,13 @@ export class UserController {
         if (aadhaarCardUrl) updatePayload.aadhaarCardUrl = aadhaarCardUrl;
         if (cancelledChequeOrPassbook)
           updatePayload.cancelledChequeOrPassbook = cancelledChequeOrPassbook;
+        if (
+          accountSource !== AccountSource.UNKNOWN &&
+          (!existingByMobile.accountSource ||
+            existingByMobile.accountSource === AccountSource.UNKNOWN)
+        ) {
+          updatePayload.accountSource = accountSource;
+        }
         if (kycProfile) {
           updatePayload.kycProfile = {
             ...((existingByMobile.kycProfile as any) || {}),
@@ -1290,10 +1331,36 @@ export class UserController {
   ): Promise<any> {
     try {
       const { userType } = req.params;
-      const result: any = await userService.getAll({
+      const query: any = {
         ...req.query,
         role: userType,
-      });
+      };
+      const accountSourceGroup = String(query.accountSourceGroup || "")
+        .trim()
+        .toLowerCase();
+      delete query.accountSourceGroup;
+
+      const sourceStages: any[] = [];
+      if (accountSourceGroup === AccountSource.WEBSITE) {
+        query.accountSource = AccountSource.WEBSITE;
+      } else if (accountSourceGroup === AccountSource.APP) {
+        query.accountSource = AccountSource.APP;
+      } else if (accountSourceGroup === "internal") {
+        query.accountSource__in = `${AccountSource.ADMIN},${AccountSource.CRM}`;
+      } else if (accountSourceGroup === AccountSource.UNKNOWN) {
+        sourceStages.push({
+          $match: {
+            $or: [
+              { accountSource: AccountSource.UNKNOWN },
+              { accountSource: { $exists: false } },
+              { accountSource: null },
+              { accountSource: "" },
+            ],
+          },
+        });
+      }
+
+      const result: any = await userService.getAll(query, sourceStages);
 
       if (Array.isArray(result?.result) && result.result.length > 0) {
         const users = result.result;
@@ -1664,6 +1731,7 @@ export class UserController {
   static async verifyOtp(req: Request, res: Response, next: NextFunction) {
     try {
       const { mobile, otp, email, name } = req.body;
+      const accountSource = resolveAccountSource(req);
 
       if (!mobile || !otp) {
         return res.status(400).json({
@@ -1725,11 +1793,17 @@ export class UserController {
           isMobileVerified: true,
           isEmailVerified: false,
           referralCode,
+          accountSource,
           password:
             crypto.randomBytes(12).toString("hex") +
             "@" +
             Date.now().toString(16),
         });
+      } else if (
+        accountSource !== AccountSource.UNKNOWN &&
+        (!user.accountSource || user.accountSource === AccountSource.UNKNOWN)
+      ) {
+        user.accountSource = accountSource;
       }
 
       if ([UserStatus.SUSPENDED, UserStatus.INACTIVE].includes(user.status)) {
