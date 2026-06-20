@@ -21,6 +21,7 @@ interface SendNotificationOptions {
   message: string;
   toUserId: string;
   toRole: UserType;
+  data?: Record<string, string | number>;
   fromUser?: { _id: string; role: UserType };
 }
 
@@ -47,12 +48,62 @@ const buildDashboardUrl = () => {
   return baseUrl ? `${baseUrl}/dashboard` : "/dashboard";
 };
 
+const toStringMap = (payload: Record<string, unknown>) =>
+  Object.entries(payload).reduce<Record<string, string>>((acc, [key, value]) => {
+    if (value !== undefined && value !== null) acc[key] = String(value);
+    return acc;
+  }, {});
+
+const getNotificationScreen = (type: string) => {
+  if (type.includes("ticket")) return "TicketChat";
+  if (type.includes("loan") || type.includes("application")) {
+    return "Applications";
+  }
+  if (type.includes("cibil")) return "CibilScore";
+  if (type.includes("document")) return "UploadedDocuments";
+  if (type.includes("referral")) return "ReferEarn";
+  if (type.includes("offer")) return "Offers";
+  return "Notifications";
+};
+
+const getRecipientFcmTokens = (recipient: any) => {
+  const tokens = new Set<string>();
+  if (recipient?.fcmToken) tokens.add(String(recipient.fcmToken).trim());
+  if (Array.isArray(recipient?.fcmTokens)) {
+    recipient.fcmTokens.forEach((item: any) => {
+      if (item?.active !== false && item?.token) {
+        tokens.add(String(item.token).trim());
+      }
+    });
+  }
+  return Array.from(tokens).filter(Boolean);
+};
+
+const cleanupInvalidFcmTokens = async (tokens: string[]) => {
+  const uniqueTokens = Array.from(new Set(tokens.map(String).filter(Boolean)));
+  if (!uniqueTokens.length) return;
+  await User.updateMany(
+    {
+      $or: [
+        { fcmToken: { $in: uniqueTokens } },
+        { "fcmTokens.token": { $in: uniqueTokens } },
+      ],
+    },
+    {
+      $unset: { fcmToken: "" },
+      $pull: { fcmTokens: { token: { $in: uniqueTokens } } },
+    },
+  ).catch((error) =>
+    console.log("[Notification] Failed to cleanup invalid FCM tokens:", error),
+  );
+};
+
 export const NotificationService = {
   async send(
     options: SendNotificationOptions,
     authUser?: { _id: string; role: UserType }
   ) {
-    const { type, title, message, toRole, toUserId, fromUser } = options;
+    const { type, title, message, toRole, toUserId, fromUser, data: meta } = options;
     const sender = fromUser || authUser;
 
     let notification: any;
@@ -114,26 +165,69 @@ export const NotificationService = {
       const emailAllowed = isUserRole ? preferences.email !== false : true; // Always true for non-user roles
 
       const tasks: Promise<any>[] = [];
-      const { fcmToken, mobile, email }: any = recipient;
+      const { mobile, email }: any = recipient;
       const dashboardUrl = buildDashboardUrl();
+      const notificationId = notification._id.toString();
+      const fcmTokens = getRecipientFcmTokens(recipient);
 
       // --- Push Notification ---
-      if (pushAllowed && fcmToken && admin && config?.notification?.enabled) {
+      if (
+        pushAllowed &&
+        fcmTokens.length > 0 &&
+        admin.apps.length > 0 &&
+        config?.notification?.enabled
+      ) {
+        const data = toStringMap({
+          ...(meta || {}),
+          type,
+          notificationId,
+          screen: getNotificationScreen(type),
+          url: dashboardUrl,
+          title,
+          body: message,
+        });
         tasks.push(
           admin
             .messaging()
-            .send({
-              token: fcmToken,
+            .sendEachForMulticast({
+              tokens: fcmTokens,
               notification: { title, body: message },
-              data: {
-                type,
-                notificationId: notification._id.toString(),
+              data,
+              android: {
+                priority: "high",
+                notification: {
+                  channelId: "fintara_updates",
+                  sound: "default",
+                  clickAction: "FLUTTER_NOTIFICATION_CLICK",
+                },
+              },
+              apns: {
+                payload: {
+                  aps: {
+                    sound: "default",
+                    badge: 1,
+                  },
+                },
               },
             })
-            .then(() => {
+            .then(async (response) => {
               if (config.env === "development") {
-                console.log(`[Notification] Push sent to userId=${toUserId}`);
+                console.log(
+                  `[Notification] FCM sent to userId=${toUserId} success=${response.successCount} failed=${response.failureCount}`,
+                );
               }
+              const invalidTokens: string[] = [];
+              response.responses.forEach((result, index) => {
+                const code = result.error?.code || "";
+                if (
+                  code.includes("registration-token-not-registered") ||
+                  code.includes("invalid-registration-token") ||
+                  code.includes("invalid-argument")
+                ) {
+                  invalidTokens.push(fcmTokens[index]);
+                }
+              });
+              await cleanupInvalidFcmTokens(invalidTokens);
             })
             .catch((err) => {
               console.log(
@@ -155,7 +249,7 @@ export const NotificationService = {
               badge: "/favicon.ico",
               data: {
                 type,
-                notificationId: notification._id.toString(),
+                notificationId,
                 url: dashboardUrl,
               },
             },
@@ -166,8 +260,9 @@ export const NotificationService = {
       emitNotificationToUser(toUserId, {
         title,
         body: message,
+        ...(meta || {}),
         type,
-        notificationId: notification._id.toString(),
+        notificationId,
         url: dashboardUrl,
       });
 
@@ -221,6 +316,7 @@ export async function sendDualNotification({
       toRole: receiverRole,
       title: receiverMsg.title.toString(),
       message: receiverMsg.message.toString(),
+      data: context,
       fromUser: { _id: senderId, role: senderRole },
     }),
     NotificationService.send({
@@ -229,6 +325,7 @@ export async function sendDualNotification({
       toRole: senderRole,
       title: senderMsg.title.toString(),
       message: senderMsg.message.toString(),
+      data: context,
       fromUser: { _id: receiverId, role: receiverRole },
     }),
   ]);
@@ -253,6 +350,7 @@ export async function sendSingleNotification({
     toUserId,
     fromUser,
     title: title.toString(),
+    data: context,
     message: message.toString(),
   });
 }

@@ -180,6 +180,16 @@ export interface IDeviceAuth {
   pushToken?: string;
 }
 
+export interface IPushToken {
+  token: string;
+  platform?: "ios" | "android" | "web" | "unknown";
+  deviceId?: string;
+  appVersion?: string;
+  active: boolean;
+  lastRegisteredAt?: Date;
+  lastUsedAt?: Date;
+}
+
 const DeviceAuthSchema = new Schema(
   {
     deviceId: { type: String, required: true },
@@ -188,6 +198,23 @@ const DeviceAuthSchema = new Schema(
     lastLoginAt: { type: Date },
     biometricEnabled: { type: Boolean, default: false },
     pushToken: { type: String },
+  },
+  { _id: false },
+);
+
+const PushTokenSchema = new Schema(
+  {
+    token: { type: String, required: true, trim: true },
+    platform: {
+      type: String,
+      enum: ["ios", "android", "web", "unknown"],
+      default: "unknown",
+    },
+    deviceId: { type: String, trim: true },
+    appVersion: { type: String, trim: true },
+    active: { type: Boolean, default: true },
+    lastRegisteredAt: { type: Date, default: Date.now },
+    lastUsedAt: { type: Date },
   },
   { _id: false },
 );
@@ -512,6 +539,7 @@ export interface IUser extends Document {
   updatedAt: Date;
   password: string;
   fcmToken?: string;
+  fcmTokens?: IPushToken[];
   status: UserStatus;
   dateOfBirth?: Date;
   lastLoginAt?: Date;
@@ -586,6 +614,7 @@ const UserSchema = new Schema<IUser>(
     emergencyContact: { type: EmergencyContactSchema },
     isMobileVerified: { type: Boolean, default: false },
     fcmToken: { type: String, unique: true, sparse: true },
+    fcmTokens: { type: [PushTokenSchema], default: [] },
     mobile: { type: String, unique: true, required: true, index: true },
     notification: {
       sms: { type: Boolean, default: true },
@@ -668,6 +697,7 @@ const UserSchema = new Schema<IUser>(
 
 UserSchema.index({ email: 1, status: 1 });
 UserSchema.index({ accountSource: 1, createdAt: -1 });
+UserSchema.index({ "fcmTokens.token": 1 });
 
 export const generateReferralCode = (userId: string) => {
   const prefix = "REF";

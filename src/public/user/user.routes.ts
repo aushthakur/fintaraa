@@ -98,6 +98,14 @@ router.put(
   "/notification-preferences",
   asyncHandler(UserController.updateNotificationPreferences),
 );
+router.post(
+  "/push-token",
+  asyncHandler(UserController.registerPushToken),
+);
+router.delete(
+  "/push-token",
+  asyncHandler(UserController.unregisterPushToken),
+);
 router.get(
   "/contacts/preferences",
   asyncHandler(UserController.getContactPreferences),

@@ -197,6 +197,14 @@ const resolveAccountSource = (req: Request): AccountSource => {
   );
 };
 
+const normalizePushPlatform = (value?: unknown) => {
+  const platform = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (["ios", "android", "web"].includes(platform)) return platform;
+  return "unknown";
+};
+
 const generateReferralCode = async () => {
   const prefix = "FINTARA";
   const maxAttempts = 10;
@@ -1510,6 +1518,151 @@ export class UserController {
             "Notification preferences updated successfully",
           ),
         );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async registerPushToken(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const userId = req.user?._id || req.user?.id;
+      const token = String(req.body?.token || req.body?.fcmToken || "").trim();
+      if (!userId) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+      if (!token) {
+        return res.status(400).json(new ApiError(400, "FCM token is required"));
+      }
+
+      const platform = normalizePushPlatform(req.body?.platform);
+      const deviceId = String(req.body?.deviceId || "").trim();
+      const appVersion = String(req.body?.appVersion || "").trim();
+      const now = new Date();
+
+      await User.updateMany(
+        {
+          _id: { $ne: userId },
+          $or: [{ fcmToken: token }, { "fcmTokens.token": token }],
+        },
+        {
+          $unset: { fcmToken: "" },
+          $pull: { fcmTokens: { token } },
+        },
+      );
+
+      const user: any = await User.findById(userId);
+      if (!user) return res.status(404).json(new ApiError(404, "User not found"));
+
+      const existingTokens = Array.isArray(user.fcmTokens)
+        ? user.fcmTokens
+        : [];
+      const tokenIndex = existingTokens.findIndex(
+        (item: any) => item?.token === token,
+      );
+
+      if (tokenIndex >= 0) {
+        existingTokens[tokenIndex] = {
+          ...existingTokens[tokenIndex].toObject?.(),
+          ...existingTokens[tokenIndex],
+          token,
+          active: true,
+          platform,
+          deviceId: deviceId || existingTokens[tokenIndex]?.deviceId,
+          appVersion: appVersion || existingTokens[tokenIndex]?.appVersion,
+          lastRegisteredAt: now,
+          lastUsedAt: now,
+        };
+      } else {
+        existingTokens.push({
+          token,
+          active: true,
+          platform,
+          deviceId,
+          appVersion,
+          lastRegisteredAt: now,
+          lastUsedAt: now,
+        });
+      }
+
+      user.fcmToken = token;
+      user.fcmTokens = existingTokens
+        .filter((item: any) => item?.token)
+        .sort((a: any, b: any) => {
+          const aTime = new Date(a?.lastRegisteredAt || 0).getTime();
+          const bTime = new Date(b?.lastRegisteredAt || 0).getTime();
+          return bTime - aTime;
+        })
+        .slice(0, 10);
+      user.notification = {
+        sms: user.notification?.sms ?? true,
+        email: user.notification?.email ?? true,
+        whatsapp: user.notification?.whatsapp ?? true,
+        push: user.notification?.push ?? true,
+      };
+
+      await user.save();
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            registered: true,
+            platform,
+            activeTokens: user.fcmTokens.filter((item: any) => item.active)
+              .length,
+          },
+          "Push token registered successfully",
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async unregisterPushToken(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const userId = req.user?._id || req.user?.id;
+      const token = String(req.body?.token || req.body?.fcmToken || "").trim();
+      if (!userId) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+      if (!token) {
+        return res.status(400).json(new ApiError(400, "FCM token is required"));
+      }
+
+      const user: any = await User.findById(userId);
+      if (!user) return res.status(404).json(new ApiError(404, "User not found"));
+
+      user.fcmTokens = (Array.isArray(user.fcmTokens) ? user.fcmTokens : []).map(
+        (item: any) =>
+          item?.token === token
+            ? { ...item.toObject?.(), ...item, active: false }
+            : item,
+      );
+      if (user.fcmToken === token) {
+        const replacement = user.fcmTokens.find(
+          (item: any) => item?.active && item?.token && item.token !== token,
+        );
+        user.fcmToken = replacement?.token || undefined;
+      }
+
+      await user.save();
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          { unregistered: true },
+          "Push token unregistered successfully",
+        ),
+      );
     } catch (error) {
       next(error);
     }
