@@ -6,6 +6,11 @@ import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
 const router = express.Router();
 
 router.get(
+  "/public",
+  asyncHandler(BankSeoPageController.listPublicPages),
+);
+
+router.get(
   "/public/:bankName/:product",
   asyncHandler(BankSeoPageController.resolvePublicPage),
 );

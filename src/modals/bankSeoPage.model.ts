@@ -24,6 +24,7 @@ export interface IBankSeoTab {
   key: string;
   label: string;
   title?: string;
+  description?: string;
   content?: string[];
   bullets?: string[];
   sortOrder?: number;
@@ -119,6 +120,7 @@ const tabSchema = new Schema<IBankSeoTab>(
     key: { type: String, required: true, trim: true, lowercase: true },
     label: { type: String, required: true, trim: true },
     title: { type: String, trim: true },
+    description: { type: String, trim: true },
     content: { type: [String], default: [] },
     bullets: { type: [String], default: [] },
     sortOrder: { type: Number, default: 0 },

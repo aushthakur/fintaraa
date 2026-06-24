@@ -12,6 +12,7 @@
     "seed:website-knowledge": "ts-node src/scripts/seedWebsiteKnowledge.ts",
     "seed:seo-metadata": "ts-node src/scripts/seedSeoMetadata.ts",
     "seed:credit-cards": "ts-node src/scripts/seedCreditCards.ts",
+    "seed:bank-seo": "ts-node src/scripts/seedBankSeoPages.ts",
     "seed:page-faqs": "ts-node src/scripts/seedPageFaqs.ts",
     "seed:careers": "ts-node src/scripts/seedCareers.ts"
   },

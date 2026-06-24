@@ -40,6 +40,76 @@ const parseArrayInput = (value: any) => {
   return [];
 };
 
+const truthy = (value: unknown, fallback = true) => {
+  if (value === undefined || value === null || value === "") return fallback;
+  return ["true", "1", "yes"].includes(String(value).toLowerCase());
+};
+
+const escapeRegex = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const buildAdminListQuery = (query: Record<string, any>) => {
+  const filter: Record<string, any> = {};
+  ["status", "insuranceTypeSlug", "insuranceType"].forEach((field) => {
+    const value = clean(query[field]);
+    if (value) filter[field] = value;
+  });
+  ["country", "state", "city", "pincode", "area"].forEach((field) => {
+    const value = clean(query[field]);
+    if (value) filter[`location.${field}`] = value;
+  });
+
+  const search = clean(query.search);
+  if (search) {
+    const pattern = new RegExp(escapeRegex(search), "i");
+    filter.$or = [
+      { title: pattern },
+      { subtitle: pattern },
+      { seoTitle: pattern },
+      { insuranceType: pattern },
+      { insuranceTypeSlug: pattern },
+      { canonicalPath: pattern },
+      { "location.country": pattern },
+      { "location.state": pattern },
+      { "location.city": pattern },
+      { "location.pincode": pattern },
+      { "location.area": pattern },
+    ];
+  }
+
+  const dateRange: Record<string, Date> = {};
+  const startDate = clean(query.startDate);
+  const endDate = clean(query.endDate);
+  if (startDate) {
+    const parsed = new Date(startDate);
+    if (!Number.isNaN(parsed.getTime())) dateRange.$gte = parsed;
+  }
+  if (endDate) {
+    const parsed = new Date(endDate);
+    if (!Number.isNaN(parsed.getTime())) dateRange.$lte = parsed;
+  }
+  if (Object.keys(dateRange).length) filter.updatedAt = dateRange;
+
+  return filter;
+};
+
+const buildAdminListSort = (query: Record<string, any>): Record<string, 1 | -1> => {
+  const sortKey = clean(query.sortKey) || "_id";
+  const sortDir: 1 | -1 =
+    clean(query.sortDir).toLowerCase() === "asc" ? 1 : -1;
+  const allowedSorts = new Set([
+    "_id",
+    "createdAt",
+    "updatedAt",
+    "priority",
+    "title",
+    "insuranceType",
+  ]);
+
+  if (!allowedSorts.has(sortKey)) return { _id: -1 };
+  return { [sortKey]: sortDir, _id: sortDir };
+};
+
 const normalizeLocation = (input: Record<string, any>) => ({
   country: clean(input.country) || "India",
   state: clean(input.state),
@@ -215,6 +285,11 @@ const pageTime = (page: any) =>
   new Date(page?.updatedAt || page?.publishedAt || page?.createdAt || 0).getTime() ||
   0;
 
+const locationSpecificity = (location: Record<string, string> = {}) =>
+  ["state", "city", "pincode", "area"].filter((field) =>
+    Boolean(clean(location[field])),
+  ).length;
+
 const normalizePayload = (body: Record<string, any>) => ({
   ...body,
   insuranceTypeSlug: slugify(body.insuranceTypeSlug || body.insuranceType),
@@ -232,14 +307,26 @@ export class InsuranceSeoPageController {
     next: NextFunction,
   ) {
     try {
-      const pages = await InsuranceSeoPage.find({
+      const insuranceTypeSlug = slugify(
+        req.query.insuranceTypeSlug || req.query.insuranceType,
+      );
+      const location = normalizeLocation(req.query as Record<string, any>);
+      const query: Record<string, any> = {
         status: InsuranceSeoPageStatus.ACTIVE,
-      })
+      };
+      if (insuranceTypeSlug) query.insuranceTypeSlug = insuranceTypeSlug;
+      (["country", "state", "city", "pincode", "area"] as const).forEach(
+        (field) => {
+          if (clean(location[field])) query[`location.${field}`] = location[field];
+        },
+      );
+
+      const pages = await InsuranceSeoPage.find(query)
         .select(
-          "insuranceType insuranceTypeSlug title subtitle canonicalPath priority updatedAt",
+          "insuranceType insuranceTypeSlug title subtitle canonicalPath location priority updatedAt",
         )
         .sort({ priority: 1, updatedAt: -1 })
-        .limit(Math.min(Number(req.query?.limit) || 200, 300))
+        .limit(Math.min(Number(req.query?.limit) || 200, 1000))
         .lean();
 
       return res
@@ -268,6 +355,7 @@ export class InsuranceSeoPageController {
         insuranceTypeSlug,
         status: InsuranceSeoPageStatus.ACTIVE,
       }).lean();
+      const targetSpecificity = locationSpecificity(location);
       const best = candidates
         .map((page) => ({ page, score: scorePage(page, location) }))
         .filter((item) => item.score >= 0)
@@ -279,12 +367,15 @@ export class InsuranceSeoPageController {
         )
         .at(0)?.page;
 
+      const bestSpecificity = locationSpecificity(best?.location || {});
       return res
         .status(200)
         .json(
           new ApiResponse(
             200,
-            best || buildDefaultPage(insuranceTypeSlug, location),
+            best && (!targetSpecificity || bestSpecificity >= targetSpecificity)
+              ? best
+              : buildDefaultPage(insuranceTypeSlug, location),
             "Insurance page fetched successfully",
           ),
         );
@@ -306,10 +397,57 @@ export class InsuranceSeoPageController {
 
   static async getAllPages(req: Request, res: Response, next: NextFunction) {
     try {
-      const result = await insuranceSeoPageService.getAll(req.query);
+      const query = req.query as Record<string, any>;
+      const filter = buildAdminListQuery(query);
+      const sort = buildAdminListSort(query);
+      const usePagination = truthy(query.pagination, true);
+
+      if (!usePagination) {
+        const limit = Math.min(Math.max(Number(query.limit || 100), 1), 500);
+        const result = await InsuranceSeoPage.find(filter)
+          .sort(sort)
+          .limit(limit)
+          .allowDiskUse(true)
+          .lean();
+        return res
+          .status(200)
+          .json(
+            new ApiResponse(200, result, "Insurance pages fetched successfully"),
+          );
+      }
+
+      const page = Math.max(Number(query.page || 1), 1);
+      const limit = Math.min(Math.max(Number(query.limit || 20), 1), 100);
+      const skip = (page - 1) * limit;
+      const [result, totalItems] = await Promise.all([
+        InsuranceSeoPage.find(filter)
+          .sort(sort)
+          .skip(skip)
+          .limit(limit)
+          .allowDiskUse(true)
+          .lean(),
+        InsuranceSeoPage.countDocuments(filter),
+      ]);
+
+      const formattedResult = {
+        result,
+        pagination: {
+          totalItems,
+          currentPage: page,
+          itemsPerPage: limit,
+          totalPages: Math.ceil(totalItems / limit),
+        },
+      };
+
       return res
         .status(200)
-        .json(new ApiResponse(200, result, "Insurance pages fetched successfully"));
+        .json(
+          new ApiResponse(
+            200,
+            formattedResult,
+            "Insurance pages fetched successfully",
+          ),
+        );
     } catch (err) {
       next(err);
     }

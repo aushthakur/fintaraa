@@ -29,6 +29,10 @@ router
     asyncHandler(EligibilityCriteriaController.getAll)
   )
   .get(
+    "/public/search",
+    asyncHandler(EligibilityCriteriaController.publicSearch)
+  )
+  .get(
     "/:id",
     authenticateToken,
     authorize("admin", "agent"),

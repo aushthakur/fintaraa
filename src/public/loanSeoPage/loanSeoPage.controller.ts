@@ -49,6 +49,76 @@ const parseArrayInput = (value: any) => {
   return [];
 };
 
+const truthy = (value: unknown, fallback = true) => {
+  if (value === undefined || value === null || value === "") return fallback;
+  return ["true", "1", "yes"].includes(String(value).toLowerCase());
+};
+
+const escapeRegex = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const buildAdminListQuery = (query: Record<string, any>) => {
+  const filter: Record<string, any> = {};
+  ["status", "loanTypeSlug", "loanType"].forEach((field) => {
+    const value = clean(query[field]);
+    if (value) filter[field] = value;
+  });
+  ["country", "state", "city", "pincode", "area"].forEach((field) => {
+    const value = clean(query[field]);
+    if (value) filter[`location.${field}`] = value;
+  });
+
+  const search = clean(query.search);
+  if (search) {
+    const pattern = new RegExp(escapeRegex(search), "i");
+    filter.$or = [
+      { title: pattern },
+      { subtitle: pattern },
+      { seoTitle: pattern },
+      { loanType: pattern },
+      { loanTypeSlug: pattern },
+      { canonicalPath: pattern },
+      { "location.country": pattern },
+      { "location.state": pattern },
+      { "location.city": pattern },
+      { "location.pincode": pattern },
+      { "location.area": pattern },
+    ];
+  }
+
+  const dateRange: Record<string, Date> = {};
+  const startDate = clean(query.startDate);
+  const endDate = clean(query.endDate);
+  if (startDate) {
+    const parsed = new Date(startDate);
+    if (!Number.isNaN(parsed.getTime())) dateRange.$gte = parsed;
+  }
+  if (endDate) {
+    const parsed = new Date(endDate);
+    if (!Number.isNaN(parsed.getTime())) dateRange.$lte = parsed;
+  }
+  if (Object.keys(dateRange).length) filter.updatedAt = dateRange;
+
+  return filter;
+};
+
+const buildAdminListSort = (query: Record<string, any>): Record<string, 1 | -1> => {
+  const sortKey = clean(query.sortKey) || "_id";
+  const sortDir: 1 | -1 =
+    clean(query.sortDir).toLowerCase() === "asc" ? 1 : -1;
+  const allowedSorts = new Set([
+    "_id",
+    "createdAt",
+    "updatedAt",
+    "priority",
+    "title",
+    "loanType",
+  ]);
+
+  if (!allowedSorts.has(sortKey)) return { _id: -1 };
+  return { [sortKey]: sortDir, _id: sortDir };
+};
+
 const normalizeLocation = (input: Record<string, any>) => ({
   country: clean(input.country) || "India",
   state: clean(input.state),
@@ -102,14 +172,37 @@ const buildDefaultPage = (
     location,
     badges: ["Partner-backed", "Assisted application", "Secure documents"],
     filterKeys: [
+      "all_details",
       "overview",
+      "features",
       "eligibility",
       "documents",
-      "fees",
-      "emi",
-      "apply",
+      "emi_calculator",
+      "fees_and_charges",
+      "reviews",
+      "faqs",
     ],
     tabs: [
+      {
+        key: "all_details",
+        label: "All Details",
+        eyebrow: "Complete guide",
+        title: `${scopedLoan} complete details`,
+        description:
+          "Review eligibility, documents, EMI, fees, reviews, and FAQs before applying.",
+        content: [
+          `${scopedLoan} can be compared across partner requirements, document readiness, repayment comfort, and verification timelines.`,
+          "Use this complete view when you want every important section without switching tabs.",
+        ],
+        bullets: [
+          "Check applicant fit, document list, EMI comfort, and common charges.",
+          "Understand partner-backed next steps before submitting details.",
+          "Continue with the guided Fintaraa application flow when ready.",
+        ],
+        filterKeys: ["all_details", "complete_guide"],
+        sortOrder: 0,
+        isActive: true,
+      },
       {
         key: "overview",
         label: "Overview",
@@ -132,6 +225,23 @@ const buildDefaultPage = (
         isActive: true,
       },
       {
+        key: "features",
+        label: "Features",
+        eyebrow: "Highlights",
+        title: `${loanType} features`,
+        description:
+          "Key features depend on lender policy, applicant profile, amount, and repayment tenure.",
+        bullets: [
+          "Digital discovery with guided application support.",
+          "Flexible amount and tenure options from eligible partners.",
+          "Partner-specific collateral or asset checks where applicable.",
+          "Clear next steps for documentation and verification.",
+        ],
+        filterKeys: ["features", "benefits"],
+        sortOrder: 2,
+        isActive: true,
+      },
+      {
         key: "eligibility",
         label: "Eligibility",
         eyebrow: "Applicant fit",
@@ -144,7 +254,7 @@ const buildDefaultPage = (
           "Credit history and existing EMI obligations may affect approval.",
         ],
         filterKeys: ["eligibility", "income", "cibil"],
-        sortOrder: 2,
+        sortOrder: 3,
         isActive: true,
       },
       {
@@ -160,14 +270,30 @@ const buildDefaultPage = (
           "Income proof, bank statement, and business or employment proof where applicable.",
         ],
         filterKeys: ["documents", "kyc", "income_proof"],
-        sortOrder: 3,
+        sortOrder: 4,
         isActive: true,
       },
       {
-        key: "fees",
-        label: "Fees",
+        key: "emi_calculator",
+        label: "EMI Calculator",
+        eyebrow: "Repayment view",
+        title: `${loanType} EMI planning`,
+        description:
+          "Estimate EMI comfort before applying by reviewing amount, tenure, and expected interest range.",
+        bullets: [
+          "Compare monthly EMI against income and existing obligations.",
+          "Shorter tenures can reduce total interest but increase EMI.",
+          "Longer tenures can reduce monthly EMI but increase total repayment.",
+        ],
+        filterKeys: ["emi_calculator", "emi", "repayment"],
+        sortOrder: 5,
+        isActive: true,
+      },
+      {
+        key: "fees_and_charges",
+        label: "Fees & Charges",
         eyebrow: "Cost view",
-        title: `${loanType} charges and repayment terms`,
+        title: `${loanType} fees and charges`,
         description:
           "Review interest rate range, processing fee, foreclosure rules, insurance add-ons, and total repayment before moving ahead.",
         bullets: [
@@ -176,7 +302,55 @@ const buildDefaultPage = (
           "Avoid submitting duplicate applications with multiple partners.",
         ],
         filterKeys: ["fees", "emi", "repayment"],
-        sortOrder: 4,
+        sortOrder: 6,
+        isActive: true,
+      },
+      {
+        key: "reviews",
+        label: "Reviews",
+        eyebrow: "Customer view",
+        title: `${loanType} customer reviews`,
+        description:
+          "Customer experience varies by lender and document readiness, but guided support helps keep the journey organised.",
+        bullets: [
+          "Applicants value clear document checklists before lender review.",
+          "Guided callbacks help reduce back-and-forth during verification.",
+          "EMI and fee visibility helps users compare options carefully.",
+        ],
+        filterKeys: ["reviews", "testimonials"],
+        sortOrder: 7,
+        isActive: true,
+      },
+      {
+        key: "faqs",
+        label: "FAQs",
+        eyebrow: "Common questions",
+        title: `FAQs about ${scopedLoan}`,
+        description: `Find answers to common questions about ${loanType}.`,
+        bullets: [
+          "Quick answers to common application questions.",
+          "Learn about eligibility, documents, and repayment.",
+          "Get clarity before applying.",
+        ],
+        faqs: [
+          {
+            question: `What is the minimum income required for ${loanType}?`,
+            answer:
+              "Income requirements vary by lender, amount, profile, and location. A stable income or business cash flow usually improves approval chances.",
+          },
+          {
+            question: `How long does ${loanType} approval take?`,
+            answer:
+              "Timelines depend on lender checks and document verification. Complete details and clean documents can reduce back-and-forth.",
+          },
+          {
+            question: `Can I apply for ${loanType} with a low credit score?`,
+            answer:
+              "A stronger score helps, but some partners may also evaluate income stability, banking behaviour, and existing obligations.",
+          },
+        ],
+        filterKeys: ["faqs", "questions"],
+        sortOrder: 8,
         isActive: true,
       },
     ],
@@ -260,6 +434,11 @@ const pageTime = (page: any) =>
   new Date(page?.updatedAt || page?.publishedAt || page?.createdAt || 0).getTime() ||
   0;
 
+const locationSpecificity = (location: Record<string, string> = {}) =>
+  ["state", "city", "pincode", "area"].filter((field) =>
+    Boolean(clean(location[field])),
+  ).length;
+
 const normalizePayload = (body: Record<string, any>) => ({
   ...body,
   loanTypeSlug: toSlug(body.loanTypeSlug || body.loanType),
@@ -277,12 +456,26 @@ export class LoanSeoPageController {
     next: NextFunction,
   ) {
     try {
-      const pages = await LoanSeoPage.find({
+      const loanTypeSlug = toSlug(req.query.loanTypeSlug || req.query.loanType);
+      const location = normalizeLocation(req.query as Record<string, any>);
+      const query: Record<string, any> = {
         status: LoanSeoPageStatus.ACTIVE,
+      };
+      if (loanTypeSlug) query.loanTypeSlug = loanTypeSlug;
+      (["country", "state", "city", "pincode", "area"] as const).forEach(
+        (field) => {
+          if (clean(location[field])) query[`location.${field}`] = location[field];
+        },
+      );
+
+      const pages = await LoanSeoPage.find({
+        ...query,
       })
-        .select("loanType loanTypeSlug title subtitle canonicalPath priority updatedAt")
+        .select(
+          "loanType loanTypeSlug title subtitle canonicalPath location priority updatedAt",
+        )
         .sort({ priority: 1, updatedAt: -1 })
-        .limit(Math.min(Number(req.query?.limit) || 200, 300))
+        .limit(Math.min(Number(req.query?.limit) || 200, 1000))
         .lean();
 
       return res
@@ -315,6 +508,7 @@ export class LoanSeoPageController {
       };
 
       const candidates = await LoanSeoPage.find(query).lean();
+      const targetSpecificity = locationSpecificity(location);
       const best = candidates
         .map((page) => ({ page, score: scorePage(page, location) }))
         .filter((item) => item.score >= 0)
@@ -326,7 +520,11 @@ export class LoanSeoPageController {
         )
         .at(0)?.page;
 
-      const result = best || buildDefaultPage(loanTypeSlug, location);
+      const bestSpecificity = locationSpecificity(best?.location || {});
+      const result =
+        best && (!targetSpecificity || bestSpecificity >= targetSpecificity)
+          ? best
+          : buildDefaultPage(loanTypeSlug, location);
       return res
         .status(200)
         .json(new ApiResponse(200, result, "Loan page fetched successfully"));
@@ -348,10 +546,55 @@ export class LoanSeoPageController {
 
   static async getAllPages(req: Request, res: Response, next: NextFunction) {
     try {
-      const result = await loanSeoPageService.getAll(req.query);
+      const query = req.query as Record<string, any>;
+      const filter = buildAdminListQuery(query);
+      const sort = buildAdminListSort(query);
+      const usePagination = truthy(query.pagination, true);
+
+      if (!usePagination) {
+        const limit = Math.min(Math.max(Number(query.limit || 100), 1), 500);
+        const result = await LoanSeoPage.find(filter)
+          .sort(sort)
+          .limit(limit)
+          .allowDiskUse(true)
+          .lean();
+        return res
+          .status(200)
+          .json(new ApiResponse(200, result, "Loan pages fetched successfully"));
+      }
+
+      const page = Math.max(Number(query.page || 1), 1);
+      const limit = Math.min(Math.max(Number(query.limit || 20), 1), 100);
+      const skip = (page - 1) * limit;
+      const [result, totalItems] = await Promise.all([
+        LoanSeoPage.find(filter)
+          .sort(sort)
+          .skip(skip)
+          .limit(limit)
+          .allowDiskUse(true)
+          .lean(),
+        LoanSeoPage.countDocuments(filter),
+      ]);
+
+      const formattedResult = {
+        result,
+        pagination: {
+          totalItems,
+          currentPage: page,
+          itemsPerPage: limit,
+          totalPages: Math.ceil(totalItems / limit),
+        },
+      };
+
       return res
         .status(200)
-        .json(new ApiResponse(200, result, "Loan pages fetched successfully"));
+        .json(
+          new ApiResponse(
+            200,
+            formattedResult,
+            "Loan pages fetched successfully",
+          ),
+        );
     } catch (err) {
       next(err);
     }

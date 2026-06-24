@@ -31,10 +31,16 @@ router.post(
   "/",
   authenticateToken,
   authorize("admin"),
-  dynamicUpload([{ name: "coverImageUrl", maxCount: 1 }]),
+  dynamicUpload([
+    { name: "coverImageUrl", maxCount: 1 },
+    { name: "videoUrl", maxCount: 1 },
+  ]),
   s3UploaderMiddleware("knowledge"),
   asyncHandler(
-    mediaUrlMiddleware(Knowledge, [{ key: "coverImageUrl", type: "single" }])
+    mediaUrlMiddleware(Knowledge, [
+      { key: "coverImageUrl", type: "single" },
+      { key: "videoUrl", type: "single" },
+    ])
   ),
   asyncHandler(KnowledgeController.create)
 );
@@ -42,10 +48,16 @@ router.post(
   "/admin",
   authenticateToken,
   authorize("admin"),
-  dynamicUpload([{ name: "coverImageUrl", maxCount: 1 }]),
+  dynamicUpload([
+    { name: "coverImageUrl", maxCount: 1 },
+    { name: "videoUrl", maxCount: 1 },
+  ]),
   s3UploaderMiddleware("knowledge"),
   asyncHandler(
-    mediaUrlMiddleware(Knowledge, [{ key: "coverImageUrl", type: "single" }])
+    mediaUrlMiddleware(Knowledge, [
+      { key: "coverImageUrl", type: "single" },
+      { key: "videoUrl", type: "single" },
+    ])
   ),
   asyncHandler(KnowledgeController.create)
 );
@@ -53,11 +65,15 @@ router.put(
   "/:id",
   authenticateToken,
   authorize("admin"),
-  dynamicUpload([{ name: "coverImageUrl", maxCount: 1 }]),
+  dynamicUpload([
+    { name: "coverImageUrl", maxCount: 1 },
+    { name: "videoUrl", maxCount: 1 },
+  ]),
   s3UploaderMiddleware("knowledge"),
   asyncHandler(
     mediaUrlMiddleware(Knowledge, [
       { key: "coverImageUrl", type: "single", useExtractOnUpdate: true },
+      { key: "videoUrl", type: "single", useExtractOnUpdate: true },
     ])
   ),
   asyncHandler(KnowledgeController.update)
@@ -66,11 +82,15 @@ router.put(
   "/admin/:id",
   authenticateToken,
   authorize("admin"),
-  dynamicUpload([{ name: "coverImageUrl", maxCount: 1 }]),
+  dynamicUpload([
+    { name: "coverImageUrl", maxCount: 1 },
+    { name: "videoUrl", maxCount: 1 },
+  ]),
   s3UploaderMiddleware("knowledge"),
   asyncHandler(
     mediaUrlMiddleware(Knowledge, [
       { key: "coverImageUrl", type: "single", useExtractOnUpdate: true },
+      { key: "videoUrl", type: "single", useExtractOnUpdate: true },
     ])
   ),
   asyncHandler(KnowledgeController.update)

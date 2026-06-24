@@ -3,7 +3,10 @@ import axios from "axios";
 import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
 import { CommonService } from "../../services/common.services";
-import { EligibilityCriteria } from "../../modals/eligibilityCriteria.model";
+import {
+  EligibilityCriteria,
+  EligibilityCriteriaStatus,
+} from "../../modals/eligibilityCriteria.model";
 import { LoanQuery } from "../../modals/loanquery.model";
 import { createMailOptions, transporter } from "../../config/nodeMailerConfig";
 import { checkEligibilityMailAccess } from "../eligibilityMailPermission/eligibilityMailPermission.utils";
@@ -418,6 +421,423 @@ const getExtensionFromUrl = (url: string) => {
   return ext.toLowerCase();
 };
 
+const PUBLIC_ELIGIBILITY_SELECT_FIELDS = [
+  "loanType",
+  "bankName",
+  "salaryType",
+  "cibilScore",
+  "itrYears",
+  "businessProgramFresh",
+  "gstAmount",
+  "bankingAmount",
+  "itrAmount",
+  "nipPdBase",
+  "lowLtv",
+  "salaryFoir0To25000",
+  "salaryFoir25000To50000",
+  "salaryFoir50000To75000",
+  "salaryFoir75000Above",
+  "businessFoir0To600000",
+  "businessFoir600000To1000000",
+  "businessFoir1000000Above",
+  "itrFoir0To600000",
+  "itrFoir600000To1000000",
+  "itrFoir1000000Above",
+  "btMultiplier0To1Year",
+  "btMultiplier1To3Years",
+  "btMultiplier3YearsAbove",
+  "receiptMultiplier0To1Year",
+  "receiptMultiplier1To3Years",
+  "roi",
+  "minAge",
+  "maxAge",
+  "maxTenureYears",
+  "cashRental",
+  "bankRental",
+  "mixRental",
+  "residentialCatALtv",
+  "residentialCatBLtv",
+  "residentialCatCLtv",
+  "commercialCatALtv",
+  "commercialCatBLtv",
+  "commercialCatCLtv",
+  "industrialCatALtv",
+  "industrialCatBLtv",
+  "industrialCatCLtv",
+  "processingFees",
+  "insurance",
+  "loginFees",
+  "companyCategory",
+  "abb",
+  "maximumLoanAmount",
+  "currentExperience",
+  "totalExperience",
+  "totalExperienceMonths",
+  "totalVintage",
+  "currentVintage",
+  "netSalary",
+  "currentTotalEmi",
+  "receiptsAmount",
+  "status",
+].join(" ");
+
+const PUBLIC_LOAN_TYPE_ALIASES: Record<string, string> = {
+  balancetransfer: "balanceTransferLoan",
+  balancetransferloan: "balanceTransferLoan",
+  topup: "topUpLoan",
+  topuploan: "topUpLoan",
+  twowheeler: "twoWheelerLoan",
+  twowheelerloan: "twoWheelerLoan",
+  usedcar: "usedCarLoan",
+  usedcarloan: "usedCarLoan",
+  agriculture: "agricultureLoan",
+  agricultureloan: "agricultureLoan",
+  personal: "personalLoan",
+  personalloan: "personalLoan",
+  instant: "instantLoan",
+  instantloan: "instantLoan",
+  creditscore: "creditScoreLoan",
+  creditscoreloan: "creditScoreLoan",
+  home: "homeLoan",
+  homeloan: "homeLoan",
+  business: "businessLoan",
+  businessloan: "businessLoan",
+  vehicle: "vehicleLoan",
+  vehicleloan: "vehicleLoan",
+  car: "vehicleLoan",
+  carloan: "vehicleLoan",
+  renovation: "renovationLoan",
+  renovationloan: "renovationLoan",
+  homerenovation: "renovationLoan",
+  workingcapital: "workingCapitalLoan",
+  workingcapitalloan: "workingCapitalLoan",
+  loanagainstproperty: "loanAgainstProperty",
+  lap: "loanAgainstProperty",
+  loanagainstsecurity: "loanAgainstSecurity",
+  las: "loanAgainstSecurity",
+  loanagainstcar: "loanAgainstCarValue",
+  loanagainstcarvalue: "loanAgainstCarValue",
+  machinery: "machineryLoan",
+  machineryloan: "machineryLoan",
+  dod: "businessLoan",
+  dodloan: "businessLoan",
+  od: "workingCapitalLoan",
+  odloan: "workingCapitalLoan",
+  industrial: "machineryLoan",
+  industrialloan: "machineryLoan",
+  commercialpurchase: "businessLoan",
+  commercialpurchases: "businessLoan",
+  commercialpurchasesloan: "businessLoan",
+  gold: "goldLoan",
+  goldloan: "goldLoan",
+  education: "educationLoan",
+  educationloan: "educationLoan",
+};
+
+const compactPublicKey = (value?: any) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]/g, "");
+
+const normalizePublicLoanType = (value?: any) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const compact = compactPublicKey(raw);
+  if (PUBLIC_LOAN_TYPE_ALIASES[compact]) {
+    return PUBLIC_LOAN_TYPE_ALIASES[compact];
+  }
+
+  const words = raw
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length <= 1) return raw;
+  return words
+    .map((word, index) =>
+      index === 0 ? word : `${word.charAt(0).toUpperCase()}${word.slice(1)}`,
+    )
+    .join("");
+};
+
+const toPublicNumber = (value: any) => {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+};
+
+const clampPublicLimit = (value: any) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 50;
+  return Math.min(Math.max(Math.floor(parsed), 1), 100);
+};
+
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const formatPublicCurrency = (value?: number | null) => {
+  if (!value) return "";
+  return `Rs ${new Intl.NumberFormat("en-IN", {
+    maximumFractionDigits: 0,
+  }).format(value)}`;
+};
+
+const formatPublicPercent = (value?: number | null, suffix = "%") => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return "";
+  }
+  return `${Number(value).toFixed(Number(value) % 1 === 0 ? 0 : 2)}${suffix}`;
+};
+
+const formatPublicYears = (value?: number | null) => {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return "";
+  return `${numberValue} ${numberValue === 1 ? "year" : "years"}`;
+};
+
+const buildPublicTermHighlights = (criteria: Record<string, any>) => {
+  const terms: { label: string; value: string }[] = [];
+  const push = (label: string, value: any) => {
+    if (value === null || value === undefined || value === "") return;
+    terms.push({ label, value: String(value) });
+  };
+
+  push("Minimum CIBIL", criteria.cibilScore ? `${criteria.cibilScore}+` : "");
+  push("ROI", criteria.roi ? `${formatPublicPercent(criteria.roi)} p.a.` : "");
+  push(
+    "Maximum Loan",
+    criteria.maximumLoanAmount
+      ? formatPublicCurrency(criteria.maximumLoanAmount)
+      : "",
+  );
+  push(
+    "Tenure",
+    criteria.maxTenureYears
+      ? `Up to ${formatPublicYears(criteria.maxTenureYears)}`
+      : "",
+  );
+  push(
+    "Age",
+    criteria.minAge || criteria.maxAge
+      ? `${criteria.minAge || 18} - ${criteria.maxAge || 65} years`
+      : "",
+  );
+  push(
+    "Processing Fee",
+    criteria.processingFees
+      ? `${formatPublicPercent(criteria.processingFees)} of loan amount`
+      : "",
+  );
+  push("Login Fee", criteria.loginFees);
+  push("Insurance", criteria.insurance);
+  push("Minimum ITR", criteria.itrYears ? formatPublicYears(criteria.itrYears) : "");
+  push("Average Bank Balance", formatPublicCurrency(criteria.abb));
+  push("Net Salary", formatPublicCurrency(criteria.netSalary));
+  push("Current EMI Limit", formatPublicCurrency(criteria.currentTotalEmi));
+  push(
+    "Company Category",
+    Array.isArray(criteria.companyCategory)
+      ? criteria.companyCategory.join(", ")
+      : criteria.companyCategory,
+  );
+  push(
+    "Total Experience",
+    criteria.totalExperience ? formatPublicYears(criteria.totalExperience) : "",
+  );
+  push(
+    "Current Experience",
+    criteria.currentExperience
+      ? formatPublicYears(criteria.currentExperience)
+      : "",
+  );
+  push(
+    "Business Vintage",
+    criteria.totalVintage ? formatPublicYears(criteria.totalVintage) : "",
+  );
+  push(
+    "Current Vintage",
+    criteria.currentVintage ? formatPublicYears(criteria.currentVintage) : "",
+  );
+  push("GST Amount", formatPublicCurrency(criteria.gstAmount));
+  push("Banking Amount", formatPublicCurrency(criteria.bankingAmount));
+  push("ITR Amount", formatPublicCurrency(criteria.itrAmount));
+  push("Receipts Amount", formatPublicCurrency(criteria.receiptsAmount));
+  push("NIP/PD Base", formatPublicCurrency(criteria.nipPdBase));
+  push("Low LTV", criteria.lowLtv ? `${criteria.lowLtv}%` : "");
+  push(
+    "Salary FOIR",
+    [
+      criteria.salaryFoir0To25000
+        ? `0-25k: ${criteria.salaryFoir0To25000}%`
+        : "",
+      criteria.salaryFoir25000To50000
+        ? `25k-50k: ${criteria.salaryFoir25000To50000}%`
+        : "",
+      criteria.salaryFoir50000To75000
+        ? `50k-75k: ${criteria.salaryFoir50000To75000}%`
+        : "",
+      criteria.salaryFoir75000Above
+        ? `75k+: ${criteria.salaryFoir75000Above}%`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(", "),
+  );
+  push(
+    "Business FOIR",
+    [
+      criteria.businessFoir0To600000
+        ? `0-6L: ${criteria.businessFoir0To600000}%`
+        : "",
+      criteria.businessFoir600000To1000000
+        ? `6L-10L: ${criteria.businessFoir600000To1000000}%`
+        : "",
+      criteria.businessFoir1000000Above
+        ? `10L+: ${criteria.businessFoir1000000Above}%`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(", "),
+  );
+  push(
+    "ITR FOIR",
+    [
+      criteria.itrFoir0To600000
+        ? `0-6L: ${criteria.itrFoir0To600000}%`
+        : "",
+      criteria.itrFoir600000To1000000
+        ? `6L-10L: ${criteria.itrFoir600000To1000000}%`
+        : "",
+      criteria.itrFoir1000000Above
+        ? `10L+: ${criteria.itrFoir1000000Above}%`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(", "),
+  );
+  push(
+    "BT Multiplier",
+    [
+      criteria.btMultiplier0To1Year
+        ? `0-1y: ${criteria.btMultiplier0To1Year}x`
+        : "",
+      criteria.btMultiplier1To3Years
+        ? `1-3y: ${criteria.btMultiplier1To3Years}x`
+        : "",
+      criteria.btMultiplier3YearsAbove
+        ? `3y+: ${criteria.btMultiplier3YearsAbove}x`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(", "),
+  );
+  push("Cash Rental", criteria.cashRental);
+  push("Bank Rental", criteria.bankRental);
+  push("Mix Rental", criteria.mixRental);
+  push("Residential LTV", criteria.residentialCatALtv ? `Up to ${criteria.residentialCatALtv}%` : "");
+  push("Commercial LTV", criteria.commercialCatALtv ? `Up to ${criteria.commercialCatALtv}%` : "");
+  return terms;
+};
+
+const buildPublicEligibilityResult = (
+  criteria: Record<string, any>,
+  filters: {
+    amount: number | null;
+    cibilScore: number | null;
+    tenureYears: number | null;
+    salaryType: string;
+    loanType: string;
+  },
+) => {
+  const checks: {
+    label: string;
+    requirement: string;
+    provided: string;
+    passed: boolean;
+  }[] = [];
+  let matchScore = 0;
+
+  const criteriaCibil = toPublicNumber(criteria.cibilScore);
+  if (criteriaCibil && filters.cibilScore) {
+    const passed = filters.cibilScore >= criteriaCibil;
+    checks.push({
+      label: "CIBIL",
+      requirement: `${criteriaCibil}+`,
+      provided: String(filters.cibilScore),
+      passed,
+    });
+    matchScore += passed ? 20 : -15;
+  }
+
+  const criteriaAmount = toPublicNumber(criteria.maximumLoanAmount);
+  if (criteriaAmount && filters.amount) {
+    const passed = filters.amount <= criteriaAmount;
+    checks.push({
+      label: "Loan amount",
+      requirement: `Up to ${formatPublicCurrency(criteriaAmount)}`,
+      provided: formatPublicCurrency(filters.amount),
+      passed,
+    });
+    matchScore += passed ? 20 : -12;
+  }
+
+  const criteriaTenure = toPublicNumber(criteria.maxTenureYears);
+  if (criteriaTenure && filters.tenureYears) {
+    const passed = filters.tenureYears <= criteriaTenure;
+    checks.push({
+      label: "Tenure",
+      requirement: `Up to ${formatPublicYears(criteriaTenure)}`,
+      provided: formatPublicYears(filters.tenureYears),
+      passed,
+    });
+    matchScore += passed ? 12 : -8;
+  }
+
+  if (filters.salaryType) {
+    const passed =
+      normalizeEligibilitySalaryType(criteria.salaryType) === filters.salaryType;
+    checks.push({
+      label: "Income profile",
+      requirement: criteria.salaryType || "Any",
+      provided: filters.salaryType,
+      passed,
+    });
+    matchScore += passed ? 10 : -10;
+  }
+
+  if (filters.loanType && criteria.loanType === filters.loanType) {
+    matchScore += 18;
+  }
+
+  const eligible =
+    checks.length === 0 || checks.every((check) => check.passed === true);
+
+  return {
+    _id: String(criteria._id || ""),
+    loanType: criteria.loanType,
+    bankName: criteria.bankName,
+    salaryType: criteria.salaryType,
+    cibilScore: criteria.cibilScore,
+    roi: criteria.roi,
+    processingFees: criteria.processingFees,
+    loginFees: criteria.loginFees,
+    insurance: criteria.insurance,
+    minAge: criteria.minAge,
+    maxAge: criteria.maxAge,
+    maxTenureYears: criteria.maxTenureYears,
+    maximumLoanAmount: criteria.maximumLoanAmount,
+    companyCategory: criteria.companyCategory,
+    eligible,
+    matchScore,
+    checks,
+    terms: buildPublicTermHighlights(criteria),
+  };
+};
+
 const fetchDocumentAttachment = async (
   doc: DocumentAttachmentInput,
   index: number,
@@ -485,6 +905,84 @@ export class EligibilityCriteriaController {
       return res
         .status(200)
         .json(new ApiResponse(200, result, "Data fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async publicSearch(req: Request, res: Response, next: NextFunction) {
+    try {
+      const rawLoanType = req.query.loanType || req.query.product;
+      const loanType = normalizePublicLoanType(rawLoanType);
+      const salaryType = normalizeEligibilitySalaryType(req.query.salaryType);
+      const amount = toPublicNumber(req.query.amount);
+      const cibilScore = toPublicNumber(req.query.cibilScore);
+      const tenureYears = toPublicNumber(req.query.tenureYears);
+      const limit = clampPublicLimit(req.query.limit);
+      const bank = String(req.query.bank || "").trim();
+      const q = String(req.query.q || req.query.search || "").trim();
+
+      const query: Record<string, any> = {
+        status: EligibilityCriteriaStatus.ACTIVE,
+      };
+
+      if (loanType) query.loanType = loanType;
+      if (salaryType) query.salaryType = salaryType;
+      if (bank) query.bankName = new RegExp(escapeRegExp(bank), "i");
+      if (q) {
+        const regex = new RegExp(escapeRegExp(q), "i");
+        query.$or = [
+          { bankName: regex },
+          { loanType: regex },
+          { salaryType: regex },
+        ];
+      }
+
+      const fetchLimit = Math.max(limit * 3, 100);
+      const criteriaList = await EligibilityCriteria.find(query)
+        .select(PUBLIC_ELIGIBILITY_SELECT_FIELDS)
+        .sort({ bankName: 1, roi: 1, cibilScore: 1 })
+        .limit(fetchLimit)
+        .lean();
+
+      const rankedResults = criteriaList
+        .map((criteria) =>
+          buildPublicEligibilityResult(criteria, {
+            amount,
+            cibilScore,
+            tenureYears,
+            salaryType,
+            loanType,
+          }),
+        )
+        .sort((a, b) => {
+          if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
+          if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+          return Number(a.roi || 999) - Number(b.roi || 999);
+        })
+        .slice(0, limit);
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            filters: {
+              loanType,
+              salaryType,
+              amount,
+              cibilScore,
+              tenureYears,
+              bank,
+              q,
+            },
+            total: rankedResults.length,
+            eligibleCount: rankedResults.filter((result) => result.eligible)
+              .length,
+            results: rankedResults,
+          },
+          "Eligibility criteria fetched successfully",
+        ),
+      );
     } catch (err) {
       next(err);
     }
