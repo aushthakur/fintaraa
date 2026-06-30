@@ -14,7 +14,8 @@
     "seed:credit-cards": "ts-node src/scripts/seedCreditCards.ts",
     "seed:bank-seo": "ts-node src/scripts/seedBankSeoPages.ts",
     "seed:page-faqs": "ts-node src/scripts/seedPageFaqs.ts",
-    "seed:careers": "ts-node src/scripts/seedCareers.ts"
+    "seed:careers": "ts-node src/scripts/seedCareers.ts",
+    "seed:home-banners": "ts-node src/scripts/seedHomeBanners.ts"
   },
   "keywords": [],
   "author": "",
