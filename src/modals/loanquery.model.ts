@@ -136,6 +136,7 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
     "estimatedMarketValue",
     "propertyDocumentsUrl",
     "propertyAge",
+    "coApplicants",
   ],
   [LoanType.RENOVATION_LOAN]: [
     "propertyOwnershipProofUrl",

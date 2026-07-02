@@ -99,6 +99,9 @@ export interface IAgency extends Document {
 
 type AgencyDocument = mongoose.HydratedDocument<IAgency>;
 
+const AGENCY_ID_COUNTER_PREFIX = "agencyId:FIN-DSA";
+const AGENCY_ID_PREFIX = "FIN-DSA";
+
 const AgencySchema = new Schema<IAgency>(
   {
     name: { type: String, required: true, trim: true },
@@ -218,8 +221,8 @@ const allocateUniqueAgencyId = async (agency: AgencyDocument): Promise<string> =
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const datePrefix = formatDaySequencePrefix(new Date());
     const candidate = await allocatePrefixedSequence({
-      key: `agencyId:${datePrefix}`,
-      prefix: `FINTARADSA${datePrefix}`,
+      key: `${AGENCY_ID_COUNTER_PREFIX}:${datePrefix}`,
+      prefix: `${AGENCY_ID_PREFIX}-${datePrefix}`,
       padLength: 4,
       session: session || undefined,
     });

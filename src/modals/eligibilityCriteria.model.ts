@@ -27,6 +27,8 @@ export interface IEligibilityCriteria extends Document {
   itrAmount?: number;
   nipPdBase?: number;
   lowLtv?: number;
+  lowLtvMin?: number;
+  lowLtvMax?: number;
   salaryFoir0To25000?: number;
   salaryFoir25000To50000?: number;
   salaryFoir50000To75000?: number;
@@ -60,9 +62,13 @@ export interface IEligibilityCriteria extends Document {
   industrialCatCLtv?: number;
   processingFees?: number;
   insurance?: string;
+  propertyInsuranceRequired?: boolean;
+  propertyInsurancePercentage?: number;
+  lifeInsuranceRequired?: boolean;
+  lifeInsurancePercentage?: number;
   loginFees?: string;
   companyCategory?: string[];
-  abb?: number;
+  abb?: number | number[];
   maximumLoanAmount?: number;
   currentExperience?: number;
   totalExperience?: number;
@@ -109,6 +115,8 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     itrAmount: { type: Number },
     nipPdBase: { type: Number },
     lowLtv: { type: Number },
+    lowLtvMin: { type: Number },
+    lowLtvMax: { type: Number },
     salaryFoir0To25000: { type: Number },
     salaryFoir25000To50000: { type: Number },
     salaryFoir50000To75000: { type: Number },
@@ -142,9 +150,13 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     industrialCatCLtv: { type: Number },
     processingFees: { type: Number },
     insurance: { type: String, trim: true },
+    propertyInsuranceRequired: { type: Boolean, default: false },
+    propertyInsurancePercentage: { type: Number },
+    lifeInsuranceRequired: { type: Boolean, default: false },
+    lifeInsurancePercentage: { type: Number },
     loginFees: { type: String, trim: true },
     companyCategory: [{ type: String, trim: true }],
-    abb: { type: Number },
+    abb: { type: Schema.Types.Mixed },
     maximumLoanAmount: { type: Number },
     currentExperience: { type: Number },
     totalExperience: { type: Number },

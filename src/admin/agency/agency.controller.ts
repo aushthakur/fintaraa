@@ -236,6 +236,215 @@ const sanitizeVerificationRecords = (
   return { pan, aadhaar, gst };
 };
 
+const isPlainObject = (value: any): value is Record<string, any> =>
+  Object.prototype.toString.call(value) === "[object Object]";
+
+const cleanString = (value: any) => {
+  if (value === undefined || value === null) return undefined;
+  const next = String(value).trim();
+  return next || undefined;
+};
+
+const cleanUpperString = (value: any) => cleanString(value)?.toUpperCase();
+
+const cleanDate = (value: any) => {
+  if (!value) return undefined;
+  const next = new Date(value);
+  return Number.isNaN(next.getTime()) ? undefined : next;
+};
+
+const cleanNumber = (value: any) => {
+  if (value === undefined || value === null || value === "") return undefined;
+  const next = Number(value);
+  return Number.isNaN(next) ? undefined : next;
+};
+
+const compactObject = (value: Record<string, any>) => {
+  const entries = Object.entries(value).filter(([, item]) => {
+    if (item === undefined || item === null || item === "") return false;
+    if (Array.isArray(item)) return item.length > 0;
+    if (isPlainObject(item)) return Object.keys(item).length > 0;
+    return true;
+  });
+  return Object.fromEntries(entries);
+};
+
+const sanitizeKycPersonalDetails = (source: any = {}) => {
+  const next = compactObject({
+    registerAs: cleanString(source.registerAs),
+    fullName: cleanString(source.fullName),
+    fatherName: cleanString(source.fatherName),
+    motherName: cleanString(source.motherName),
+    dateOfBirth: cleanDate(source.dateOfBirth),
+    gender: cleanString(source.gender),
+    aadhaarNumber: cleanString(source.aadhaarNumber),
+    panNumber: cleanUpperString(source.panNumber),
+    maritalStatus: cleanString(source.maritalStatus),
+    dependents: cleanNumber(source.dependents),
+    mobile: cleanString(source.mobile),
+    email: cleanString(source.email)?.toLowerCase(),
+    address: cleanString(source.address),
+    city: cleanString(source.city),
+    state: cleanString(source.state),
+    pinCode: cleanString(source.pinCode),
+    pincode: cleanString(source.pincode),
+    companyName: cleanString(source.companyName),
+    businessName: cleanString(source.businessName),
+    shopName: cleanString(source.shopName),
+    authorisedPersonName: cleanString(source.authorisedPersonName),
+    authorisedPersonMobile: cleanString(source.authorisedPersonMobile),
+    authorisedPersonEmail: cleanString(source.authorisedPersonEmail)?.toLowerCase(),
+  });
+
+  return Object.keys(next).length ? next : undefined;
+};
+
+const sanitizeKycAddress = (source: any = {}) => {
+  const label = cleanString(source.label);
+  const street = cleanString(source.street || source.address);
+  const city = cleanString(source.city);
+  const state = cleanString(source.state);
+  const postalCode = cleanString(source.postalCode || source.pinCode || source.pincode);
+  const hasAddressValue = Boolean(street || city || state || postalCode);
+  const next = compactObject({
+    street,
+    city,
+    state,
+    country: hasAddressValue ? cleanString(source.country) || "India" : undefined,
+    postalCode,
+    isDefault: normalizeBoolean(source.isDefault, undefined),
+    label: label === "office" ? "office" : label === "home" ? "home" : undefined,
+  });
+
+  return Object.keys(next).length ? next : undefined;
+};
+
+const sanitizeKycAddressDetails = (source: any = {}) => {
+  const currentAddress = sanitizeKycAddress(
+    source.currentAddress || source.address || source,
+  );
+  const permanentAddress = sanitizeKycAddress(
+    source.permanentAddress || source.currentAddress || source.address || source,
+  );
+  const next = compactObject({
+    currentAddress,
+    permanentAddress,
+  });
+
+  return Object.keys(next).length ? next : undefined;
+};
+
+const sanitizeKycEmploymentDetails = (source: any = {}) => {
+  const next = compactObject({
+    employmentType: cleanString(source.employmentType),
+    employerName: cleanString(source.employerName || source.companyName || source.businessName),
+    employerType: cleanString(source.employerType),
+    industry: cleanString(source.industry),
+    monthlyIncome: cleanNumber(source.monthlyIncome),
+    annualIncome: cleanNumber(source.annualIncome),
+    annualTurnover: cleanNumber(source.annualTurnover),
+    businessIncome: cleanNumber(source.businessIncome),
+    workEmail: cleanString(source.workEmail)?.toLowerCase(),
+    workPhone: cleanString(source.workPhone),
+    businessEmail: cleanString(source.businessEmail)?.toLowerCase(),
+    businessPhone: cleanString(source.businessPhone),
+    businessAddress: cleanString(source.businessAddress),
+    officeCity: cleanString(source.officeCity),
+    officeState: cleanString(source.officeState),
+    officePinCode: cleanString(source.officePinCode),
+    salaryAccountBank: cleanString(source.salaryAccountBank),
+    employmentStatus: cleanString(source.employmentStatus),
+    businessRegistrationType: cleanString(source.businessRegistrationType),
+    gstNumber: cleanUpperString(source.gstNumber),
+    numberOfEmployees: cleanNumber(source.numberOfEmployees),
+    licenseNumber: cleanString(source.licenseNumber),
+    website: cleanString(source.website),
+    taxId: cleanString(source.taxId),
+    startDate: cleanDate(source.startDate),
+    organizationId: cleanString(source.organizationId),
+    tenure: cleanString(source.tenure),
+    companyType: cleanString(source.companyType),
+    gstTurnover: cleanString(source.gstTurnover),
+    businessType: cleanString(source.businessType),
+    companyAddress: cleanString(source.companyAddress),
+    totalExperience: cleanString(source.totalExperience),
+    businessVintage: cleanString(source.businessVintage),
+    professionOrJobTitle: cleanString(source.professionOrJobTitle || source.designation),
+    experienceInCurrentCompany: cleanString(source.experienceInCurrentCompany),
+    propertyType: cleanString(source.propertyType),
+    emiPaid: cleanString(source.emiPaid),
+  });
+
+  return Object.keys(next).length ? next : undefined;
+};
+
+const sanitizeKycDocuments = (documents: any) => {
+  if (!Array.isArray(documents)) return undefined;
+
+  const next = documents
+    .map((doc) =>
+      compactObject({
+        docType: cleanString(doc?.docType),
+        number: cleanString(doc?.number),
+        password: cleanString(doc?.password),
+        issuer: cleanString(doc?.issuer),
+        fileUrl: cleanString(doc?.fileUrl),
+        issuedOn: cleanDate(doc?.issuedOn),
+        verified: normalizeBoolean(doc?.verified, undefined),
+        referenceId: cleanString(doc?.referenceId),
+      }),
+    )
+    .filter((doc) => doc.docType && (doc.fileUrl || doc.number || doc.referenceId));
+
+  return next.length ? next : undefined;
+};
+
+const sanitizeKycProfile = (
+  payload: any,
+  options?: { fallback?: Record<string, any> },
+) => {
+  const source = payload?.kycProfile;
+  if (!isPlainObject(source)) return undefined;
+
+  const fallback = options?.fallback || {};
+  const next: Record<string, any> = { ...fallback };
+  if (source.reusableAcrossApplications !== undefined) {
+    next.reusableAcrossApplications = normalizeBoolean(
+      source.reusableAcrossApplications,
+      true,
+    );
+  }
+
+  const personalDetails = sanitizeKycPersonalDetails(source.personalDetails);
+  if (personalDetails) {
+    next.personalDetails = {
+      ...(fallback.personalDetails || {}),
+      ...personalDetails,
+    };
+  }
+
+  const addressDetails = sanitizeKycAddressDetails(source.addressDetails);
+  if (addressDetails) {
+    next.addressDetails = {
+      ...(fallback.addressDetails || {}),
+      ...addressDetails,
+    };
+  }
+
+  const employmentDetails = sanitizeKycEmploymentDetails(source.employmentDetails);
+  if (employmentDetails) {
+    next.employmentDetails = {
+      ...(fallback.employmentDetails || {}),
+      ...employmentDetails,
+    };
+  }
+
+  const documents = sanitizeKycDocuments(source.documents);
+  if (documents) next.documents = documents;
+
+  return Object.keys(next).length ? next : undefined;
+};
+
 const sanitizeAgencyCreatePayload = (payload: any = {}) => {
   const role =
     normalizeRole(payload.role) || (payload.parentAgency ? "agency_member" : "agency");
@@ -281,6 +490,9 @@ const sanitizeAgencyCreatePayload = (payload: any = {}) => {
 
   const verificationRecords = sanitizeVerificationRecords(payload);
   if (verificationRecords) next.verificationRecords = verificationRecords;
+
+  const kycProfile = sanitizeKycProfile(payload);
+  if (kycProfile) next.kycProfile = kycProfile;
 
   if (payload.password) next.password = String(payload.password);
   if (role === "agency") next.parentAgency = undefined;
@@ -358,6 +570,11 @@ const sanitizeAgencyUpdatePayload = (
   if (payload.verificationRecords !== undefined) {
     next.verificationRecords = sanitizeVerificationRecords(payload, {
       fallback: fallback.verificationRecords,
+    });
+  }
+  if (payload.kycProfile !== undefined) {
+    next.kycProfile = sanitizeKycProfile(payload, {
+      fallback: fallback.kycProfile,
     });
   }
 
@@ -550,7 +767,7 @@ export class AgencyAdminController {
   static async updateById(req: Request, res: Response, next: NextFunction) {
     try {
       const current = await Agency.findById(req.params.id).select(
-        "parentAgency bankDetails verificationRecords",
+        "parentAgency bankDetails verificationRecords kycProfile",
       );
       const payload = sanitizeAgencyUpdatePayload(req.body, {
         fallback: current?.toObject ? current.toObject() : current || {},

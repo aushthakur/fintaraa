@@ -23,6 +23,10 @@ const ELIGIBILITY_BASE_FIELDS = [
   "maxTenureYears",
   "processingFees",
   "insurance",
+  "propertyInsuranceRequired",
+  "propertyInsurancePercentage",
+  "lifeInsuranceRequired",
+  "lifeInsurancePercentage",
   "loginFees",
   "rm",
   "rmMailId",
@@ -47,7 +51,6 @@ const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
     "cibilScore",
     "itrYears",
     "totalExperience",
-    "totalExperienceMonths",
     "currentExperience",
     "netSalary",
     "currentTotalEmi",
@@ -67,6 +70,8 @@ const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
     "itrAmount",
     "nipPdBase",
     "lowLtv",
+    "lowLtvMin",
+    "lowLtvMax",
   ],
   selfemployedprofessional: [
     "cibilScore",
@@ -80,6 +85,8 @@ const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
     "itrAmount",
     "nipPdBase",
     "lowLtv",
+    "lowLtvMin",
+    "lowLtvMax",
   ],
 };
 
@@ -200,6 +207,30 @@ const validateMonthField = (
   }
 };
 
+const normalizeBooleanFlag = (value: any) => {
+  if (typeof value === "boolean") return value;
+  const raw = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!raw) return false;
+  return ["yes", "true", "1", "active", "checked"].includes(raw);
+};
+
+const normalizeAbbValue = (value: any) => {
+  const rawValues = Array.isArray(value)
+    ? value
+    : String(value ?? "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+  const normalized = rawValues
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item >= 1 && item <= 31);
+
+  return Array.from(new Set(normalized)).sort((a, b) => a - b);
+};
+
 const sanitizeEligibilityPayload = (payload: Record<string, any>) => {
   const normalizedSalaryType = normalizeEligibilitySalaryType(payload.salaryType);
   const fieldGroupKey = getEligibilityFieldGroupKey(normalizedSalaryType);
@@ -220,16 +251,27 @@ const sanitizeEligibilityPayload = (payload: Record<string, any>) => {
       : payload.companyCategory
         ? [payload.companyCategory]
         : payload.companyCategory,
+    abb: payload.abb === undefined ? undefined : normalizeAbbValue(payload.abb),
     cibilScore: payload.cibilScore ?? payload.cibilScoreWithCall,
     nipPdBase: payload.nipPdBase ?? payload.nipPdBaseAmount,
+    lowLtvMin: payload.lowLtvMin ?? payload.lowLtvMinimum,
+    lowLtvMax: payload.lowLtvMax ?? payload.lowLtvMaximum,
+    ...(payload.propertyInsuranceRequired !== undefined
+      ? {
+          propertyInsuranceRequired: normalizeBooleanFlag(
+            payload.propertyInsuranceRequired,
+          ),
+        }
+      : {}),
+    ...(payload.lifeInsuranceRequired !== undefined
+      ? {
+          lifeInsuranceRequired: normalizeBooleanFlag(
+            payload.lifeInsuranceRequired,
+          ),
+        }
+      : {}),
     status: String(payload.status || "").trim().toLowerCase(),
   };
-
-  validateMonthField(
-    normalizedPayload,
-    "totalExperienceMonths",
-    "Total experience months",
-  );
 
   return Object.fromEntries(
     Object.entries(normalizedPayload).filter(([key, value]) => {
@@ -433,6 +475,8 @@ const PUBLIC_ELIGIBILITY_SELECT_FIELDS = [
   "itrAmount",
   "nipPdBase",
   "lowLtv",
+  "lowLtvMin",
+  "lowLtvMax",
   "salaryFoir0To25000",
   "salaryFoir25000To50000",
   "salaryFoir50000To75000",
@@ -466,13 +510,16 @@ const PUBLIC_ELIGIBILITY_SELECT_FIELDS = [
   "industrialCatCLtv",
   "processingFees",
   "insurance",
+  "propertyInsuranceRequired",
+  "propertyInsurancePercentage",
+  "lifeInsuranceRequired",
+  "lifeInsurancePercentage",
   "loginFees",
   "companyCategory",
   "abb",
   "maximumLoanAmount",
   "currentExperience",
   "totalExperience",
-  "totalExperienceMonths",
   "totalVintage",
   "currentVintage",
   "netSalary",
@@ -579,11 +626,12 @@ const clampPublicLimit = (value: any) => {
 const escapeRegExp = (value: string) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const formatPublicCurrency = (value?: number | null) => {
-  if (!value) return "";
+const formatPublicCurrency = (value?: any) => {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue) || numberValue === 0) return "";
   return `Rs ${new Intl.NumberFormat("en-IN", {
     maximumFractionDigits: 0,
-  }).format(value)}`;
+  }).format(numberValue)}`;
 };
 
 const formatPublicPercent = (value?: number | null, suffix = "%") => {
@@ -597,6 +645,21 @@ const formatPublicYears = (value?: number | null) => {
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue)) return "";
   return `${numberValue} ${numberValue === 1 ? "year" : "years"}`;
+};
+
+const formatPublicAbb = (value: any) => {
+  if (Array.isArray(value)) {
+    const days = value
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item >= 1 && item <= 31)
+      .sort((a, b) => a - b);
+    return days.length ? days.join(", ") : "";
+  }
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue) || numberValue === 0) return "";
+  return numberValue >= 1 && numberValue <= 31
+    ? String(numberValue)
+    : formatPublicCurrency(numberValue);
 };
 
 const buildPublicTermHighlights = (criteria: Record<string, any>) => {
@@ -634,8 +697,28 @@ const buildPublicTermHighlights = (criteria: Record<string, any>) => {
   );
   push("Login Fee", criteria.loginFees);
   push("Insurance", criteria.insurance);
+  push(
+    "Property Insurance",
+    criteria.propertyInsuranceRequired
+      ? `Yes${criteria.propertyInsurancePercentage ? ` (${formatPublicPercent(criteria.propertyInsurancePercentage)})` : ""}`
+      : "",
+  );
+  push(
+    "Life Insurance",
+    criteria.lifeInsuranceRequired
+      ? `Yes${criteria.lifeInsurancePercentage ? ` (${formatPublicPercent(criteria.lifeInsurancePercentage)})` : ""}`
+      : "",
+  );
   push("Minimum ITR", criteria.itrYears ? formatPublicYears(criteria.itrYears) : "");
-  push("Average Bank Balance", formatPublicCurrency(criteria.abb));
+  push("ABB Days", formatPublicAbb(criteria.abb));
+  push(
+    "Low LTV",
+    criteria.lowLtvMin || criteria.lowLtvMax
+      ? `${formatPublicPercent(criteria.lowLtvMin || 0)} - ${formatPublicPercent(criteria.lowLtvMax || 0)}`
+      : criteria.lowLtv
+        ? formatPublicPercent(criteria.lowLtv)
+        : "",
+  );
   push("Net Salary", formatPublicCurrency(criteria.netSalary));
   push("Current EMI Limit", formatPublicCurrency(criteria.currentTotalEmi));
   push(
@@ -667,7 +750,14 @@ const buildPublicTermHighlights = (criteria: Record<string, any>) => {
   push("ITR Amount", formatPublicCurrency(criteria.itrAmount));
   push("Receipts Amount", formatPublicCurrency(criteria.receiptsAmount));
   push("NIP/PD Base", formatPublicCurrency(criteria.nipPdBase));
-  push("Low LTV", criteria.lowLtv ? `${criteria.lowLtv}%` : "");
+  push(
+    "Low LTV",
+    criteria.lowLtvMin || criteria.lowLtvMax
+      ? `${formatPublicPercent(criteria.lowLtvMin || 0)} - ${formatPublicPercent(criteria.lowLtvMax || 0)}`
+      : criteria.lowLtv
+        ? `${criteria.lowLtv}%`
+        : "",
+  );
   push(
     "Salary FOIR",
     [
