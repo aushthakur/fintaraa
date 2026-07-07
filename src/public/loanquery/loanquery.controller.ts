@@ -6,6 +6,9 @@ import {
   LoanQuery,
   LoanType,
   LoanQueryActivityType,
+  LoanFollowUpPriority,
+  LoanFollowUpStatus,
+  LoanFollowUpType,
   allowedFieldsByFormType,
 } from "../../modals/loanquery.model";
 import { ApplicationStatus } from "../../modals/insurancequery.model";
@@ -315,6 +318,8 @@ const loanQueryListFields = [
   "leadBy",
   "dataSource",
   "createdBy",
+  "createdByName",
+  "createdByRole",
   "updatedByName",
   "assignedAgent",
   "assignedAgents",
@@ -342,6 +347,16 @@ const resolveActivityActorModel = (
   return "User";
 };
 
+const formatActorRoleLabel = (role?: string) => {
+  const normalized = String(role || "user")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return "User";
+  return normalized
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
 const resolveActorDisplayName = async (actorId: any, role?: string) => {
   const id = getIdString(actorId);
   if (!id) return "";
@@ -365,6 +380,440 @@ const resolveActorDisplayName = async (actorId: any, role?: string) => {
     default:
       return resolveFrom(User);
   }
+};
+
+const terminalLoanFollowUpStatuses = new Set<string>([
+  ApplicationStatus.APPROVED,
+  ApplicationStatus.REJECTED,
+  ApplicationStatus.CANCELLED,
+  ApplicationStatus.EXPIRED,
+  ApplicationStatus.COMPLETED,
+  ApplicationStatus.DISBURSED,
+  ApplicationStatus.NOT_INTERESTED,
+  ApplicationStatus.DROPPED_LOST,
+  ApplicationStatus.DUPLICATE,
+  ApplicationStatus.REJECTED_BY_BANK,
+  ApplicationStatus.COMPLETED_SUCCESS,
+  ApplicationStatus.CANCELLED_BY_CUSTOMER,
+]);
+
+const isTerminalLoanFollowUpStatus = (status?: any) =>
+  terminalLoanFollowUpStatuses.has(String(status || "").trim());
+
+const normalizeBooleanInput = (value: any): boolean | undefined => {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "boolean") return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "y", "on", "enabled"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no", "n", "off", "disabled"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+};
+
+const normalizeStringInput = (value: any, maxLength = 500) => {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "";
+  return normalized.length > maxLength
+    ? normalized.slice(0, maxLength)
+    : normalized;
+};
+
+const normalizeLoanFollowUpType = (value: any) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return Object.values(LoanFollowUpType).includes(
+    normalized as LoanFollowUpType,
+  )
+    ? (normalized as LoanFollowUpType)
+    : LoanFollowUpType.CALL;
+};
+
+const normalizeLoanFollowUpStatus = (value: any) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return Object.values(LoanFollowUpStatus).includes(
+    normalized as LoanFollowUpStatus,
+  )
+    ? (normalized as LoanFollowUpStatus)
+    : LoanFollowUpStatus.PENDING;
+};
+
+const normalizeLoanFollowUpPriority = (value: any) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return Object.values(LoanFollowUpPriority).includes(
+    normalized as LoanFollowUpPriority,
+  )
+    ? (normalized as LoanFollowUpPriority)
+    : LoanFollowUpPriority.MEDIUM;
+};
+
+const parseFollowUpDueAt = (value: any) => {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = parseDateInTimeZone(value, "start", DEFAULT_QUERY_TIMEZONE);
+  if (!parsed || Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+};
+
+const getFollowUpObjectId = (value: any) => {
+  const objectId = toObjectId(value?._id || value);
+  return objectId || undefined;
+};
+
+const hasLoanFollowUpPayload = (body: Record<string, any>) =>
+  [
+    "followUpEnabled",
+    "nextFollowUp",
+    "followUpAction",
+    "followUpStatus",
+    "followUpType",
+    "followUpReason",
+    "followUpPriority",
+    "followUpDueAt",
+    "followUpAssignedTo",
+    "followUpOutcome",
+    "followUpRemark",
+  ].some((key) => Object.prototype.hasOwnProperty.call(body, key));
+
+const removeLoanFollowUpPayload = (body: Record<string, any>) => {
+  [
+    "followUpEnabled",
+    "nextFollowUp",
+    "followUpAction",
+    "followUpStatus",
+    "followUpType",
+    "followUpReason",
+    "followUpPriority",
+    "followUpDueAt",
+    "followUpAssignedTo",
+    "followUpOutcome",
+    "followUpRemark",
+  ].forEach((key) => delete body[key]);
+};
+
+type LoanFollowUpMutation = {
+  set: Record<string, any>;
+  unset?: Record<string, any>;
+  history?: Record<string, any>;
+  activity?: Record<string, any>;
+};
+
+const buildLoanFollowUpActivity = ({
+  description,
+  actorId,
+  role,
+  payload,
+}: {
+  description: string;
+  actorId: any;
+  role?: string;
+  payload?: Record<string, any>;
+}) => ({
+  type: LoanQueryActivityType.FOLLOW_UP_UPDATED,
+  description,
+  actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
+  actorModel: resolveActivityActorModel(role),
+  payload,
+  createdAt: new Date(),
+});
+
+const buildLoanFollowUpMutation = ({
+  rawBody,
+  existing,
+  actorId,
+  role,
+  actorName,
+}: {
+  rawBody: Record<string, any>;
+  existing: any;
+  actorId: any;
+  role?: string;
+  actorName?: string;
+}): LoanFollowUpMutation | null => {
+  if (!hasLoanFollowUpPayload(rawBody)) return null;
+
+  const parsedNext = parseMaybeJson(rawBody.nextFollowUp);
+  const next =
+    parsedNext && typeof parsedNext === "object" && !Array.isArray(parsedNext)
+      ? parsedNext
+      : {};
+  const existingNext =
+    existing?.nextFollowUp &&
+    typeof existing.nextFollowUp === "object" &&
+    !Array.isArray(existing.nextFollowUp)
+      ? existing.nextFollowUp
+      : {};
+  const now = new Date();
+  const enabledInput = normalizeBooleanInput(
+    rawBody.followUpEnabled ?? next.enabled,
+  );
+  const action = String(rawBody.followUpAction || next.action || "")
+    .trim()
+    .toLowerCase();
+  const status = normalizeLoanFollowUpStatus(
+    rawBody.followUpStatus || next.status || existingNext.status,
+  );
+  const shouldClose =
+    enabledInput === false ||
+    action === "cancel" ||
+    action === "close" ||
+    status === LoanFollowUpStatus.CANCELLED ||
+    status === LoanFollowUpStatus.DONE ||
+    status === LoanFollowUpStatus.MISSED;
+
+  const dueAt =
+    parseFollowUpDueAt(rawBody.followUpDueAt ?? next.dueAt) ||
+    parseFollowUpDueAt(existingNext.dueAt);
+  const assignedTo =
+    getFollowUpObjectId(rawBody.followUpAssignedTo || next.assignedTo) ||
+    getFollowUpObjectId(existingNext.assignedTo) ||
+    getFollowUpObjectId(existing.assignedAgent);
+  const type = normalizeLoanFollowUpType(
+    rawBody.followUpType || next.type || existingNext.type,
+  );
+  const priority = normalizeLoanFollowUpPriority(
+    rawBody.followUpPriority || next.priority || existingNext.priority,
+  );
+  const reason =
+    normalizeStringInput(rawBody.followUpReason ?? next.reason, 240) ||
+    normalizeStringInput(existingNext.reason, 240) ||
+    "Loan query follow-up";
+  const outcome = normalizeStringInput(
+    rawBody.followUpOutcome ?? next.outcome,
+    240,
+  );
+  const remark = normalizeStringInput(
+    rawBody.followUpRemark ?? next.remark,
+    1000,
+  );
+
+  if (!shouldClose) {
+    if (!dueAt) {
+      throw new ApiError(400, "Callback date/time is required for active follow-up");
+    }
+
+    const nextFollowUp = {
+      dueAt,
+      type,
+      reason,
+      assignedTo,
+      status: LoanFollowUpStatus.PENDING,
+      priority,
+      outcome: outcome || undefined,
+      remark: remark || undefined,
+      createdAt: existingNext.createdAt || now,
+      updatedBy: getFollowUpObjectId(actorId),
+      updatedByName: actorName || undefined,
+      updatedAt: now,
+    };
+
+    return {
+      set: {
+        followUpEnabled: true,
+        nextFollowUp,
+      },
+      history: {
+        dueAt,
+        type,
+        reason,
+        assignedTo,
+        status: LoanFollowUpStatus.PENDING,
+        priority,
+        outcome: outcome || undefined,
+        remark: remark || undefined,
+        action: existing?.followUpEnabled ? "updated" : "scheduled",
+        updatedBy: getFollowUpObjectId(actorId),
+        updatedByName: actorName || undefined,
+        createdAt: now,
+      },
+      activity: buildLoanFollowUpActivity({
+        description: existing?.followUpEnabled
+          ? "Loan follow-up updated"
+          : "Loan follow-up scheduled",
+        actorId,
+        role,
+        payload: {
+          status: LoanFollowUpStatus.PENDING,
+          dueAt,
+          type,
+          priority,
+          reason,
+        },
+      }),
+    };
+  }
+
+  const closedStatus =
+    status === LoanFollowUpStatus.DONE
+      ? LoanFollowUpStatus.DONE
+      : status === LoanFollowUpStatus.MISSED
+        ? LoanFollowUpStatus.MISSED
+        : LoanFollowUpStatus.CANCELLED;
+  const actionName =
+    closedStatus === LoanFollowUpStatus.DONE
+      ? "completed"
+      : closedStatus === LoanFollowUpStatus.MISSED
+        ? "missed"
+        : "cancelled";
+
+  const historyEntry = {
+    dueAt: dueAt || undefined,
+    type,
+    reason,
+    assignedTo,
+    status: closedStatus,
+    priority,
+    outcome: outcome || undefined,
+    remark: remark || undefined,
+    action: actionName,
+    updatedBy: getFollowUpObjectId(actorId),
+    updatedByName: actorName || undefined,
+    createdAt: now,
+  };
+
+  return {
+    set: {
+      followUpEnabled: false,
+      "nextFollowUp.status": closedStatus,
+      "nextFollowUp.outcome": outcome || undefined,
+      "nextFollowUp.remark": remark || undefined,
+      "nextFollowUp.updatedBy": getFollowUpObjectId(actorId),
+      "nextFollowUp.updatedByName": actorName || undefined,
+      "nextFollowUp.updatedAt": now,
+    },
+    history: historyEntry,
+    activity: buildLoanFollowUpActivity({
+      description: `Loan follow-up ${actionName}`,
+      actorId,
+      role,
+      payload: {
+        status: closedStatus,
+        action: actionName,
+        dueAt,
+        type,
+        priority,
+        reason,
+        outcome,
+      },
+    }),
+  };
+};
+
+const buildAutoCloseLoanFollowUpMutation = ({
+  existing,
+  actorId,
+  role,
+  actorName,
+  reason,
+}: {
+  existing: any;
+  actorId: any;
+  role?: string;
+  actorName?: string;
+  reason: string;
+}): LoanFollowUpMutation | null => {
+  const existingNext =
+    existing?.nextFollowUp &&
+    typeof existing.nextFollowUp === "object" &&
+    !Array.isArray(existing.nextFollowUp)
+      ? existing.nextFollowUp
+      : {};
+  if (
+    !existing?.followUpEnabled &&
+    existingNext.status !== LoanFollowUpStatus.PENDING
+  ) {
+    return null;
+  }
+  const now = new Date();
+  const dueAt = parseFollowUpDueAt(existingNext.dueAt);
+  const type = normalizeLoanFollowUpType(existingNext.type);
+  const priority = normalizeLoanFollowUpPriority(existingNext.priority);
+  const followUpReason =
+    normalizeStringInput(existingNext.reason, 240) || "Loan query follow-up";
+
+  return {
+    set: {
+      followUpEnabled: false,
+      "nextFollowUp.status": LoanFollowUpStatus.CANCELLED,
+      "nextFollowUp.outcome": reason,
+      "nextFollowUp.updatedBy": getFollowUpObjectId(actorId),
+      "nextFollowUp.updatedByName": actorName || undefined,
+      "nextFollowUp.updatedAt": now,
+    },
+    history: {
+      dueAt: dueAt || undefined,
+      type,
+      reason: followUpReason,
+      assignedTo: getFollowUpObjectId(existingNext.assignedTo),
+      status: LoanFollowUpStatus.CANCELLED,
+      priority,
+      outcome: reason,
+      remark: normalizeStringInput(existingNext.remark, 1000) || undefined,
+      action: "cancelled",
+      updatedBy: getFollowUpObjectId(actorId),
+      updatedByName: actorName || undefined,
+      createdAt: now,
+    },
+    activity: buildLoanFollowUpActivity({
+      description: "Loan follow-up auto-closed",
+      actorId,
+      role,
+      payload: {
+        status: LoanFollowUpStatus.CANCELLED,
+        action: "auto_closed",
+        reason,
+      },
+    }),
+  };
+};
+
+const stringifyActivityValue = (value: any) => {
+  if (value === undefined) return "Empty";
+  if (value === null) return "Empty";
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object") {
+    try {
+      const serialized = JSON.stringify(value);
+      return serialized.length > 180
+        ? `${serialized.slice(0, 177)}...`
+        : serialized;
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+};
+
+const buildActivityChanges = (
+  before: Record<string, any>,
+  after: Record<string, any>,
+) => {
+  const ignoredFields = new Set(["updatedByName", "updatedAt"]);
+  const keys = Object.keys(after || {}).filter((key) => !ignoredFields.has(key));
+  const changes: Array<{ field: string; before: string; after: string }> = [];
+
+  for (const key of keys) {
+    const previousValue = stringifyActivityValue(before?.[key]);
+    const nextValue = stringifyActivityValue(after?.[key]);
+    if (previousValue === nextValue) continue;
+    changes.push({
+      field: key,
+      before: previousValue,
+      after: nextValue,
+    });
+    if (changes.length >= 8) break;
+  }
+
+  return changes;
 };
 
 const collectAssignedAgentIds = (query: any) => {
@@ -1222,7 +1671,10 @@ export class LoanQueryController {
 
       if (updatedByName) {
         req.body.updatedByName = updatedByName;
+        req.body.createdByName = req.body.createdByName || updatedByName;
       }
+      req.body.createdByRole =
+        req.body.createdByRole || formatActorRoleLabel(role);
 
       if (req.body.policyDetails?.coApplicants) {
         const list = Array.isArray(req.body.policyDetails.coApplicants)
@@ -1650,6 +2102,7 @@ export class LoanQueryController {
       // Resolve disbursed date range (CURRENT)
       const today = new Date();
       today.setHours(0, 0, 0, 0);
+      const isAllTime = rangePreset === "all_time";
 
       let currentStart: Date | null = toDate(startDate);
       let currentEnd: Date | null = toDate(endDate);
@@ -1687,11 +2140,11 @@ export class LoanQueryController {
         }
       };
 
-      if (!currentStart || !currentEnd) {
+      if (!isAllTime && (!currentStart || !currentEnd)) {
         applyPreset();
       }
 
-      if (!currentStart || !currentEnd) {
+      if (!isAllTime && (!currentStart || !currentEnd)) {
         // default: last 30 days
         const end = new Date(today);
         const start = new Date(today);
@@ -1700,26 +2153,31 @@ export class LoanQueryController {
         currentEnd = end;
       }
 
-      const currentEndFixed = new Date(currentEnd);
-      currentEndFixed.setHours(23, 59, 59, 999);
+      const currentEndFixed =
+        !isAllTime && currentEnd ? new Date(currentEnd) : null;
+      currentEndFixed?.setHours(23, 59, 59, 999);
 
-      const daysInRange = Math.max(
-        1,
-        Math.ceil(
-          (currentEndFixed.getTime() - currentStart.getTime()) /
-            (1000 * 60 * 60 * 24) +
-            1,
-        ),
-      );
+      const daysInRange =
+        !isAllTime && currentStart && currentEndFixed
+          ? Math.max(
+              1,
+              Math.ceil(
+                (currentEndFixed.getTime() - currentStart.getTime()) /
+                  (1000 * 60 * 60 * 24) +
+                  1,
+              ),
+            )
+          : 0;
 
       // Resolve PREVIOUS equal-length range
-      const previousEnd = new Date(currentStart);
-      previousEnd.setDate(previousEnd.getDate() - 1);
-      previousEnd.setHours(23, 59, 59, 999);
+      const previousEnd =
+        !isAllTime && currentStart ? new Date(currentStart) : null;
+      previousEnd?.setDate(previousEnd.getDate() - 1);
+      previousEnd?.setHours(23, 59, 59, 999);
 
-      const previousStart = new Date(previousEnd);
-      previousStart.setDate(previousStart.getDate() - (daysInRange - 1));
-      previousStart.setHours(0, 0, 0, 0);
+      const previousStart = previousEnd ? new Date(previousEnd) : null;
+      previousStart?.setDate(previousStart.getDate() - (daysInRange - 1));
+      previousStart?.setHours(0, 0, 0, 0);
 
       const normalizedLoanType = loanType
         ? normalizeLoanType(String(loanType))
@@ -1738,20 +2196,24 @@ export class LoanQueryController {
       const currentMatch: Record<string, any> = {
         ...ACTIVE_QUERY_MATCH,
         status: ApplicationStatus.COMPLETED,
-        disbursedDate: {
+      };
+      if (!isAllTime && currentStart && currentEndFixed) {
+        currentMatch.disbursedDate = {
           $gte: currentStart,
           $lte: currentEndFixed,
-        },
-      };
+        };
+      }
 
       const previousMatch: Record<string, any> = {
         ...ACTIVE_QUERY_MATCH,
         status: ApplicationStatus.COMPLETED,
-        disbursedDate: {
+      };
+      if (!isAllTime && previousStart && previousEnd) {
+        previousMatch.disbursedDate = {
           $gte: previousStart,
           $lte: previousEnd,
-        },
-      };
+        };
+      }
 
       if (normalizedLoanType) {
         completedMatch.loanType = normalizedLoanType;
@@ -1815,33 +2277,35 @@ export class LoanQueryController {
             },
           },
         ]),
-        LoanQuery.aggregate([
-          { $match: previousMatch },
-          {
-            $group: {
-              _id: null,
-              total: { $sum: 1 },
-              totalLoanAmount: { $sum: { $ifNull: ["$loanAmount", 0] } },
-              totalDisbursedAmount: {
-                $sum: { $ifNull: ["$disbursedAmount", 0] },
-              },
-              assignedCount: {
-                $sum: {
-                  $cond: [
-                    {
-                      $or: [
-                        { $ne: ["$assignedLander", null] },
-                        { $ne: ["$assignedLander", undefined] },
+        isAllTime
+          ? Promise.resolve([])
+          : LoanQuery.aggregate([
+              { $match: previousMatch },
+              {
+                $group: {
+                  _id: null,
+                  total: { $sum: 1 },
+                  totalLoanAmount: { $sum: { $ifNull: ["$loanAmount", 0] } },
+                  totalDisbursedAmount: {
+                    $sum: { $ifNull: ["$disbursedAmount", 0] },
+                  },
+                  assignedCount: {
+                    $sum: {
+                      $cond: [
+                        {
+                          $or: [
+                            { $ne: ["$assignedLander", null] },
+                            { $ne: ["$assignedLander", undefined] },
+                          ],
+                        },
+                        1,
+                        0,
                       ],
                     },
-                    1,
-                    0,
-                  ],
+                  },
                 },
               },
-            },
-          },
-        ]),
+            ]),
       ]);
 
       const completed = completedAgg?.[0] || {
@@ -1884,19 +2348,25 @@ export class LoanQueryController {
           200,
           {
             loanType: normalizedLoanType || "all",
-            disbursedRange: {
-              startDate: currentStart.toISOString(),
-              endDate: currentEndFixed.toISOString(),
-            },
-            previousDisbursedRange: {
-              startDate: previousStart.toISOString(),
-              endDate: previousEnd.toISOString(),
-            },
+            disbursedRange:
+              !isAllTime && currentStart && currentEndFixed
+                ? {
+                    startDate: currentStart.toISOString(),
+                    endDate: currentEndFixed.toISOString(),
+                  }
+                : null,
+            previousDisbursedRange:
+              !isAllTime && previousStart && previousEnd
+                ? {
+                    startDate: previousStart.toISOString(),
+                    endDate: previousEnd.toISOString(),
+                  }
+                : null,
             totalCompleted: completed.total,
             totalLoanAmount: completed.totalLoanAmount,
             totalDisbursedAmount: cur.totalDisbursedAmount,
             assignedInView: completed.assignedCount,
-            disbursedGrowthPercent,
+            disbursedGrowthPercent: isAllTime ? 0 : disbursedGrowthPercent,
           },
           "Completed loan premium stats fetched successfully",
         ),
@@ -2241,9 +2711,7 @@ export class LoanQueryController {
       }
 
       const existingResult = await LoanQuery.findById(queryId)
-        .select(
-          "status customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy policyDetails documents",
-        )
+        .select("-activities -rcLookup")
         .lean()
         .exec();
 
@@ -2282,6 +2750,10 @@ export class LoanQueryController {
         req.body.updatedByName = updatedByName;
       }
 
+      const rawFollowUpBody = { ...req.body };
+      const hasExplicitFollowUpUpdate = hasLoanFollowUpPayload(rawFollowUpBody);
+      removeLoanFollowUpPayload(req.body);
+
       if (req.body.policyDetails && existingResult.policyDetails) {
         req.body.policyDetails = {
           ...existingResult.policyDetails,
@@ -2309,6 +2781,29 @@ export class LoanQueryController {
       }
 
       const nextStatus = req.body.status || existingResult.status;
+      const explicitFollowUpMutation = buildLoanFollowUpMutation({
+        rawBody: rawFollowUpBody,
+        existing: existingResult,
+        actorId: customerId,
+        role,
+        actorName: updatedByName,
+      });
+      const autoCloseFollowUpMutation =
+        !hasExplicitFollowUpUpdate && isTerminalLoanFollowUpStatus(nextStatus)
+          ? buildAutoCloseLoanFollowUpMutation({
+              existing: existingResult,
+              actorId: customerId,
+              role,
+              actorName: updatedByName,
+              reason: `Status changed to ${nextStatus}`,
+            })
+          : null;
+      const followUpMutation =
+        explicitFollowUpMutation || autoCloseFollowUpMutation;
+      const activityChanges = buildActivityChanges(
+        existingResult as Record<string, any>,
+        req.body,
+      );
 
       const activity =
         existingResult.status !== nextStatus
@@ -2322,18 +2817,49 @@ export class LoanQueryController {
               payload: {
                 previousStatus: existingResult.status,
                 newStatus: nextStatus,
+                changes: activityChanges,
               },
               createdAt: new Date(),
             }
           : {
               type: LoanQueryActivityType.UPDATED,
-              description: "Loan query updated",
+              description: activityChanges.length
+                ? `Loan query updated (${activityChanges.length} field${
+                    activityChanges.length === 1 ? "" : "s"
+                  })`
+                : "Loan query updated",
               actor: customerId
                 ? new Types.ObjectId(String(customerId))
                 : undefined,
               actorModel: role === "admin" ? "Admin" : "User",
+              payload: activityChanges.length
+                ? { changes: activityChanges }
+                : undefined,
               createdAt: new Date(),
             };
+      const activityEntries = [
+        activity,
+        ...(followUpMutation?.activity ? [followUpMutation.activity] : []),
+      ];
+      const updateSet: Record<string, any> = {
+        ...req.body,
+        ...(followUpMutation?.set || {}),
+      };
+      Object.keys(updateSet).forEach((key) => {
+        if (updateSet[key] === undefined) delete updateSet[key];
+      });
+      const updateOperation: Record<string, any> = {
+        $set: updateSet,
+        $push: {
+          activities: { $each: activityEntries },
+        },
+      };
+      if (followUpMutation?.history) {
+        updateOperation.$push.followUpHistory = followUpMutation.history;
+      }
+      if (followUpMutation?.unset) {
+        updateOperation.$unset = followUpMutation.unset;
+      }
 
       let updatedResult: any = await LoanQuery.findOneAndUpdate(
         adminCanEditAnyStatus
@@ -2344,12 +2870,7 @@ export class LoanQueryController {
               _id: queryId,
               status: ApplicationStatus.DRAFT,
             },
-        {
-          $set: req.body,
-          $push: {
-            activities: activity,
-          },
-        },
+        updateOperation,
         {
           new: true,
           runValidators:
@@ -3033,7 +3554,7 @@ export class LoanQueryController {
 
       const query = await LoanQuery.findById(queryId)
         .select(
-          "status customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy",
+          "status customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy followUpEnabled nextFollowUp",
         )
         .lean()
         .exec();
@@ -3079,18 +3600,42 @@ export class LoanQueryController {
         },
         createdAt: new Date(),
       };
+      const autoCloseFollowUpMutation = isTerminalLoanFollowUpStatus(status)
+        ? buildAutoCloseLoanFollowUpMutation({
+            existing: query,
+            actorId,
+            role,
+            actorName: updatedByName,
+            reason: `Status changed to ${status}`,
+          })
+        : null;
+      const activityEntries = [
+        activity,
+        ...(autoCloseFollowUpMutation?.activity
+          ? [autoCloseFollowUpMutation.activity]
+          : []),
+      ];
+      const updateSet: Record<string, any> = {
+        status,
+        ...(updatedByName ? { updatedByName } : {}),
+        ...(autoCloseFollowUpMutation?.set || {}),
+      };
+      Object.keys(updateSet).forEach((key) => {
+        if (updateSet[key] === undefined) delete updateSet[key];
+      });
+      const updateOperation: Record<string, any> = {
+        $set: updateSet,
+        $push: {
+          activities: { $each: activityEntries },
+        },
+      };
+      if (autoCloseFollowUpMutation?.history) {
+        updateOperation.$push.followUpHistory = autoCloseFollowUpMutation.history;
+      }
 
       const updatedQuery = await LoanQuery.findByIdAndUpdate(
         queryId,
-        {
-          $set: {
-            status,
-            ...(updatedByName ? { updatedByName } : {}),
-          },
-          $push: {
-            activities: activity,
-          },
-        },
+        updateOperation,
         {
           new: true,
           runValidators: true,

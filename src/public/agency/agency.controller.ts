@@ -1370,4 +1370,34 @@ export class AgencyController {
       next(error);
     }
   }
+
+  static async uploadBankDocument(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const document = req.body?.document?.[0];
+      if (!document?.url) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Document upload is required"));
+      }
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            url: document.url,
+            name: document.name || document.originalname,
+            mimetype: document.mimetype,
+            size: document.size,
+          },
+          "Document uploaded successfully",
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
 }

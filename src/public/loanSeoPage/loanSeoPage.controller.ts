@@ -172,11 +172,11 @@ const buildDefaultPage = (
     location,
     badges: ["Partner-backed", "Assisted application", "Secure documents"],
     filterKeys: [
-      "all_details",
       "overview",
       "features",
       "eligibility",
       "documents",
+      "steps_to_apply",
       "emi_calculator",
       "fees_and_charges",
       "reviews",
@@ -184,44 +184,24 @@ const buildDefaultPage = (
     ],
     tabs: [
       {
-        key: "all_details",
-        label: "All Details",
-        eyebrow: "Complete guide",
-        title: `${scopedLoan} complete details`,
-        description:
-          "Review eligibility, documents, EMI, fees, reviews, and FAQs before applying.",
-        content: [
-          `${scopedLoan} can be compared across partner requirements, document readiness, repayment comfort, and verification timelines.`,
-          "Use this complete view when you want every important section without switching tabs.",
-        ],
-        bullets: [
-          "Check applicant fit, document list, EMI comfort, and common charges.",
-          "Understand partner-backed next steps before submitting details.",
-          "Continue with the guided Fintaraa application flow when ready.",
-        ],
-        filterKeys: ["all_details", "complete_guide"],
-        sortOrder: 0,
-        isActive: true,
-      },
-      {
         key: "overview",
         label: "Overview",
         eyebrow: "Loan guide",
         title: `${scopedLoan} overview`,
         description:
-          "Understand how this loan can fit your requirement before sharing documents or completing an application.",
+          "Review eligibility, documents, application steps, EMI, fees, reviews, and FAQs before applying.",
         bullets: [
-          "Compare lender-side eligibility signals before applying.",
+          "Check applicant fit, document list, EMI comfort, and common charges.",
+          "Understand the assisted steps before you start the application.",
           "Prepare KYC, income, address, and bank documents in advance.",
-          "Track your application from profile completion to fulfilment.",
         ],
         stats: [
           { label: "Journey", value: "Assisted" },
           { label: "Documents", value: "Digital" },
           { label: "Support", value: "Dedicated" },
         ],
-        filterKeys: ["overview", "loan_guide"],
-        sortOrder: 1,
+        filterKeys: ["overview", "complete_guide", "loan_guide"],
+        sortOrder: 0,
         isActive: true,
       },
       {
@@ -274,6 +254,23 @@ const buildDefaultPage = (
         isActive: true,
       },
       {
+        key: "steps_to_apply",
+        label: "Steps to Apply",
+        eyebrow: "Application process",
+        title: `Steps to apply for ${scopedLoan}`,
+        description:
+          "Follow the guided Fintaraa journey to share details, verify your mobile number, review matched partner options, and submit documents.",
+        bullets: [
+          "Start with mobile number, PAN, income, and location details.",
+          "Verify OTP and complete the secure assisted application flow.",
+          "Review matched partner options before document submission.",
+          "Upload requested documents and track follow-up with Fintaraa support.",
+        ],
+        filterKeys: ["steps_to_apply", "apply", "process", "verification"],
+        sortOrder: 5,
+        isActive: true,
+      },
+      {
         key: "emi_calculator",
         label: "EMI Calculator",
         eyebrow: "Repayment view",
@@ -286,7 +283,7 @@ const buildDefaultPage = (
           "Longer tenures can reduce monthly EMI but increase total repayment.",
         ],
         filterKeys: ["emi_calculator", "emi", "repayment"],
-        sortOrder: 5,
+        sortOrder: 6,
         isActive: true,
       },
       {
@@ -302,7 +299,7 @@ const buildDefaultPage = (
           "Avoid submitting duplicate applications with multiple partners.",
         ],
         filterKeys: ["fees", "emi", "repayment"],
-        sortOrder: 6,
+        sortOrder: 7,
         isActive: true,
       },
       {
@@ -318,7 +315,7 @@ const buildDefaultPage = (
           "EMI and fee visibility helps users compare options carefully.",
         ],
         filterKeys: ["reviews", "testimonials"],
-        sortOrder: 7,
+        sortOrder: 8,
         isActive: true,
       },
       {
@@ -350,7 +347,7 @@ const buildDefaultPage = (
           },
         ],
         filterKeys: ["faqs", "questions"],
-        sortOrder: 8,
+        sortOrder: 9,
         isActive: true,
       },
     ],

@@ -558,49 +558,29 @@ const buildLoanTabs = (product: LoanProductSeed, scoped: string) => {
 
   return [
     {
-      key: "all_details",
-      label: "All Details",
-      eyebrow: "Complete guide",
-      title: `${scoped} complete details`,
-      description:
-        "Review the full loan information in one place before applying.",
-      content: [
-        `${scoped} is designed for ${product.purpose}. The page covers eligibility, features, documents, EMI planning, fees, reviews, and common questions.`,
-        "Use the complete view when you want the full context before continuing into the assisted Fintaraa application journey.",
-      ],
-      bullets: [
-        `Indicative amount: ${product.amountHint}.`,
-        secureNote,
-        "Keep KYC, bank statement, and income or asset documents ready.",
-      ],
-      faqs,
-      filterKeys: ["all_details", "complete_guide", "loan_details"],
-      sortOrder: 0,
-      isActive: true,
-    },
-    {
       key: "overview",
       label: "Overview",
       eyebrow: "Loan guide",
       title: `${scoped} overview`,
       description:
-        "Understand the product fit, common use cases, and application readiness before submitting details.",
+        "Review the full loan information in one place before applying.",
       content: [
         `${product.name} can help with ${product.purpose}. Final approval and offer terms depend on partner underwriting.`,
-        "Fintaraa helps organise applicant details, documents, and callbacks so the next steps are easier to track.",
+        "Use this complete view when you want the full context before continuing into the assisted Fintaraa application journey.",
       ],
       bullets: [
-        "Compare requirements before applying.",
-        "Prepare income, banking, and KYC details in advance.",
-        "Avoid duplicate applications by following one assisted flow.",
+        `Indicative amount: ${product.amountHint}.`,
+        secureNote,
+        "Check eligibility, documents, EMI, fees, reviews, and FAQs together.",
       ],
       stats: [
         { label: "Journey", value: "Digital" },
         { label: "Support", value: "Assisted" },
         { label: "Location", value: "Mapped" },
       ],
-      filterKeys: ["overview", "loan_guide"],
-      sortOrder: 1,
+      faqs,
+      filterKeys: ["overview", "complete_guide", "loan_details"],
+      sortOrder: 0,
       isActive: true,
     },
     {
@@ -658,6 +638,23 @@ const buildLoanTabs = (product: LoanProductSeed, scoped: string) => {
       isActive: true,
     },
     {
+      key: "steps_to_apply",
+      label: "Steps to Apply",
+      eyebrow: "Application process",
+      title: `Steps to apply for ${scoped}`,
+      description:
+        "Follow the guided Fintaraa journey to share details, verify your mobile number, review matched partner options, and submit documents.",
+      bullets: [
+        "Start with mobile number, PAN, income, and location details.",
+        "Verify OTP and complete the secure assisted application flow.",
+        "Review matched partner options before document submission.",
+        "Upload requested documents and track follow-up with Fintaraa support.",
+      ],
+      filterKeys: ["steps_to_apply", "apply", "process", "verification"],
+      sortOrder: 5,
+      isActive: true,
+    },
+    {
       key: "emi_calculator",
       label: "EMI Calculator",
       eyebrow: "Repayment view",
@@ -671,7 +668,7 @@ const buildLoanTabs = (product: LoanProductSeed, scoped: string) => {
         "Review affordability before accepting any offer.",
       ],
       filterKeys: ["emi_calculator", "emi", "repayment"],
-      sortOrder: 5,
+      sortOrder: 6,
       isActive: true,
     },
     {
@@ -688,7 +685,7 @@ const buildLoanTabs = (product: LoanProductSeed, scoped: string) => {
         "Ask for total payable amount, not only monthly EMI.",
       ],
       filterKeys: ["fees_and_charges", "processing_fee", "repayment"],
-      sortOrder: 6,
+      sortOrder: 7,
       isActive: true,
     },
     {
@@ -704,7 +701,7 @@ const buildLoanTabs = (product: LoanProductSeed, scoped: string) => {
         "Location-aware support reduces confusion around serviceability.",
       ],
       filterKeys: ["reviews", "testimonials"],
-      sortOrder: 7,
+      sortOrder: 8,
       isActive: true,
     },
     {
@@ -720,7 +717,7 @@ const buildLoanTabs = (product: LoanProductSeed, scoped: string) => {
       ],
       faqs,
       filterKeys: ["faqs", "questions"],
-      sortOrder: 8,
+      sortOrder: 9,
       isActive: true,
     },
   ];
@@ -1162,11 +1159,11 @@ const upsertSeoPages = async (seededAreas: SeedLocation[]) => {
               "Assisted journey",
             ],
             filterKeys: [
-              "all_details",
               "overview",
               "features",
               "eligibility",
               "documents",
+              "steps_to_apply",
               "emi_calculator",
               "fees_and_charges",
               "reviews",

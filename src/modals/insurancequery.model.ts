@@ -19,6 +19,7 @@ export enum InsuranceQueryActivityType {
   UPDATED = "updated",
   NOTE_ADDED = "note_added",
   STATUS_CHANGED = "status_changed",
+  FOLLOW_UP_UPDATED = "follow_up_updated",
   AGENT_ASSIGNED = "agent_assigned",
   LANDER_ASSIGNED = "lander_assigned",
   DOCUMENT_UPLOADED = "document_uploaded",
@@ -31,6 +32,49 @@ export interface IInsuranceQueryActivity {
   actorModel?: "Admin" | "Agent" | "Lander" | "User";
   payload?: Record<string, any>;
   createdAt: Date;
+}
+
+export enum InsuranceFollowUpType {
+  CALL = "call",
+  WHATSAPP = "whatsapp",
+  EMAIL = "email",
+  DOCUMENT = "document",
+  INSURER_UPDATE = "insurer_update",
+  OTHER = "other",
+}
+
+export enum InsuranceFollowUpStatus {
+  PENDING = "pending",
+  DONE = "done",
+  MISSED = "missed",
+  CANCELLED = "cancelled",
+}
+
+export enum InsuranceFollowUpPriority {
+  LOW = "low",
+  MEDIUM = "medium",
+  HIGH = "high",
+  URGENT = "urgent",
+}
+
+export interface IInsuranceQueryFollowUp {
+  dueAt?: Date;
+  type?: InsuranceFollowUpType;
+  reason?: string;
+  assignedTo?: Types.ObjectId;
+  status?: InsuranceFollowUpStatus;
+  priority?: InsuranceFollowUpPriority;
+  outcome?: string;
+  remark?: string;
+  updatedBy?: Types.ObjectId;
+  updatedByName?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export interface IInsuranceQueryFollowUpHistory
+  extends IInsuranceQueryFollowUp {
+  action?: "scheduled" | "completed" | "missed" | "cancelled" | "updated";
 }
 
 export enum ApplicationStatus {
@@ -237,7 +281,15 @@ export interface IInsuranceQuery extends Document {
   assignedLander?: Types.ObjectId;
   channelAgency?: Types.ObjectId;
   ownerAgency?: Types.ObjectId;
+  createdBy?: Types.ObjectId;
+  updatedBy?: Types.ObjectId;
+  createdByName?: string;
+  createdByRole?: string;
+  updatedByName?: string;
   activities: IInsuranceQueryActivity[];
+  followUpEnabled?: boolean;
+  nextFollowUp?: IInsuranceQueryFollowUp;
+  followUpHistory?: IInsuranceQueryFollowUpHistory[];
 
   // Commission tracking
   commissionRecorded: boolean;
@@ -338,6 +390,19 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
       ref: "Agency",
       index: true,
     },
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: "Admin",
+      index: true,
+    },
+    updatedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "Admin",
+      index: true,
+    },
+    createdByName: { type: String, trim: true },
+    createdByRole: { type: String, trim: true },
+    updatedByName: { type: String, trim: true },
     activities: {
       type: [
         {
@@ -353,6 +418,78 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
             enum: ["Admin", "Agent", "Lander", "User"],
           },
           payload: { type: Schema.Types.Mixed },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
+    followUpEnabled: { type: Boolean, default: false, index: true },
+    nextFollowUp: {
+      dueAt: { type: Date, index: true },
+      type: {
+        type: String,
+        enum: Object.values(InsuranceFollowUpType),
+        default: InsuranceFollowUpType.CALL,
+      },
+      reason: { type: String, trim: true },
+      assignedTo: {
+        type: Schema.Types.ObjectId,
+        ref: "Admin",
+        index: true,
+      },
+      status: {
+        type: String,
+        enum: Object.values(InsuranceFollowUpStatus),
+        default: InsuranceFollowUpStatus.PENDING,
+        index: true,
+      },
+      priority: {
+        type: String,
+        enum: Object.values(InsuranceFollowUpPriority),
+        default: InsuranceFollowUpPriority.MEDIUM,
+      },
+      outcome: { type: String, trim: true },
+      remark: { type: String, trim: true },
+      updatedBy: {
+        type: Schema.Types.ObjectId,
+        ref: "Admin",
+      },
+      updatedByName: { type: String, trim: true },
+      createdAt: { type: Date },
+      updatedAt: { type: Date },
+    },
+    followUpHistory: {
+      type: [
+        {
+          dueAt: { type: Date },
+          type: {
+            type: String,
+            enum: Object.values(InsuranceFollowUpType),
+          },
+          reason: { type: String, trim: true },
+          assignedTo: {
+            type: Schema.Types.ObjectId,
+            ref: "Admin",
+          },
+          status: {
+            type: String,
+            enum: Object.values(InsuranceFollowUpStatus),
+          },
+          priority: {
+            type: String,
+            enum: Object.values(InsuranceFollowUpPriority),
+          },
+          outcome: { type: String, trim: true },
+          remark: { type: String, trim: true },
+          action: {
+            type: String,
+            enum: ["scheduled", "completed", "missed", "cancelled", "updated"],
+          },
+          updatedBy: {
+            type: Schema.Types.ObjectId,
+            ref: "Admin",
+          },
+          updatedByName: { type: String, trim: true },
           createdAt: { type: Date, default: Date.now },
         },
       ],
@@ -378,6 +515,11 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
 InsuranceQuerySchema.index({ mobile: 1, email: 1 });
 InsuranceQuerySchema.index({ customerId: 1 });
 InsuranceQuerySchema.index({ ownerAgency: 1, status: 1, createdAt: -1 });
+InsuranceQuerySchema.index({
+  followUpEnabled: 1,
+  "nextFollowUp.status": 1,
+  "nextFollowUp.dueAt": 1,
+});
 
 InsuranceQuerySchema.pre(/^find/, function (this: any, next) {
   const query = this.getQuery();

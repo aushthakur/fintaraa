@@ -10,6 +10,11 @@ export enum EligibilityCommissionType {
   FLAT = "flat",
 }
 
+export enum EligibilityAmountType {
+  PERCENTAGE = "percentage",
+  FIXED = "fixed",
+}
+
 export interface IEligibilityCriteria extends Document {
   loanType: string;
   bankName: string;
@@ -61,13 +66,17 @@ export interface IEligibilityCriteria extends Document {
   industrialCatBLtv?: number;
   industrialCatCLtv?: number;
   processingFees?: number;
+  processingFeesType?: EligibilityAmountType;
   insurance?: string;
+  insuranceType?: EligibilityAmountType;
+  insuranceValue?: number;
   propertyInsuranceRequired?: boolean;
   propertyInsurancePercentage?: number;
   lifeInsuranceRequired?: boolean;
   lifeInsurancePercentage?: number;
   loginFees?: string;
   companyCategory?: string[];
+  companyCategoryBasis?: string;
   abb?: number | number[];
   maximumLoanAmount?: number;
   currentExperience?: number;
@@ -149,13 +158,30 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     industrialCatBLtv: { type: Number },
     industrialCatCLtv: { type: Number },
     processingFees: { type: Number },
+    processingFeesType: {
+      type: String,
+      enum: Object.values(EligibilityAmountType),
+      default: EligibilityAmountType.PERCENTAGE,
+    },
     insurance: { type: String, trim: true },
+    insuranceType: {
+      type: String,
+      enum: Object.values(EligibilityAmountType),
+      default: EligibilityAmountType.FIXED,
+    },
+    insuranceValue: { type: Number },
     propertyInsuranceRequired: { type: Boolean, default: false },
     propertyInsurancePercentage: { type: Number },
     lifeInsuranceRequired: { type: Boolean, default: false },
     lifeInsurancePercentage: { type: Number },
     loginFees: { type: String, trim: true },
     companyCategory: [{ type: String, trim: true }],
+    companyCategoryBasis: {
+      type: String,
+      enum: ["bank", "company"],
+      default: "company",
+      trim: true,
+    },
     abb: { type: Schema.Types.Mixed },
     maximumLoanAmount: { type: Number },
     currentExperience: { type: Number },

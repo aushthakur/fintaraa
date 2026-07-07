@@ -18,6 +18,23 @@ const cleanText = (value: unknown) =>
 const normalizeMobile = (value: string) =>
   value.replace(/[\s-]/g, "").replace(/^\+91/, "");
 
+const parseBoolean = (value: unknown) =>
+  value === true || value === "true" || value === "1" || value === 1;
+
+const parseJsonObject = (value: unknown) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  const text = cleanText(value);
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch (_err) {
+    return {};
+  }
+};
+
 const slugify = (value: string) =>
   value
     .toLowerCase()
@@ -170,6 +187,9 @@ export class CareerController {
           }).lean()) as any)
         : null;
       const jobTitle = cleanText(req.body?.jobTitle) || job?.title || "Open Role";
+      const communicationConsent = parseJsonObject(
+        req.body?.communicationConsent,
+      );
 
       const result = await JobApplication.create({
         recordType: "career_application",
@@ -182,6 +202,16 @@ export class CareerController {
         experience: cleanText(req.body?.experience),
         resume: extractResume(req.body || {}),
         coverLetter: cleanText(req.body?.coverLetter),
+        source: cleanText(req.body?.source) || "website",
+        platform:
+          cleanText(req.body?.platform) ||
+          cleanText(req.body?.sourcePlatform) ||
+          "website",
+        formSource: cleanText(req.body?.formSource) || "website_careers_join",
+        whatsappConsent:
+          parseBoolean(req.body?.whatsappConsent) ||
+          parseBoolean((communicationConsent as any)?.whatsapp),
+        communicationConsent,
       });
 
       return res

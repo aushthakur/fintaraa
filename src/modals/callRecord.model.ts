@@ -69,6 +69,7 @@ export interface ICallRecord extends Document {
     summary?: string;
     diff?: Record<string, any>;
     changedBy?: Types.ObjectId;
+    changedByName?: string;
     changedAt?: Date;
   }>;
   assignee?: Types.ObjectId;
@@ -171,6 +172,7 @@ const CallRecordSchema = new Schema<ICallRecord>(
           summary: { type: String, trim: true },
           diff: { type: Schema.Types.Mixed },
           changedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+          changedByName: { type: String, trim: true },
           changedAt: { type: Date, default: Date.now },
         },
       ],

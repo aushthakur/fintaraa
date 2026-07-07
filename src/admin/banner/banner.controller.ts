@@ -33,6 +33,36 @@ export class BannerController {
     }
   }
 
+  static async getPublicBannersByType(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const type = String(req.params.type || "").toLowerCase() as BannerType;
+
+      if (!Object.values(BannerType).includes(type)) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid banner type"));
+      }
+
+      const result = await Banner.find({
+        type,
+        status: BannerStatus.ACTIVE,
+      })
+        .sort({ priority: 1, createdAt: -1 })
+        .limit(Math.max(Math.min(Number(req.query.limit || 10), 20), 1))
+        .lean();
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Banners fetched successfully"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
   static async createBanner(req: Request, res: Response, next: NextFunction) {
     try {
       const result = await BannerService.create(req.body);

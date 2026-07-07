@@ -29,6 +29,9 @@ const cleanText = (value: unknown) =>
 const normalizeMobile = (value: string) =>
   value.replace(/[\s-]/g, "").replace(/^\+91/, "");
 
+const parseBoolean = (value: unknown) =>
+  value === true || value === "true" || value === "1" || value === 1;
+
 const validateCreatePayload = (body: Record<string, unknown>) => {
   const fullName = cleanText(body.fullName);
   const mobile = normalizeMobile(cleanText(body.mobile));
@@ -62,7 +65,20 @@ export class ContactRequestController {
       const payload = validateCreatePayload(req.body || {});
       const result = await ContactRequestService.create({
         ...payload,
-        source: cleanText(req.body?.source) || "website_contact_page",
+        source: cleanText(req.body?.source) || "website",
+        platform:
+          cleanText(req.body?.platform) ||
+          cleanText(req.body?.sourcePlatform) ||
+          "website",
+        formSource: cleanText(req.body?.formSource) || "website_contact_page",
+        whatsappConsent:
+          parseBoolean(req.body?.whatsappConsent) ||
+          parseBoolean((req.body?.communicationConsent as any)?.whatsapp),
+        communicationConsent:
+          req.body?.communicationConsent &&
+          typeof req.body.communicationConsent === "object"
+            ? req.body.communicationConsent
+            : {},
         ipAddress: req.ip,
         userAgent: req.get("user-agent") || "",
       } as Partial<IContactRequest>);
@@ -92,6 +108,10 @@ export class ContactRequestController {
             message: 1,
             status: 1,
             source: 1,
+            platform: 1,
+            formSource: 1,
+            whatsappConsent: 1,
+            communicationConsent: 1,
             ipAddress: 1,
             userAgent: 1,
             createdAt: 1,

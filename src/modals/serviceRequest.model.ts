@@ -37,6 +37,10 @@ export interface IServiceRequest extends Document {
   state?: string;
   employmentType?: string;
   annualIncome?: string;
+  source?: string;
+  platform?: string;
+  whatsappConsent?: boolean;
+  communicationConsent?: Record<string, any>;
   status: ServiceRequestStatus;
   currentStage: string;
   currentStageIndex: number;
@@ -92,6 +96,10 @@ const serviceRequestSchema = new Schema<IServiceRequest>(
     state: { type: String, trim: true },
     employmentType: { type: String, trim: true },
     annualIncome: { type: String, trim: true },
+    source: { type: String, trim: true, default: "website", index: true },
+    platform: { type: String, trim: true, default: "website", index: true },
+    whatsappConsent: { type: Boolean, default: false },
+    communicationConsent: { type: Object, default: {} },
     status: {
       type: String,
       enum: Object.values(ServiceRequestStatus),

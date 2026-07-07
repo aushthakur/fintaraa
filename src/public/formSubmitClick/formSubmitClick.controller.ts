@@ -30,6 +30,27 @@ const asTrimmedString = (value: unknown): string | undefined => {
   return trimmed ? trimmed : undefined;
 };
 
+const CLICK_EVENT_MATCH: Record<string, any> = {
+  recordType: { $exists: false },
+};
+
+const resolveSourcePlatform = (req: Request, meta?: Record<string, any>) => {
+  const source =
+    asTrimmedString(meta?.source) ||
+    asTrimmedString((req.body as any)?.source) ||
+    asTrimmedString(req.get("x-source-platform")) ||
+    asTrimmedString(req.get("x-client-platform")) ||
+    "unknown";
+  const platform =
+    asTrimmedString(meta?.platform) ||
+    asTrimmedString((req.body as any)?.platform) ||
+    asTrimmedString((req.body as any)?.sourcePlatform) ||
+    asTrimmedString(req.get("x-client-platform")) ||
+    source;
+
+  return { source, platform };
+};
+
 const extractIdString = (value: any): string | undefined => {
   if (value === null || value === undefined) return undefined;
 
@@ -221,9 +242,19 @@ export class FormSubmitClickController {
       const userId = req.user?._id;
       if (!userId) return res.status(401).json(new ApiError(401, "Unauthorized"));
 
+      const meta =
+        req.body?.meta && typeof req.body.meta === "object"
+          ? req.body.meta
+          : {};
+      const { source, platform } = resolveSourcePlatform(req, meta);
       const payload = {
         ...req.body,
         user: userId,
+        meta: {
+          ...meta,
+          source,
+          platform,
+        },
       };
       const result = await FormSubmitClickService.create(payload as any);
       return res
@@ -247,6 +278,7 @@ export class FormSubmitClickController {
         agencyId,
         leadId,
         source,
+        platform,
         startDate,
         endDate,
         search,
@@ -259,6 +291,7 @@ export class FormSubmitClickController {
         typeof endDate === "string" ? endDate : undefined
       );
       const filter: Record<string, any> = {
+        ...CLICK_EVENT_MATCH,
         createdAt: { $gte: start, $lte: end },
       };
       if (typeof action === "string" && action.trim()) {
@@ -285,6 +318,9 @@ export class FormSubmitClickController {
       if (typeof source === "string" && source.trim()) {
         filter["meta.source"] = source.trim();
       }
+      if (typeof platform === "string" && platform.trim()) {
+        filter["meta.platform"] = platform.trim();
+      }
       if (
         typeof search === "string" &&
         search.trim() &&
@@ -297,6 +333,7 @@ export class FormSubmitClickController {
           "meta.agencyId",
           "meta.leadId",
           "meta.source",
+          "meta.platform",
         ].includes(searchkey)
       ) {
         filter[searchkey] = { $regex: search.trim(), $options: "i" };
@@ -355,6 +392,7 @@ export class FormSubmitClickController {
         agencyId,
         leadId,
         source,
+        platform,
         formType,
         action,
       } = req.query;
@@ -362,7 +400,10 @@ export class FormSubmitClickController {
         typeof startDate === "string" ? startDate : undefined,
         typeof endDate === "string" ? endDate : undefined
       );
-      const match: Record<string, any> = { createdAt: { $gte: start, $lte: end } };
+      const match: Record<string, any> = {
+        ...CLICK_EVENT_MATCH,
+        createdAt: { $gte: start, $lte: end },
+      };
       if (typeof formType === "string" && formType.trim()) {
         match.formType = formType.trim();
       }
@@ -383,6 +424,9 @@ export class FormSubmitClickController {
       }
       if (typeof source === "string" && source.trim()) {
         match["meta.source"] = source.trim();
+      }
+      if (typeof platform === "string" && platform.trim()) {
+        match["meta.platform"] = platform.trim();
       }
 
       const [
@@ -503,6 +547,7 @@ export class FormSubmitClickController {
         actorRole,
         leadId,
         source,
+        platform,
         startDate,
         endDate,
         search,
@@ -515,6 +560,7 @@ export class FormSubmitClickController {
         typeof endDate === "string" ? endDate : undefined,
       );
       const filter: Record<string, any> = {
+        ...CLICK_EVENT_MATCH,
         createdAt: { $gte: start, $lte: end },
       };
       if (typeof action === "string" && action.trim()) {
@@ -535,6 +581,9 @@ export class FormSubmitClickController {
       if (typeof source === "string" && source.trim()) {
         filter["meta.source"] = source.trim();
       }
+      if (typeof platform === "string" && platform.trim()) {
+        filter["meta.platform"] = platform.trim();
+      }
       if (
         typeof search === "string" &&
         search.trim() &&
@@ -546,6 +595,7 @@ export class FormSubmitClickController {
           "meta.actorRole",
           "meta.leadId",
           "meta.source",
+          "meta.platform",
         ].includes(searchkey)
       ) {
         filter[searchkey] = { $regex: search.trim(), $options: "i" };
@@ -608,6 +658,7 @@ export class FormSubmitClickController {
         actorRole,
         leadId,
         source,
+        platform,
         formType,
         action,
       } = req.query;
@@ -616,6 +667,7 @@ export class FormSubmitClickController {
         typeof endDate === "string" ? endDate : undefined,
       );
       const match: Record<string, any> = {
+        ...CLICK_EVENT_MATCH,
         createdAt: { $gte: start, $lte: end },
       };
       if (typeof formType === "string" && formType.trim()) {
@@ -635,6 +687,9 @@ export class FormSubmitClickController {
       }
       if (typeof source === "string" && source.trim()) {
         match["meta.source"] = source.trim();
+      }
+      if (typeof platform === "string" && platform.trim()) {
+        match["meta.platform"] = platform.trim();
       }
 
       const scopeMatch = await buildSelfScopeMatch(req.user);

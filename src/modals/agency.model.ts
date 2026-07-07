@@ -2,7 +2,6 @@ import bcrypt from "bcryptjs";
 import mongoose, { Schema, Document, Types } from "mongoose";
 import {
   allocatePrefixedSequence,
-  formatDaySequencePrefix,
 } from "../utils/idAllocator";
 import {
   AddressSchema,
@@ -99,8 +98,8 @@ export interface IAgency extends Document {
 
 type AgencyDocument = mongoose.HydratedDocument<IAgency>;
 
-const AGENCY_ID_COUNTER_PREFIX = "agencyId:FIN-DSA";
-const AGENCY_ID_PREFIX = "FIN-DSA";
+const AGENCY_ID_COUNTER_KEY = "agencyId:FINCHP";
+const AGENCY_ID_PREFIX = "FINCHP";
 
 const AgencySchema = new Schema<IAgency>(
   {
@@ -219,10 +218,9 @@ const allocateUniqueAgencyId = async (agency: AgencyDocument): Promise<string> =
   const maxAttempts = 25;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const datePrefix = formatDaySequencePrefix(new Date());
     const candidate = await allocatePrefixedSequence({
-      key: `${AGENCY_ID_COUNTER_PREFIX}:${datePrefix}`,
-      prefix: `${AGENCY_ID_PREFIX}-${datePrefix}`,
+      key: AGENCY_ID_COUNTER_KEY,
+      prefix: AGENCY_ID_PREFIX,
       padLength: 4,
       session: session || undefined,
     });

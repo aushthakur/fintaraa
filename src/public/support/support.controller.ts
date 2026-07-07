@@ -51,6 +51,12 @@ const ensureTagArray = (tags: unknown): string[] => {
   return [];
 };
 
+const cleanText = (value: unknown) =>
+  typeof value === "string" ? value.trim() : "";
+
+const parseBoolean = (value: unknown) =>
+  value === true || value === "true" || value === "1" || value === 1;
+
 const normalizeObjectId = (value: any): Types.ObjectId | null => {
   if (!value) return null;
   if (value instanceof Types.ObjectId) return value;
@@ -339,6 +345,11 @@ export const createTicket = async (
   try {
     const { _id: id, role } = req.user;
     const { tags, title, description } = req.body;
+    const communicationConsent =
+      req.body?.communicationConsent &&
+      typeof req.body.communicationConsent === "object"
+        ? req.body.communicationConsent
+        : {};
 
     if (!title || !description) {
       return next(new ApiError(400, "Title and description are required"));
@@ -417,6 +428,16 @@ export const createTicket = async (
       dueDate: dueDatePlus24,
       priority: await checkPriority(tags),
       relatedTickets: await checkRelatedTickets(tags),
+      source: cleanText(req.body?.source) || "website",
+      platform:
+        cleanText(req.body?.platform) ||
+        cleanText(req.body?.sourcePlatform) ||
+        "website",
+      formSource: cleanText(req.body?.formSource) || "website_support_ticket",
+      whatsappConsent:
+        parseBoolean(req.body?.whatsappConsent) ||
+        parseBoolean((communicationConsent as any)?.whatsapp),
+      communicationConsent,
     };
 
     const ticket = await Ticket.create(obj);
@@ -821,6 +842,11 @@ export const getTickets = async (
           priority: 1,
           createdAt: 1,
           description: 1,
+          source: 1,
+          platform: 1,
+          formSource: 1,
+          whatsappConsent: 1,
+          communicationConsent: 1,
           resolutionDate: 1,
           assigneeId: "$assigneeInfo._id",
           requesterId: "$requesterInfo._id",

@@ -947,17 +947,15 @@ const createLoanQueryFromCallRecord = async (
     const resolvedAadhaar =
       String(normalizedLoanContext.aadhaarNumber || "NA").trim() || "NA";
     const resolvedLoanType = loanType;
+    const actorObjectId = toObjectId(context?.actorId || callRecord.createdBy);
 
     // Create new loan query
     const loanQueryData: any = {
       customerId: user._id,
       loanType: resolvedLoanType,
       status: "draft",
-      ...(toObjectId(context?.actorId || callRecord.createdBy)
-        ? {
-            createdBy: toObjectId(context?.actorId || callRecord.createdBy),
-            updatedBy: toObjectId(context?.actorId || callRecord.createdBy),
-          }
+      ...(actorObjectId
+        ? { createdBy: actorObjectId, updatedBy: actorObjectId }
         : {}),
       loanAmount: resolvedLoanAmountValue,
       disbursedAmount: Number.isFinite(
@@ -992,6 +990,8 @@ const createLoanQueryFromCallRecord = async (
       street: resolvedStreet,
       leadBy: resolvedLeadBy || undefined,
       dataSource: resolvedDataSource || undefined,
+      createdByName: resolvedUpdatedByName || undefined,
+      createdByRole: resolvedUpdatedByName ? "Admin" : undefined,
       updatedByName: resolvedUpdatedByName || undefined,
       employmentType: resolvedEmploymentType,
       companyName: resolvedCompanyName,
@@ -1346,6 +1346,15 @@ const createInsuranceQueryFromCallRecord = async (
         lead?.loanAmount ??
         0,
     );
+    const actorObjectId = toObjectId(
+      normalizedInsuranceContext.actorId || callRecord.createdBy,
+    );
+    const actorDisplayName =
+      String(
+        normalizedInsuranceContext.updatedByName ||
+          normalizedInsuranceContext.actorName ||
+          "",
+      ).trim() || undefined;
 
     const insuranceQueryData: any = {
       customerId: user._id,
@@ -1406,6 +1415,16 @@ const createInsuranceQueryFromCallRecord = async (
           : {}),
       },
       ...(primaryAssigneeId ? { assignedAgent: primaryAssigneeId } : {}),
+      ...(actorObjectId
+        ? { createdBy: actorObjectId, updatedBy: actorObjectId }
+        : {}),
+      ...(actorDisplayName
+        ? {
+            createdByName: actorDisplayName,
+            createdByRole: "Admin",
+            updatedByName: actorDisplayName,
+          }
+        : {}),
       activities: [
         {
           type: InsuranceQueryActivityType.CREATED,
@@ -2326,7 +2345,17 @@ export class CallRecordController {
           callbackNotifiedAt: "",
         };
       }
-      if (rawFollowUpNote) {
+      const followUpExplicitlyDisabled =
+        Object.prototype.hasOwnProperty.call(updateBody, "followUp") &&
+        updates.followUp === false;
+      if (followUpExplicitlyDisabled && !updates.callbackAt) {
+        updates.$unset = {
+          ...(updates.$unset || {}),
+          callbackAt: "",
+          callbackNotifiedAt: "",
+        };
+      }
+      if (rawFollowUpNote && !followUpExplicitlyDisabled) {
         updates.followUp = true;
       }
 
@@ -2441,6 +2470,8 @@ export class CallRecordController {
         updateBody,
         changeKeys,
       );
+      const changedByName =
+        req.user?.name || req.user?.username || req.user?.email || "";
       if (changeDiff.length > 0) {
         updates.$push = {
           ...(updates.$push || {}),
@@ -2448,6 +2479,7 @@ export class CallRecordController {
             summary: `Updated ${changeDiff.length} field${changeDiff.length === 1 ? "" : "s"}`,
             diff: changeDiff,
             changedBy: adminId,
+            changedByName,
             changedAt: new Date(),
           },
         };
@@ -2500,6 +2532,7 @@ export class CallRecordController {
           !result?.loanQueryId ||
           String(result.loanQueryId) !== String(linkedLoanQueryIdFromContext)
         ) {
+          const followUpLinkValue = followUpExplicitlyDisabled ? false : true;
           finalRecord = await CallRecord.findByIdAndUpdate(
             req.params.id,
             {
@@ -2509,7 +2542,35 @@ export class CallRecordController {
                   result?.loanQueryCreatedAt ||
                   record?.loanQueryCreatedAt ||
                   new Date(),
-                followUp: true,
+                followUp: followUpLinkValue,
+              },
+            },
+            { new: true },
+          );
+        }
+      }
+      const linkedInsuranceQueryIdFromContext =
+        req.body?.insuranceContext?.queryId ||
+        req.body?.insuranceContext?.insuranceQueryId ||
+        req.body?.loanContext?.insuranceQueryId;
+
+      if (linkedInsuranceQueryIdFromContext) {
+        if (
+          !result?.insuranceQueryId ||
+          String(result.insuranceQueryId) !==
+            String(linkedInsuranceQueryIdFromContext)
+        ) {
+          const followUpLinkValue = followUpExplicitlyDisabled ? false : true;
+          finalRecord = await CallRecord.findByIdAndUpdate(
+            req.params.id,
+            {
+              $set: {
+                insuranceQueryId: linkedInsuranceQueryIdFromContext,
+                insuranceQueryCreatedAt:
+                  result?.insuranceQueryCreatedAt ||
+                  record?.insuranceQueryCreatedAt ||
+                  new Date(),
+                followUp: followUpLinkValue,
               },
             },
             { new: true },
@@ -2549,6 +2610,104 @@ export class CallRecordController {
               $set: loanQueryUpdatePayload,
             });
           }
+        }
+      }
+
+      const shouldPropagateInsuranceFollowUp =
+        Object.prototype.hasOwnProperty.call(updateBody, "callbackAt") ||
+        Object.prototype.hasOwnProperty.call(updateBody, "followUp") ||
+        Boolean(rawFollowUpNote);
+
+      if (shouldPropagateInsuranceFollowUp) {
+        const insuranceQueryId =
+          finalRecord?.insuranceQueryId ||
+          result?.insuranceQueryId ||
+          record?.insuranceQueryId ||
+          linkedInsuranceQueryIdFromContext;
+        if (insuranceQueryId) {
+          const callbackAt = followUpExplicitlyDisabled
+            ? null
+            : updates.callbackAt
+              ? new Date(updates.callbackAt)
+              : result?.callbackAt || record?.callbackAt || null;
+          const isActivePending =
+            !followUpExplicitlyDisabled &&
+            updates.followUp !== false &&
+            Boolean(callbackAt);
+          const actorDisplayName =
+            (await resolveAdminDisplayName(adminId?.toString?.())) ||
+            req.user?.name ||
+            req.user?.email ||
+            "Admin";
+          const now = new Date();
+          const assignedTo =
+            updates.assignee || result?.assignee || record?.assignee || undefined;
+          const reason = String(
+            rawFollowUpNote ||
+              updates.comment ||
+              result?.comment ||
+              "Insurance follow-up",
+          )
+            .trim()
+            .slice(0, 240);
+          const status = isActivePending ? "pending" : "cancelled";
+          const remark = rawFollowUpNote || updates.comment || undefined;
+          const nextFollowUp: Record<string, any> = {
+            type: "call",
+            reason,
+            assignedTo,
+            status,
+            priority: "medium",
+            remark,
+            updatedByName: actorDisplayName,
+            updatedAt: now,
+          };
+          if (adminId) nextFollowUp.updatedBy = adminId;
+          if (isActivePending && callbackAt) {
+            nextFollowUp.dueAt = callbackAt;
+            nextFollowUp.createdAt = now;
+          }
+
+          const historyEntry: Record<string, any> = {
+            ...(isActivePending && callbackAt ? { dueAt: callbackAt } : {}),
+            type: "call",
+            reason,
+            assignedTo,
+            status,
+            priority: "medium",
+            remark,
+            action: isActivePending ? "scheduled" : "cancelled",
+            updatedByName: actorDisplayName,
+            createdAt: now,
+          };
+          if (adminId) historyEntry.updatedBy = adminId;
+
+          await InsuranceQuery.findByIdAndUpdate(insuranceQueryId, {
+            $set: {
+              followUpEnabled: isActivePending,
+              nextFollowUp,
+              ...(adminId ? { updatedBy: adminId } : {}),
+              updatedByName: actorDisplayName,
+            },
+            $push: {
+              followUpHistory: historyEntry,
+              activities: {
+                type: InsuranceQueryActivityType.FOLLOW_UP_UPDATED,
+                description: isActivePending
+                  ? "Insurance follow-up scheduled from call record"
+                  : "Insurance follow-up cancelled from call record",
+                actor: adminId,
+                actorModel: "Admin",
+                payload: {
+                  source: "call_record",
+                  callRecordId: result?._id || record?._id,
+                  status,
+                  callbackAt: isActivePending ? callbackAt : undefined,
+                },
+                createdAt: now,
+              },
+            },
+          });
         }
       }
 

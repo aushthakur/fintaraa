@@ -15,6 +15,7 @@
     "seed:bank-seo": "ts-node src/scripts/seedBankSeoPages.ts",
     "seed:page-faqs": "ts-node src/scripts/seedPageFaqs.ts",
     "seed:careers": "ts-node src/scripts/seedCareers.ts",
+    "seed:company-bank-categories": "ts-node src/scripts/seedCompanyBankCategories.ts",
     "seed:home-banners": "ts-node src/scripts/seedHomeBanners.ts"
   },
   "keywords": [],

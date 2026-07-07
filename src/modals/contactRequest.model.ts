@@ -14,6 +14,10 @@ export interface IContactRequest extends Document {
   message?: string;
   status: ContactRequestStatus;
   source?: string;
+  platform?: string;
+  formSource?: string;
+  whatsappConsent?: boolean;
+  communicationConsent?: Record<string, any>;
   ipAddress?: string;
   userAgent?: string;
   createdAt?: Date;
@@ -39,7 +43,11 @@ const ContactRequestSchema = new Schema<IContactRequest>(
       default: "new",
       index: true,
     },
-    source: { type: String, trim: true, default: "website_contact_page" },
+    source: { type: String, trim: true, default: "website" },
+    platform: { type: String, trim: true, default: "website" },
+    formSource: { type: String, trim: true, default: "website_contact_page" },
+    whatsappConsent: { type: Boolean, default: false },
+    communicationConsent: { type: Object, default: {} },
     ipAddress: { type: String, trim: true },
     userAgent: { type: String, trim: true },
   },

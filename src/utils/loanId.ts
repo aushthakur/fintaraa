@@ -1,11 +1,11 @@
 import type { ClientSession } from "mongoose";
 import {
   allocatePrefixedSequence,
-  formatDaySequencePrefix,
+  formatYearMonthDaySequencePrefix,
 } from "./idAllocator";
 
 export const generateLoanId = async (session?: ClientSession) => {
-  const prefix = formatDaySequencePrefix(new Date());
+  const prefix = formatYearMonthDaySequencePrefix(new Date());
   return allocatePrefixedSequence({
     key: `loanId:${prefix}`,
     prefix,

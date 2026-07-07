@@ -48,6 +48,11 @@ export interface IJobApplication extends Document {
   coverLetter?: string;
   status: JobApplicationStatus;
   remarks?: string;
+  source?: string;
+  platform?: string;
+  formSource?: string;
+  whatsappConsent?: boolean;
+  communicationConsent?: Record<string, any>;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -142,6 +147,11 @@ const JobApplicationSchema = new Schema<IJobApplication>(
     experience: { type: String, trim: true, maxlength: 80 },
     resume: ResumeSchema,
     coverLetter: { type: String, trim: true, maxlength: 2000 },
+    source: { type: String, trim: true, default: "website" },
+    platform: { type: String, trim: true, default: "website" },
+    formSource: { type: String, trim: true, default: "website_careers_join" },
+    whatsappConsent: { type: Boolean, default: false },
+    communicationConsent: { type: Object, default: {} },
     status: {
       type: String,
       enum: ["received", "reviewing", "shortlisted", "rejected", "hired"],

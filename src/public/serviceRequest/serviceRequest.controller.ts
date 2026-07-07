@@ -7,6 +7,10 @@ import {
   ServiceWorkflowItem,
   ServiceRequestStatus,
 } from "../../modals/serviceRequest.model";
+import {
+  allocatePrefixedSequence,
+  formatYearMonthDaySequencePrefix,
+} from "../../utils/idAllocator";
 
 const GST_STAGES = [
   "Request Submitted",
@@ -115,23 +119,14 @@ const normalizeServiceType = (value: unknown) => {
   return undefined;
 };
 
-const makeQueryId = (serviceType: ServiceRequestType) => {
-  const prefix =
-    {
-      [ServiceRequestType.GST]: "GST",
-      [ServiceRequestType.ITR]: "ITR",
-      [ServiceRequestType.COMPANY]: "CMP",
-      [ServiceRequestType.FRANCHISE]: "FRN",
-      [ServiceRequestType.DSA]: "DSA",
-    }[serviceType] || "SR";
+const makeQueryId = async () => {
   const date = new Date();
-  const datePart = [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, "0"),
-    String(date.getDate()).padStart(2, "0"),
-  ].join("");
-  const random = Math.random().toString(36).slice(2, 7).toUpperCase();
-  return `FT-${prefix}-${datePart}-${random}`;
+  const datePart = formatYearMonthDaySequencePrefix(date);
+  return allocatePrefixedSequence({
+    key: `service-request:${datePart}`,
+    prefix: `FIN${datePart}`,
+    padLength: 4,
+  });
 };
 
 const safeString = (value: unknown) => String(value || "").trim();
@@ -162,14 +157,32 @@ export class ServiceRequestController {
           .json(new ApiError(400, "Mobile number is required"));
       }
 
-      let queryId = makeQueryId(serviceType);
+      let queryId = await makeQueryId();
       while (
         await ServiceRequest.exists({ queryId, recordType: "service_request" })
       ) {
-        queryId = makeQueryId(serviceType);
+        queryId = await makeQueryId();
       }
 
       const timeline = buildTimeline(serviceType);
+      const source = safeString(req.body?.source) || "website";
+      const platform =
+        safeString(req.body?.platform) ||
+        safeString(req.body?.sourcePlatform) ||
+        "website";
+      const communicationConsent =
+        req.body?.communicationConsent &&
+        typeof req.body.communicationConsent === "object"
+          ? req.body.communicationConsent
+          : {};
+      const whatsappConsent =
+        req.body?.whatsappConsent === true ||
+        req.body?.whatsappConsent === "true" ||
+        (communicationConsent as any)?.whatsapp === true;
+      const details =
+        req.body?.details && typeof req.body.details === "object"
+          ? req.body.details
+          : {};
       const request = await ServiceRequest.create({
         recordType: "service_request",
         queryId,
@@ -184,7 +197,17 @@ export class ServiceRequestController {
         state: safeString(req.body?.state),
         employmentType: safeString(req.body?.employmentType),
         annualIncome: safeString(req.body?.annualIncome),
-        details: req.body?.details || {},
+        source,
+        platform,
+        whatsappConsent,
+        communicationConsent,
+        details: {
+          ...details,
+          source: details.source || source,
+          platform: details.platform || platform,
+          whatsappConsent,
+          communicationConsent,
+        },
         currentStage: timeline[0].stage,
         currentStageIndex: 0,
         timeline,

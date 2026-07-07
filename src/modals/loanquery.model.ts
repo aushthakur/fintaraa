@@ -50,6 +50,30 @@ export enum LoanQueryActivityType {
   AGENT_ASSIGNED = "agent_assigned",
   DOCUMENT_UPLOADED = "document_uploaded",
   NOTE_ADDED = "note_added",
+  FOLLOW_UP_UPDATED = "follow_up_updated",
+}
+
+export enum LoanFollowUpType {
+  CALL = "call",
+  WHATSAPP = "whatsapp",
+  EMAIL = "email",
+  DOCUMENT = "document",
+  BANK_UPDATE = "bank_update",
+  OTHER = "other",
+}
+
+export enum LoanFollowUpStatus {
+  PENDING = "pending",
+  DONE = "done",
+  MISSED = "missed",
+  CANCELLED = "cancelled",
+}
+
+export enum LoanFollowUpPriority {
+  LOW = "low",
+  MEDIUM = "medium",
+  HIGH = "high",
+  URGENT = "urgent",
 }
 
 export interface ILoanQueryActivity {
@@ -59,6 +83,25 @@ export interface ILoanQueryActivity {
   actorModel?: "Admin" | "Agent" | "Lander" | "User";
   payload?: Record<string, any>;
   createdAt: Date;
+}
+
+export interface ILoanQueryFollowUp {
+  dueAt?: Date;
+  type?: LoanFollowUpType;
+  reason?: string;
+  assignedTo?: Types.ObjectId;
+  status?: LoanFollowUpStatus;
+  priority?: LoanFollowUpPriority;
+  outcome?: string;
+  remark?: string;
+  updatedBy?: Types.ObjectId;
+  updatedByName?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export interface ILoanQueryFollowUpHistory extends ILoanQueryFollowUp {
+  action?: "scheduled" | "completed" | "missed" | "cancelled" | "updated";
 }
 
 // Allowed fields mapping based on loan type
@@ -227,6 +270,8 @@ export interface ILoanQuery extends Document {
   street: string;
   leadBy?: string;
   dataSource?: string;
+  createdByName?: string;
+  createdByRole?: string;
   updatedByName?: string;
 
   // Professional Details
@@ -263,6 +308,9 @@ export interface ILoanQuery extends Document {
   createdBy?: Types.ObjectId;
   updatedBy?: Types.ObjectId;
   activities: ILoanQueryActivity[];
+  followUpEnabled?: boolean;
+  nextFollowUp?: ILoanQueryFollowUp;
+  followUpHistory?: ILoanQueryFollowUpHistory[];
 
   // Commission tracking
   commissionRecorded: boolean;
@@ -316,6 +364,8 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     street: { type: String, required: true, trim: true },
     leadBy: { type: String, trim: true },
     dataSource: { type: String, trim: true },
+    createdByName: { type: String, trim: true },
+    createdByRole: { type: String, trim: true },
     updatedByName: { type: String, trim: true },
 
     // Professional Details
@@ -472,6 +522,69 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
       ],
       default: [],
     },
+    followUpEnabled: { type: Boolean, default: false, index: true },
+    nextFollowUp: {
+      dueAt: { type: Date, index: true },
+      type: {
+        type: String,
+        enum: Object.values(LoanFollowUpType),
+        default: LoanFollowUpType.CALL,
+      },
+      reason: { type: String, trim: true },
+      assignedTo: { type: Schema.Types.ObjectId, ref: "Admin", index: true },
+      status: {
+        type: String,
+        enum: Object.values(LoanFollowUpStatus),
+        default: LoanFollowUpStatus.PENDING,
+        index: true,
+      },
+      priority: {
+        type: String,
+        enum: Object.values(LoanFollowUpPriority),
+        default: LoanFollowUpPriority.MEDIUM,
+      },
+      outcome: { type: String, trim: true },
+      remark: { type: String, trim: true },
+      updatedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+      updatedByName: { type: String, trim: true },
+      createdAt: { type: Date },
+      updatedAt: { type: Date },
+    },
+    followUpHistory: {
+      type: [
+        {
+          dueAt: { type: Date },
+          type: {
+            type: String,
+            enum: Object.values(LoanFollowUpType),
+            default: LoanFollowUpType.CALL,
+          },
+          reason: { type: String, trim: true },
+          assignedTo: { type: Schema.Types.ObjectId, ref: "Admin" },
+          status: {
+            type: String,
+            enum: Object.values(LoanFollowUpStatus),
+            default: LoanFollowUpStatus.PENDING,
+          },
+          priority: {
+            type: String,
+            enum: Object.values(LoanFollowUpPriority),
+            default: LoanFollowUpPriority.MEDIUM,
+          },
+          outcome: { type: String, trim: true },
+          remark: { type: String, trim: true },
+          action: {
+            type: String,
+            enum: ["scheduled", "completed", "missed", "cancelled", "updated"],
+            default: "updated",
+          },
+          updatedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+          updatedByName: { type: String, trim: true },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
     rcLookup: {
       type: Schema.Types.Mixed,
       default: null,
@@ -498,6 +611,11 @@ LoanQuerySchema.index({ customerId: 1 });
 LoanQuerySchema.index({ loanType: 1, createdAt: -1 });
 LoanQuerySchema.index({ loanType: 1, status: 1, createdAt: -1 });
 LoanQuerySchema.index({ ownerAgency: 1, status: 1, createdAt: -1 });
+LoanQuerySchema.index({
+  followUpEnabled: 1,
+  "nextFollowUp.status": 1,
+  "nextFollowUp.dueAt": 1,
+});
 
 LoanQuerySchema.pre(/^find/, function (this: any, next) {
   const query = this.getQuery();

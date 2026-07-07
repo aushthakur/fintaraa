@@ -47,6 +47,8 @@ FormSubmitClickSchema.index({ "meta.actorKind": 1, createdAt: -1 });
 FormSubmitClickSchema.index({ "meta.actorRole": 1, createdAt: -1 });
 FormSubmitClickSchema.index({ "meta.agencyId": 1, createdAt: -1 });
 FormSubmitClickSchema.index({ "meta.leadId": 1, createdAt: -1 });
+FormSubmitClickSchema.index({ "meta.source": 1, createdAt: -1 });
+FormSubmitClickSchema.index({ "meta.platform": 1, createdAt: -1 });
 
 export const FormSubmitClick = model<IFormSubmitClick>(
   "FormSubmitClick",

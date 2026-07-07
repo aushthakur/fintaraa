@@ -9,6 +9,9 @@ import {
 import {
   ApplicationStatus,
   allowedFieldsByFormType,
+  InsuranceFollowUpPriority,
+  InsuranceFollowUpStatus,
+  InsuranceFollowUpType,
   InsuranceQueryActivityType,
 } from "../../modals/insurancequery.model";
 import LanderAssignmentEngine from "../../services/landerAssignment.service";
@@ -21,6 +24,7 @@ import Admin from "../../modals/admin.model";
 import {
   DEFAULT_QUERY_TIMEZONE,
   buildDateRangeInTimeZone,
+  parseDateInTimeZone,
 } from "../../utils/helper";
 
 const insuranceQueryService = new CommonService(InsuranceQuery);
@@ -67,6 +71,149 @@ const buildInsuranceScopeMatch = (userId: any, role?: string) => {
   return match;
 };
 
+const getIdString = (value: any) => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (value?._id) return String(value._id);
+  return String(value);
+};
+
+const normalizeRoleName = (role?: any) =>
+  String(role?.name || role || "")
+    .trim()
+    .toLowerCase();
+
+const formatRoleLabel = (role?: any) => {
+  const normalized = normalizeRoleName(role);
+  if (!normalized) return "";
+  return normalized
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const resolveActivityActorModel = (
+  role?: string,
+): "Admin" | "Agent" | "Lander" | "User" => {
+  if (role === "admin") return "Admin";
+  if (role === "agent") return "Agent";
+  if (role === "lander") return "Lander";
+  return "User";
+};
+
+const resolveActorDisplayName = async (actorId: any, role?: any) => {
+  const id = getIdString(actorId);
+  if (!id) return "";
+
+  const selectFields = "name username email mobile";
+  const resolveFrom = async (model: any) => {
+    const actor = await model.findById(id).select(selectFields).lean();
+    if (!actor) return "";
+    return actor.name || actor.username || actor.email || actor.mobile || "";
+  };
+
+  switch (normalizeRoleName(role)) {
+    case "admin":
+    case "agent":
+      return resolveFrom(Admin);
+    case "lander":
+      return resolveFrom(Lander);
+    case "agency":
+    case "agency_member":
+      return resolveFrom(Agency);
+    default:
+      return resolveFrom(User);
+  }
+};
+
+const buildInsuranceAuditFields = async (
+  actorId: any,
+  role?: any,
+  includeCreated = false,
+) => {
+  const normalizedRole = normalizeRoleName(role);
+  const actorObjectId = toObjectId(actorId);
+  const adminActorId =
+    normalizedRole === "admin" || normalizedRole === "agent"
+      ? actorObjectId
+      : null;
+  const actorName = await resolveActorDisplayName(actorId, normalizedRole);
+  const actorRole = formatRoleLabel(normalizedRole);
+
+  return {
+    ...(includeCreated && actorName ? { createdByName: actorName } : {}),
+    ...(includeCreated && actorRole ? { createdByRole: actorRole } : {}),
+    ...(includeCreated && adminActorId ? { createdBy: adminActorId } : {}),
+    ...(actorName ? { updatedByName: actorName } : {}),
+    ...(adminActorId ? { updatedBy: adminActorId } : {}),
+  };
+};
+
+const applyInsuranceAuditFields = (target: any, auditFields: Record<string, any>) => {
+  Object.entries(auditFields || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      target[key] = value;
+    }
+  });
+};
+
+const enrichInsuranceActivityActors = async (activities: any[] = []) => {
+  if (!Array.isArray(activities) || activities.length === 0) return activities;
+
+  const actorBuckets = {
+    Admin: new Set<string>(),
+    Agent: new Set<string>(),
+    Lander: new Set<string>(),
+    User: new Set<string>(),
+  } as Record<"Admin" | "Agent" | "Lander" | "User", Set<string>>;
+
+  activities.forEach((activity) => {
+    const actorId = getIdString(activity?.actor);
+    const actorModel = activity?.actorModel || "User";
+    if (actorId && actorBuckets[actorModel as keyof typeof actorBuckets]) {
+      actorBuckets[actorModel as keyof typeof actorBuckets].add(actorId);
+    }
+  });
+
+  const [admins, agents, landers, users] = await Promise.all([
+    actorBuckets.Admin.size
+      ? Admin.find({ _id: { $in: Array.from(actorBuckets.Admin) } })
+          .select("_id name username email")
+          .lean()
+      : Promise.resolve([]),
+    actorBuckets.Agent.size
+      ? Admin.find({ _id: { $in: Array.from(actorBuckets.Agent) } })
+          .select("_id name username email")
+          .lean()
+      : Promise.resolve([]),
+    actorBuckets.Lander.size
+      ? Lander.find({ _id: { $in: Array.from(actorBuckets.Lander) } })
+          .select("_id name email")
+          .lean()
+      : Promise.resolve([]),
+    actorBuckets.User.size
+      ? User.find({ _id: { $in: Array.from(actorBuckets.User) } })
+          .select("_id name email mobile")
+          .lean()
+      : Promise.resolve([]),
+  ]);
+
+  const lookup = new Map<string, any>();
+  [...admins, ...agents, ...landers, ...users].forEach((actor: any) => {
+    if (!actor?._id) return;
+    lookup.set(String(actor._id), actor);
+  });
+
+  return activities.map((activity) => {
+    const actor = lookup.get(getIdString(activity?.actor));
+    return {
+      ...activity,
+      actorName:
+        actor?.name || actor?.username || actor?.email || activity?.actorName,
+      actorEmail: actor?.email || activity?.actorEmail || "",
+    };
+  });
+};
+
 // Helper function to extract URL from uploaded file object
 const extractFileUrl = (file: any): string | undefined => {
   if (!file) return undefined;
@@ -86,6 +233,403 @@ const parseMaybeJson = (value: any) => {
   } catch {
     return value;
   }
+};
+
+const terminalInsuranceFollowUpStatuses = new Set<string>([
+  ApplicationStatus.APPROVED,
+  ApplicationStatus.REJECTED,
+  ApplicationStatus.CANCELLED,
+  ApplicationStatus.EXPIRED,
+  ApplicationStatus.COMPLETED,
+  ApplicationStatus.DISBURSED,
+  ApplicationStatus.NOT_INTERESTED,
+  ApplicationStatus.DROPPED_LOST,
+  ApplicationStatus.DUPLICATE,
+  ApplicationStatus.REJECTED_BY_BANK,
+  ApplicationStatus.COMPLETED_SUCCESS,
+  ApplicationStatus.CANCELLED_BY_CUSTOMER,
+]);
+
+const isTerminalInsuranceFollowUpStatus = (status?: any) =>
+  terminalInsuranceFollowUpStatuses.has(String(status || "").trim());
+
+const normalizeBooleanInput = (value: any): boolean | undefined => {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "boolean") return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "y", "on", "enabled"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no", "n", "off", "disabled"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+};
+
+const normalizeStringInput = (value: any, maxLength = 500) => {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "";
+  return normalized.length > maxLength
+    ? normalized.slice(0, maxLength)
+    : normalized;
+};
+
+const normalizeInsuranceFollowUpType = (value: any) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return Object.values(InsuranceFollowUpType).includes(
+    normalized as InsuranceFollowUpType,
+  )
+    ? (normalized as InsuranceFollowUpType)
+    : InsuranceFollowUpType.CALL;
+};
+
+const normalizeInsuranceFollowUpStatus = (value: any) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return Object.values(InsuranceFollowUpStatus).includes(
+    normalized as InsuranceFollowUpStatus,
+  )
+    ? (normalized as InsuranceFollowUpStatus)
+    : InsuranceFollowUpStatus.PENDING;
+};
+
+const normalizeInsuranceFollowUpPriority = (value: any) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return Object.values(InsuranceFollowUpPriority).includes(
+    normalized as InsuranceFollowUpPriority,
+  )
+    ? (normalized as InsuranceFollowUpPriority)
+    : InsuranceFollowUpPriority.MEDIUM;
+};
+
+const parseInsuranceFollowUpDueAt = (value: any) => {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = parseDateInTimeZone(value, "start", DEFAULT_QUERY_TIMEZONE);
+  if (!parsed || Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+};
+
+const getFollowUpObjectId = (value: any) => {
+  const objectId = toObjectId(value?._id || value);
+  return objectId || undefined;
+};
+
+const getPlainInsuranceFollowUp = (value: any) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  if (typeof value.toObject === "function") return value.toObject();
+  return { ...value };
+};
+
+const hasInsuranceFollowUpPayload = (body: Record<string, any>) =>
+  [
+    "followUpEnabled",
+    "nextFollowUp",
+    "followUpAction",
+    "followUpStatus",
+    "followUpType",
+    "followUpReason",
+    "followUpPriority",
+    "followUpDueAt",
+    "followUpAssignedTo",
+    "followUpOutcome",
+    "followUpRemark",
+  ].some((key) => Object.prototype.hasOwnProperty.call(body, key));
+
+const removeInsuranceFollowUpPayload = (body: Record<string, any>) => {
+  [
+    "followUpEnabled",
+    "nextFollowUp",
+    "followUpAction",
+    "followUpStatus",
+    "followUpType",
+    "followUpReason",
+    "followUpPriority",
+    "followUpDueAt",
+    "followUpAssignedTo",
+    "followUpOutcome",
+    "followUpRemark",
+  ].forEach((key) => delete body[key]);
+};
+
+type InsuranceFollowUpMutation = {
+  set: Record<string, any>;
+  history?: Record<string, any>;
+  activity?: Record<string, any>;
+};
+
+const buildInsuranceFollowUpActivity = ({
+  description,
+  actorId,
+  role,
+  payload,
+}: {
+  description: string;
+  actorId: any;
+  role?: string;
+  payload?: Record<string, any>;
+}) => ({
+  type: InsuranceQueryActivityType.FOLLOW_UP_UPDATED,
+  description,
+  actor: getFollowUpObjectId(actorId),
+  actorModel: resolveActivityActorModel(role),
+  payload,
+  createdAt: new Date(),
+});
+
+const buildInsuranceFollowUpMutation = ({
+  rawBody,
+  existing,
+  actorId,
+  role,
+  actorName,
+}: {
+  rawBody: Record<string, any>;
+  existing: any;
+  actorId: any;
+  role?: string;
+  actorName?: string;
+}): InsuranceFollowUpMutation | null => {
+  if (!hasInsuranceFollowUpPayload(rawBody)) return null;
+
+  const parsedNext = parseMaybeJson(rawBody.nextFollowUp);
+  const next =
+    parsedNext && typeof parsedNext === "object" && !Array.isArray(parsedNext)
+      ? parsedNext
+      : {};
+  const existingNext = getPlainInsuranceFollowUp(existing?.nextFollowUp);
+  const now = new Date();
+  const enabledInput = normalizeBooleanInput(
+    rawBody.followUpEnabled ?? next.enabled,
+  );
+  const action = String(rawBody.followUpAction || next.action || "")
+    .trim()
+    .toLowerCase();
+  const status = normalizeInsuranceFollowUpStatus(
+    rawBody.followUpStatus || next.status || existingNext.status,
+  );
+  const shouldClose =
+    enabledInput === false ||
+    action === "cancel" ||
+    action === "close" ||
+    status === InsuranceFollowUpStatus.CANCELLED ||
+    status === InsuranceFollowUpStatus.DONE ||
+    status === InsuranceFollowUpStatus.MISSED;
+
+  const dueAt =
+    parseInsuranceFollowUpDueAt(rawBody.followUpDueAt ?? next.dueAt) ||
+    parseInsuranceFollowUpDueAt(existingNext.dueAt);
+  const assignedTo =
+    getFollowUpObjectId(rawBody.followUpAssignedTo || next.assignedTo) ||
+    getFollowUpObjectId(existingNext.assignedTo) ||
+    getFollowUpObjectId(existing.assignedAgent);
+  const type = normalizeInsuranceFollowUpType(
+    rawBody.followUpType || next.type || existingNext.type,
+  );
+  const priority = normalizeInsuranceFollowUpPriority(
+    rawBody.followUpPriority || next.priority || existingNext.priority,
+  );
+  const reason =
+    normalizeStringInput(rawBody.followUpReason ?? next.reason, 240) ||
+    normalizeStringInput(existingNext.reason, 240) ||
+    "Insurance query follow-up";
+  const outcome = normalizeStringInput(
+    rawBody.followUpOutcome ?? next.outcome,
+    240,
+  );
+  const remark = normalizeStringInput(
+    rawBody.followUpRemark ?? next.remark,
+    1000,
+  );
+
+  if (!shouldClose) {
+    if (!dueAt) {
+      throw new ApiError(400, "Callback date/time is required for active follow-up");
+    }
+
+    const nextFollowUp = {
+      dueAt,
+      type,
+      reason,
+      assignedTo,
+      status: InsuranceFollowUpStatus.PENDING,
+      priority,
+      outcome: outcome || undefined,
+      remark: remark || undefined,
+      createdAt: existingNext.createdAt || now,
+      updatedBy: getFollowUpObjectId(actorId),
+      updatedByName: actorName || undefined,
+      updatedAt: now,
+    };
+
+    return {
+      set: {
+        followUpEnabled: true,
+        nextFollowUp,
+      },
+      history: {
+        dueAt,
+        type,
+        reason,
+        assignedTo,
+        status: InsuranceFollowUpStatus.PENDING,
+        priority,
+        outcome: outcome || undefined,
+        remark: remark || undefined,
+        action: existing?.followUpEnabled ? "updated" : "scheduled",
+        updatedBy: getFollowUpObjectId(actorId),
+        updatedByName: actorName || undefined,
+        createdAt: now,
+      },
+      activity: buildInsuranceFollowUpActivity({
+        description: existing?.followUpEnabled
+          ? "Insurance follow-up updated"
+          : "Insurance follow-up scheduled",
+        actorId,
+        role,
+        payload: {
+          status: InsuranceFollowUpStatus.PENDING,
+          dueAt,
+          type,
+          priority,
+          reason,
+        },
+      }),
+    };
+  }
+
+  const closedStatus =
+    status === InsuranceFollowUpStatus.DONE
+      ? InsuranceFollowUpStatus.DONE
+      : status === InsuranceFollowUpStatus.MISSED
+        ? InsuranceFollowUpStatus.MISSED
+        : InsuranceFollowUpStatus.CANCELLED;
+  const actionName =
+    closedStatus === InsuranceFollowUpStatus.DONE
+      ? "completed"
+      : closedStatus === InsuranceFollowUpStatus.MISSED
+        ? "missed"
+        : "cancelled";
+  const nextFollowUp = {
+    ...existingNext,
+    status: closedStatus,
+    outcome: outcome || undefined,
+    remark: remark || undefined,
+    updatedBy: getFollowUpObjectId(actorId),
+    updatedByName: actorName || undefined,
+    updatedAt: now,
+  };
+
+  return {
+    set: {
+      followUpEnabled: false,
+      nextFollowUp,
+    },
+    history: {
+      dueAt: dueAt || undefined,
+      type,
+      reason,
+      assignedTo,
+      status: closedStatus,
+      priority,
+      outcome: outcome || undefined,
+      remark: remark || undefined,
+      action: actionName,
+      updatedBy: getFollowUpObjectId(actorId),
+      updatedByName: actorName || undefined,
+      createdAt: now,
+    },
+    activity: buildInsuranceFollowUpActivity({
+      description: `Insurance follow-up ${actionName}`,
+      actorId,
+      role,
+      payload: {
+        status: closedStatus,
+        action: actionName,
+        dueAt,
+        type,
+        priority,
+        reason,
+        outcome,
+      },
+    }),
+  };
+};
+
+const buildAutoCloseInsuranceFollowUpMutation = ({
+  existing,
+  actorId,
+  role,
+  actorName,
+  reason,
+}: {
+  existing: any;
+  actorId: any;
+  role?: string;
+  actorName?: string;
+  reason: string;
+}): InsuranceFollowUpMutation | null => {
+  const existingNext = getPlainInsuranceFollowUp(existing?.nextFollowUp);
+  if (
+    !existing?.followUpEnabled &&
+    existingNext.status !== InsuranceFollowUpStatus.PENDING
+  ) {
+    return null;
+  }
+
+  const now = new Date();
+  const dueAt = parseInsuranceFollowUpDueAt(existingNext.dueAt);
+  const type = normalizeInsuranceFollowUpType(existingNext.type);
+  const priority = normalizeInsuranceFollowUpPriority(existingNext.priority);
+  const followUpReason =
+    normalizeStringInput(existingNext.reason, 240) ||
+    "Insurance query follow-up";
+  const nextFollowUp = {
+    ...existingNext,
+    status: InsuranceFollowUpStatus.CANCELLED,
+    outcome: reason,
+    updatedBy: getFollowUpObjectId(actorId),
+    updatedByName: actorName || undefined,
+    updatedAt: now,
+  };
+
+  return {
+    set: {
+      followUpEnabled: false,
+      nextFollowUp,
+    },
+    history: {
+      dueAt: dueAt || undefined,
+      type,
+      reason: followUpReason,
+      assignedTo: getFollowUpObjectId(existingNext.assignedTo),
+      status: InsuranceFollowUpStatus.CANCELLED,
+      priority,
+      outcome: reason,
+      remark: normalizeStringInput(existingNext.remark, 1000) || undefined,
+      action: "cancelled",
+      updatedBy: getFollowUpObjectId(actorId),
+      updatedByName: actorName || undefined,
+      createdAt: now,
+    },
+    activity: buildInsuranceFollowUpActivity({
+      description: "Insurance follow-up auto-closed",
+      actorId,
+      role,
+      payload: {
+        status: InsuranceFollowUpStatus.CANCELLED,
+        action: "auto_closed",
+        reason,
+      },
+    }),
+  };
 };
 
 // Helper function to process uploaded files and map to request body
@@ -364,6 +908,10 @@ export class InsuranceQueryController {
           req.body.ownerAgency = customerId;
         }
       }
+      applyInsuranceAuditFields(
+        req.body,
+        await buildInsuranceAuditFields(customerId, role, true),
+      );
       const user = await User.findById(customerId);
       normalizeInsurancePayload(req, user);
 
@@ -556,6 +1104,62 @@ export class InsuranceQueryController {
           },
         },
         {
+          $lookup: {
+            from: "admins",
+            localField: "createdBy",
+            foreignField: "_id",
+            as: "createdByData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$createdByData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "roles",
+            localField: "createdByData.role",
+            foreignField: "_id",
+            as: "createdByRoleData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$createdByRoleData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "admins",
+            localField: "updatedBy",
+            foreignField: "_id",
+            as: "updatedByData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$updatedByData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "roles",
+            localField: "updatedByData.role",
+            foreignField: "_id",
+            as: "updatedByRoleData",
+          },
+        },
+        {
+          $unwind: {
+            path: "$updatedByRoleData",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
           $addFields: {
             assignedAgent: {
               $cond: {
@@ -581,12 +1185,50 @@ export class InsuranceQueryController {
                 else: "$assignedLander",
               },
             },
+            createdBy: {
+              $cond: {
+                if: { $ifNull: ["$createdByData", false] },
+                then: {
+                  _id: "$createdByData._id",
+                  name: "$createdByData.name",
+                  username: "$createdByData.username",
+                  email: "$createdByData.email",
+                  mobile: "$createdByData.mobile",
+                  role: {
+                    _id: "$createdByRoleData._id",
+                    name: "$createdByRoleData.name",
+                  },
+                },
+                else: "$createdBy",
+              },
+            },
+            updatedBy: {
+              $cond: {
+                if: { $ifNull: ["$updatedByData", false] },
+                then: {
+                  _id: "$updatedByData._id",
+                  name: "$updatedByData.name",
+                  username: "$updatedByData.username",
+                  email: "$updatedByData.email",
+                  mobile: "$updatedByData.mobile",
+                  role: {
+                    _id: "$updatedByRoleData._id",
+                    name: "$updatedByRoleData.name",
+                  },
+                },
+                else: "$updatedBy",
+              },
+            },
           },
         },
         {
           $project: {
             assignedAgentData: 0,
             assignedLanderData: 0,
+            createdByData: 0,
+            createdByRoleData: 0,
+            updatedByData: 0,
+            updatedByRoleData: 0,
           },
         },
       ];
@@ -684,6 +1326,227 @@ export class InsuranceQueryController {
             byStatus,
           },
           "Insurance query stats fetched successfully",
+        ),
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getCompletedPremiumStats(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const userId = (req as any).user?._id;
+      const { role } = (req as any).user || {};
+      const { startDate, endDate, rangePreset, typeOfInsurance } =
+        req.query as Record<string, string>;
+
+      const normalizedType = typeOfInsurance
+        ? String(typeOfInsurance).toLowerCase()
+        : "";
+      if (
+        normalizedType &&
+        !Object.values(InsuranceType).includes(
+          normalizedType as InsuranceType,
+        )
+      ) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid typeOfInsurance"));
+      }
+
+      const toDate = (value?: string): Date | null => {
+        if (!value) return null;
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return null;
+        return date;
+      };
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const isAllTime = rangePreset === "all_time";
+
+      let currentStart: Date | null = toDate(startDate);
+      let currentEnd: Date | null = toDate(endDate);
+
+      const applyPreset = () => {
+        if (rangePreset === "last_7_days") {
+          const end = new Date(today);
+          const start = new Date(today);
+          start.setDate(start.getDate() - 6);
+          currentStart = start;
+          currentEnd = end;
+          return;
+        }
+        if (rangePreset === "last_30_days") {
+          const end = new Date(today);
+          const start = new Date(today);
+          start.setDate(start.getDate() - 29);
+          currentStart = start;
+          currentEnd = end;
+          return;
+        }
+        if (rangePreset === "this_month") {
+          const end = new Date(today);
+          const start = new Date(today.getFullYear(), today.getMonth(), 1);
+          currentStart = start;
+          currentEnd = end;
+          return;
+        }
+        if (rangePreset === "last_month") {
+          const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+          const end = new Date(today.getFullYear(), today.getMonth(), 0);
+          currentStart = start;
+          currentEnd = end;
+        }
+      };
+
+      if (!isAllTime && (!currentStart || !currentEnd)) {
+        applyPreset();
+      }
+
+      if (!isAllTime && (!currentStart || !currentEnd)) {
+        const end = new Date(today);
+        const start = new Date(today);
+        start.setDate(start.getDate() - 29);
+        currentStart = start;
+        currentEnd = end;
+      }
+
+      const currentEndFixed =
+        !isAllTime && currentEnd ? new Date(currentEnd) : null;
+      currentEndFixed?.setHours(23, 59, 59, 999);
+
+      const daysInRange =
+        !isAllTime && currentStart && currentEndFixed
+          ? Math.max(
+              1,
+              Math.ceil(
+                (currentEndFixed.getTime() - currentStart.getTime()) /
+                  (1000 * 60 * 60 * 24) +
+                  1,
+              ),
+            )
+          : 0;
+
+      const previousEnd =
+        !isAllTime && currentStart ? new Date(currentStart) : null;
+      previousEnd?.setDate(previousEnd.getDate() - 1);
+      previousEnd?.setHours(23, 59, 59, 999);
+
+      const previousStart = previousEnd ? new Date(previousEnd) : null;
+      previousStart?.setDate(previousStart.getDate() - (daysInRange - 1));
+      previousStart?.setHours(0, 0, 0, 0);
+
+      const currentMatch: Record<string, any> = {
+        isDeleted: { $ne: true },
+        status: ApplicationStatus.COMPLETED,
+      };
+      if (normalizedType) currentMatch.typeOfInsurance = normalizedType;
+      if (!isAllTime && currentStart && currentEndFixed) {
+        currentMatch.updatedAt = {
+          $gte: currentStart,
+          $lte: currentEndFixed,
+        };
+      }
+      Object.assign(currentMatch, buildInsuranceScopeMatch(userId, role));
+
+      const previousMatch: Record<string, any> = {
+        isDeleted: { $ne: true },
+        status: ApplicationStatus.COMPLETED,
+      };
+      if (normalizedType) previousMatch.typeOfInsurance = normalizedType;
+      if (!isAllTime && previousStart && previousEnd) {
+        previousMatch.updatedAt = {
+          $gte: previousStart,
+          $lte: previousEnd,
+        };
+      }
+      Object.assign(previousMatch, buildInsuranceScopeMatch(userId, role));
+
+      const statsPipeline = (match: Record<string, any>) => [
+        { $match: match },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            totalAnnualIncome: { $sum: { $ifNull: ["$annualIncome", 0] } },
+            assignedCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $or: [
+                      { $ne: ["$assignedLander", null] },
+                      { $ne: ["$assignedLander", undefined] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+            types: { $addToSet: "$typeOfInsurance" },
+          },
+        },
+      ];
+
+      const [currentAgg, previousAgg] = await Promise.all([
+        InsuranceQuery.aggregate(statsPipeline(currentMatch)),
+        isAllTime
+          ? Promise.resolve([])
+          : InsuranceQuery.aggregate(statsPipeline(previousMatch)),
+      ]);
+
+      const current = currentAgg?.[0] || {
+        total: 0,
+        totalAnnualIncome: 0,
+        assignedCount: 0,
+        types: [],
+      };
+      const previous = previousAgg?.[0] || {
+        total: 0,
+      };
+
+      const safePct = (currentValue: number, previousValue: number) => {
+        const currentNumber = Number(currentValue) || 0;
+        const previousNumber = Number(previousValue) || 0;
+        if (previousNumber === 0) return currentNumber === 0 ? 0 : 100;
+        return ((currentNumber - previousNumber) / previousNumber) * 100;
+      };
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            typeOfInsurance: normalizedType || "all",
+            completedRange:
+              !isAllTime && currentStart && currentEndFixed
+                ? {
+                    startDate: currentStart.toISOString(),
+                    endDate: currentEndFixed.toISOString(),
+                  }
+                : null,
+            previousCompletedRange:
+              !isAllTime && previousStart && previousEnd
+                ? {
+                    startDate: previousStart.toISOString(),
+                    endDate: previousEnd.toISOString(),
+                  }
+                : null,
+            totalCompleted: Number(current.total || 0),
+            totalAnnualIncome: Number(current.totalAnnualIncome || 0),
+            assignedInView: Number(current.assignedCount || 0),
+            typesInView: Array.isArray(current.types)
+              ? current.types.filter(Boolean).length
+              : 0,
+            completedGrowthPercent: isAllTime
+              ? 0
+              : safePct(current.total, previous.total),
+          },
+          "Completed insurance premium stats fetched successfully",
         ),
       );
     } catch (err) {
@@ -789,45 +1652,113 @@ export class InsuranceQueryController {
     try {
       const customerId = (req as any).user?._id;
       const { role } = (req as any).user || {};
+      const elevatedRole = ["admin", "agent", "lander"].includes(role);
+      const rawFollowUpBody = { ...(req.body || {}) };
+      const hasExplicitFollowUpPayload =
+        hasInsuranceFollowUpPayload(rawFollowUpBody);
       
-      //only draft queries can be updated
       const existingResult = await insuranceQueryService.getById(
         req.params.id,
         true,
         
       );
-      if(existingResult?.status !== ApplicationStatus.DRAFT) {
+      if(existingResult?.status !== ApplicationStatus.DRAFT && !elevatedRole) {
         return res
           .status(400)
           .json(new ApiError(400, "Only draft queries can be updated"));
       }
 
-      // Ensure user can only update their own queries (unless admin)
-      if (role !== "admin" && existingResult.customerId?._id?.toString() !== customerId) {
+      const actorId = getIdString(customerId);
+      const assignedAgentId = getIdString(
+        existingResult.assignedAgent?._id || existingResult.assignedAgent,
+      );
+      const assignedLanderId = getIdString(
+        existingResult.assignedLander?._id || existingResult.assignedLander,
+      );
+      const queryCustomerId = getIdString(
+        existingResult.customerId?._id || existingResult.customerId,
+      );
+
+      if (role === "agent" && assignedAgentId !== actorId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only update insurance queries assigned to you"));
+      }
+      if (role === "lander" && assignedLanderId !== actorId) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "You can only update insurance queries assigned to you"));
+      }
+      if (
+        !elevatedRole &&
+        queryCustomerId !== actorId
+      ) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only update your own insurance queries"));
       }
 
-      // Process uploaded files and map URLs
-      processFileUploads(req);
+      removeInsuranceFollowUpPayload(req.body);
+      const hasRegularPayload = Object.keys(req.body || {}).length > 0;
+      if (hasRegularPayload) {
+        processFileUploads(req);
+      }
 
       // Prevent changing customerId
       delete req.body.customerId;
-      const user = await User.findById(customerId);
-      normalizeInsurancePayload(req, user, existingResult);
+      const auditFields = await buildInsuranceAuditFields(customerId, role);
+      const actorName = auditFields.updatedByName || "";
+      const explicitFollowUpMutation = hasExplicitFollowUpPayload
+        ? buildInsuranceFollowUpMutation({
+            rawBody: rawFollowUpBody,
+            existing: existingResult,
+            actorId: customerId,
+            role,
+            actorName,
+          })
+        : null;
+      const nextStatus = req.body.status || existingResult.status;
+      const autoCloseFollowUpMutation =
+        !explicitFollowUpMutation &&
+        nextStatus !== existingResult.status &&
+        isTerminalInsuranceFollowUpStatus(nextStatus)
+          ? buildAutoCloseInsuranceFollowUpMutation({
+              existing: existingResult,
+              actorId: customerId,
+              role,
+              actorName,
+              reason: `Query moved to ${formatRoleLabel(nextStatus) || nextStatus}`,
+            })
+          : null;
+      const followUpMutation =
+        explicitFollowUpMutation || autoCloseFollowUpMutation;
+
+      applyInsuranceAuditFields(req.body, auditFields);
+      Object.assign(req.body, followUpMutation?.set || {});
+      const user = hasRegularPayload ? await User.findById(customerId) : null;
+      if (hasRegularPayload) {
+        normalizeInsurancePayload(req, user, existingResult);
+      }
 
       // Merge with existing policyDetails if updating
-      if (req.body.policyDetails && existingResult.policyDetails) {
+      if (
+        hasRegularPayload &&
+        req.body.policyDetails &&
+        existingResult.policyDetails
+      ) {
         req.body.policyDetails = {
           ...existingResult.policyDetails,
           ...req.body.policyDetails,
         };
       }
 
-      const updatedResult = await insuranceQueryService.updateById(req.params.id, req.body, {
-        populate: true,
-      });
+      const updatedResult = await insuranceQueryService.updateById(
+        req.params.id,
+        req.body,
+        {
+          populate: true,
+        },
+      );
       
       // Track status change
       if (updatedResult && existingResult?.status !== updatedResult.status) {
@@ -835,24 +1766,33 @@ export class InsuranceQueryController {
         updatedResult.activities.push({
           type: InsuranceQueryActivityType.STATUS_CHANGED,
           description: `Status changed from ${existingResult?.status} to ${updatedResult.status}`,
-          actor: customerId ? new Types.ObjectId(String(customerId)) : undefined,
-          actorModel: role === "admin" ? "Admin" : "User",
+          actor: getFollowUpObjectId(customerId),
+          actorModel: resolveActivityActorModel(role),
           payload: {
             previousStatus: existingResult?.status,
             newStatus: updatedResult.status,
           },
           createdAt: new Date(),
         });
-      } else {
+      } else if (!followUpMutation) {
         // Track update if status didn't change
         updatedResult.activities = updatedResult.activities || [];
         updatedResult.activities.push({
           type: InsuranceQueryActivityType.UPDATED,
           description: "Insurance query updated",
-          actor: customerId ? new Types.ObjectId(String(customerId)) : undefined,
-          actorModel: role === "admin" ? "Admin" : "User",
+          actor: getFollowUpObjectId(customerId),
+          actorModel: resolveActivityActorModel(role),
           createdAt: new Date(),
         });
+      }
+
+      if (followUpMutation?.history) {
+        updatedResult.followUpHistory = updatedResult.followUpHistory || [];
+        updatedResult.followUpHistory.push(followUpMutation.history as any);
+      }
+      if (followUpMutation?.activity) {
+        updatedResult.activities = updatedResult.activities || [];
+        updatedResult.activities.push(followUpMutation.activity as any);
       }
       
       // Auto-assign employee if status changed from draft to non-draft and no employee assigned
@@ -975,10 +1915,13 @@ export class InsuranceQueryController {
           .json(new ApiError(404, "Insurance query not found"));
       }
 
+      const actorId = (req as any).user?._id;
+      const auditFields = await buildInsuranceAuditFields(actorId, role);
+
       // Update assignedLander
       const updatedResult = await insuranceQueryService.updateById(
         req.params.id,
-        { assignedLander: landerId },
+        { assignedLander: landerId, ...auditFields },
         {
           populate: [{ path: "assignedLander", select: "name email mobile" }],
         }
@@ -1038,11 +1981,13 @@ export class InsuranceQueryController {
       const actorId = (req as any).user?._id;
       const previousAgentId = existingResult.assignedAgent;
       const agentName = (agent as any).name || agent.username || agent.email;
+      const auditFields = await buildInsuranceAuditFields(actorId, role);
 
       const updatedResult = await insuranceQueryService.updateById(
         req.params.id,
         {
           assignedAgent: agentId,
+          ...auditFields,
           $push: {
             activities: {
               type: InsuranceQueryActivityType.AGENT_ASSIGNED,
@@ -1117,9 +2062,14 @@ export class InsuranceQueryController {
           .json(new ApiError(403, "You can only view queries assigned to you"));
       }
 
+      const enrichedActivities = await enrichInsuranceActivityActors(
+        query.activities || [],
+      );
+
       // Ensure commission fields are always present (for backward compatibility with old documents)
       const responseData = {
         ...query,
+        activities: enrichedActivities,
         commissionRecorded: query.commissionRecorded ?? false,
         commissionRecordedAt: query.commissionRecordedAt ?? null,
         commissionTransactionId: query.commissionTransactionId ?? null,
@@ -1171,6 +2121,10 @@ export class InsuranceQueryController {
         actorModel: role === "admin" ? "Admin" : "Lander",
         createdAt: new Date(),
       });
+      applyInsuranceAuditFields(
+        query,
+        await buildInsuranceAuditFields(actorId, role),
+      );
 
       await query.save();
 
@@ -1206,7 +2160,10 @@ export class InsuranceQueryController {
       }
 
       // Check permissions for lander
-      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+      if (
+        role === "lander" &&
+        getIdString(query.assignedLander) !== getIdString(actorId)
+      ) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only update status of queries assigned to you"));
@@ -1214,13 +2171,29 @@ export class InsuranceQueryController {
 
       const oldStatus = query.status;
       query.status = status;
+      const auditFields = await buildInsuranceAuditFields(actorId, role);
+      const actorName = auditFields.updatedByName || "";
+      const followUpMutation =
+        oldStatus !== status && isTerminalInsuranceFollowUpStatus(status)
+          ? buildAutoCloseInsuranceFollowUpMutation({
+              existing: query,
+              actorId,
+              role,
+              actorName,
+              reason: `Query moved to ${formatRoleLabel(status) || status}`,
+            })
+          : null;
+      applyInsuranceAuditFields(query, auditFields);
+      if (followUpMutation?.set) {
+        query.set(followUpMutation.set);
+      }
 
       query.activities = query.activities || [];
       query.activities.push({
         type: InsuranceQueryActivityType.STATUS_CHANGED,
         description: `Status changed from ${oldStatus} to ${status}${remarks ? `: ${remarks}` : ""}`,
-        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
-        actorModel: role === "admin" ? "Admin" : "Lander",
+        actor: getFollowUpObjectId(actorId),
+        actorModel: resolveActivityActorModel(role),
         payload: {
           oldStatus,
           newStatus: status,
@@ -1228,6 +2201,13 @@ export class InsuranceQueryController {
         },
         createdAt: new Date(),
       });
+      if (followUpMutation?.history) {
+        query.followUpHistory = query.followUpHistory || [];
+        query.followUpHistory.push(followUpMutation.history as any);
+      }
+      if (followUpMutation?.activity) {
+        query.activities.push(followUpMutation.activity as any);
+      }
 
       await query.save();
 
@@ -1308,6 +2288,10 @@ export class InsuranceQueryController {
         payload: { uploadedDocuments: uploadedDocs },
         createdAt: new Date(),
       });
+      applyInsuranceAuditFields(
+        query,
+        await buildInsuranceAuditFields(actorId, role),
+      );
 
       await query.save();
 
@@ -1351,6 +2335,10 @@ export class InsuranceQueryController {
 
       // Merge policy details
       query.policyDetails = { ...query.policyDetails, ...policyDetails };
+      applyInsuranceAuditFields(
+        query,
+        await buildInsuranceAuditFields(actorId, role),
+      );
 
       query.activities = query.activities || [];
       query.activities.push({
@@ -1405,6 +2393,10 @@ export class InsuranceQueryController {
       const previousLanderId = query.assignedLander;
 
       query.assignedLander = new Types.ObjectId(landerId);
+      applyInsuranceAuditFields(
+        query,
+        await buildInsuranceAuditFields(actorId, role),
+      );
 
       query.activities = query.activities || [];
       query.activities.push({
@@ -1455,7 +2447,10 @@ export class InsuranceQueryController {
       }
 
       // Check permissions for lander
-      if (role === "lander" && query.assignedLander?.toString() !== actorId) {
+      if (
+        role === "lander" &&
+        getIdString(query.assignedLander) !== getIdString(actorId)
+      ) {
         return res
           .status(403)
           .json(new ApiError(403, "You can only complete queries assigned to you"));
@@ -1481,13 +2476,26 @@ export class InsuranceQueryController {
 
       const oldStatus = query.status;
       query.status = ApplicationStatus.COMPLETED;
+      const auditFields = await buildInsuranceAuditFields(actorId, role);
+      const actorName = auditFields.updatedByName || "";
+      const followUpMutation = buildAutoCloseInsuranceFollowUpMutation({
+        existing: query,
+        actorId,
+        role,
+        actorName,
+        reason: "Query completed",
+      });
+      applyInsuranceAuditFields(query, auditFields);
+      if (followUpMutation?.set) {
+        query.set(followUpMutation.set);
+      }
 
       query.activities = query.activities || [];
       query.activities.push({
         type: InsuranceQueryActivityType.STATUS_CHANGED,
         description: `Query completed${remarks ? `: ${remarks}` : ""}`,
-        actor: actorId ? new Types.ObjectId(String(actorId)) : undefined,
-        actorModel: role === "admin" ? "Admin" : "Lander",
+        actor: getFollowUpObjectId(actorId),
+        actorModel: resolveActivityActorModel(role),
         payload: {
           oldStatus,
           newStatus: ApplicationStatus.COMPLETED,
@@ -1495,6 +2503,13 @@ export class InsuranceQueryController {
         },
         createdAt: new Date(),
       });
+      if (followUpMutation?.history) {
+        query.followUpHistory = query.followUpHistory || [];
+        query.followUpHistory.push(followUpMutation.history as any);
+      }
+      if (followUpMutation?.activity) {
+        query.activities.push(followUpMutation.activity as any);
+      }
 
       await query.save();
 

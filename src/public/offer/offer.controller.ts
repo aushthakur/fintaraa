@@ -341,12 +341,30 @@ export class OfferController {
       const existingIndex = offer.applications?.findIndex(
         (app) => app.user?.toString() === String(userId)
       );
+      const metadata =
+        req.body?.metadata && typeof req.body.metadata === "object"
+          ? req.body.metadata
+          : {};
       const applicationPayload = {
         user: new Types.ObjectId(userId),
         status: (req.body?.status as any) || "applied",
         appliedAt: new Date(),
         notes: req.body?.notes,
-        metadata: req.body?.metadata,
+        metadata: {
+          source:
+            metadata.source ||
+            req.body?.source ||
+            req.get("x-source-platform") ||
+            "unknown",
+          platform:
+            metadata.platform ||
+            req.body?.platform ||
+            req.body?.sourcePlatform ||
+            req.get("x-client-platform") ||
+            metadata.source ||
+            "unknown",
+          ...metadata,
+        },
       };
 
       if (existingIndex !== undefined && existingIndex >= 0) {

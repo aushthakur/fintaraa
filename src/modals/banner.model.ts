@@ -3,6 +3,12 @@ import mongoose, { Document, Schema } from "mongoose";
 export enum BannerType {
   CUSTOM = "custom",
   HOMEPAGE = "homepage",
+  LOAN_DETAIL = "loan_detail",
+  INSURANCE_DETAIL = "insurance_detail",
+  LOAN_DETAIL_POPUP_WEB = "loan_detail_popup_web",
+  LOAN_DETAIL_POPUP_MOBILE = "loan_detail_popup_mobile",
+  INSURANCE_DETAIL_POPUP_WEB = "insurance_detail_popup_web",
+  INSURANCE_DETAIL_POPUP_MOBILE = "insurance_detail_popup_mobile",
   CATEGORY = "category",
   PROPERTY = "property",
   PROMOTION = "promotion",

@@ -4,6 +4,7 @@ import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
 import { CommonService } from "../../services/common.services";
 import {
+  EligibilityAmountType,
   EligibilityCriteria,
   EligibilityCriteriaStatus,
 } from "../../modals/eligibilityCriteria.model";
@@ -22,7 +23,10 @@ const ELIGIBILITY_BASE_FIELDS = [
   "maxAge",
   "maxTenureYears",
   "processingFees",
+  "processingFeesType",
   "insurance",
+  "insuranceType",
+  "insuranceValue",
   "propertyInsuranceRequired",
   "propertyInsurancePercentage",
   "lifeInsuranceRequired",
@@ -54,6 +58,8 @@ const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
     "currentExperience",
     "netSalary",
     "currentTotalEmi",
+    "businessProgramFresh",
+    "companyCategoryBasis",
     "companyCategory",
     "abb",
     "maximumLoanAmount",
@@ -62,7 +68,6 @@ const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
     "cibilScore",
     "itrYears",
     "totalVintage",
-    "currentVintage",
     "businessProgramFresh",
     "gstAmount",
     "abb",
@@ -77,7 +82,6 @@ const ELIGIBILITY_FIELDS_BY_SALARY_TYPE: Record<string, string[]> = {
     "cibilScore",
     "itrYears",
     "totalVintage",
-    "currentVintage",
     "businessProgramFresh",
     "receiptsAmount",
     "abb",
@@ -216,6 +220,27 @@ const normalizeBooleanFlag = (value: any) => {
   return ["yes", "true", "1", "active", "checked"].includes(raw);
 };
 
+const normalizeAmountType = (
+  value: any,
+  fallback: EligibilityAmountType = EligibilityAmountType.PERCENTAGE,
+) => {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase();
+  return raw === EligibilityAmountType.FIXED
+    ? EligibilityAmountType.FIXED
+    : raw === EligibilityAmountType.PERCENTAGE
+      ? EligibilityAmountType.PERCENTAGE
+      : fallback;
+};
+
+const normalizeCompanyCategoryBasis = (value: any) => {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase();
+  return raw === "bank" || raw === "bank based" ? "bank" : "company";
+};
+
 const normalizeAbbValue = (value: any) => {
   const rawValues = Array.isArray(value)
     ? value
@@ -256,6 +281,14 @@ const sanitizeEligibilityPayload = (payload: Record<string, any>) => {
     nipPdBase: payload.nipPdBase ?? payload.nipPdBaseAmount,
     lowLtvMin: payload.lowLtvMin ?? payload.lowLtvMinimum,
     lowLtvMax: payload.lowLtvMax ?? payload.lowLtvMaximum,
+    processingFeesType: normalizeAmountType(payload.processingFeesType),
+    insuranceType: normalizeAmountType(
+      payload.insuranceType,
+      EligibilityAmountType.FIXED,
+    ),
+    companyCategoryBasis: normalizeCompanyCategoryBasis(
+      payload.companyCategoryBasis,
+    ),
     ...(payload.propertyInsuranceRequired !== undefined
       ? {
           propertyInsuranceRequired: normalizeBooleanFlag(
@@ -509,19 +542,22 @@ const PUBLIC_ELIGIBILITY_SELECT_FIELDS = [
   "industrialCatBLtv",
   "industrialCatCLtv",
   "processingFees",
+  "processingFeesType",
   "insurance",
+  "insuranceType",
+  "insuranceValue",
   "propertyInsuranceRequired",
   "propertyInsurancePercentage",
   "lifeInsuranceRequired",
   "lifeInsurancePercentage",
   "loginFees",
   "companyCategory",
+  "companyCategoryBasis",
   "abb",
   "maximumLoanAmount",
   "currentExperience",
   "totalExperience",
   "totalVintage",
-  "currentVintage",
   "netSalary",
   "currentTotalEmi",
   "receiptsAmount",
@@ -641,6 +677,18 @@ const formatPublicPercent = (value?: number | null, suffix = "%") => {
   return `${Number(value).toFixed(Number(value) % 1 === 0 ? 0 : 2)}${suffix}`;
 };
 
+const formatPublicAmountByType = (
+  value: any,
+  type?: any,
+  fallback: EligibilityAmountType = EligibilityAmountType.PERCENTAGE,
+) => {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return "";
+  return normalizeAmountType(type, fallback) === EligibilityAmountType.FIXED
+    ? formatPublicCurrency(numberValue)
+    : formatPublicPercent(numberValue);
+};
+
 const formatPublicYears = (value?: number | null) => {
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue)) return "";
@@ -691,12 +739,30 @@ const buildPublicTermHighlights = (criteria: Record<string, any>) => {
   );
   push(
     "Processing Fee",
-    criteria.processingFees
-      ? `${formatPublicPercent(criteria.processingFees)} of loan amount`
+    criteria.processingFees !== null &&
+      criteria.processingFees !== undefined &&
+      criteria.processingFees !== ""
+      ? `${formatPublicAmountByType(criteria.processingFees, criteria.processingFeesType)}${
+          normalizeAmountType(criteria.processingFeesType) ===
+          EligibilityAmountType.FIXED
+            ? ""
+            : " of loan amount"
+        }`
       : "",
   );
   push("Login Fee", criteria.loginFees);
-  push("Insurance", criteria.insurance);
+  push(
+    "Insurance",
+    criteria.insuranceValue !== null &&
+      criteria.insuranceValue !== undefined &&
+      criteria.insuranceValue !== ""
+      ? formatPublicAmountByType(
+          criteria.insuranceValue,
+          criteria.insuranceType,
+          EligibilityAmountType.FIXED,
+        )
+      : criteria.insurance,
+  );
   push(
     "Property Insurance",
     criteria.propertyInsuranceRequired
@@ -728,6 +794,15 @@ const buildPublicTermHighlights = (criteria: Record<string, any>) => {
       : criteria.companyCategory,
   );
   push(
+    "Category Basis",
+    criteria.companyCategoryBasis
+      ? criteria.companyCategoryBasis === "bank"
+        ? "Bank Based"
+        : "Company Based"
+      : "",
+  );
+  push("Balance Transfer", criteria.businessProgramFresh);
+  push(
     "Total Experience",
     criteria.totalExperience ? formatPublicYears(criteria.totalExperience) : "",
   );
@@ -741,23 +816,11 @@ const buildPublicTermHighlights = (criteria: Record<string, any>) => {
     "Business Vintage",
     criteria.totalVintage ? formatPublicYears(criteria.totalVintage) : "",
   );
-  push(
-    "Current Vintage",
-    criteria.currentVintage ? formatPublicYears(criteria.currentVintage) : "",
-  );
   push("GST Amount", formatPublicCurrency(criteria.gstAmount));
   push("Banking Amount", formatPublicCurrency(criteria.bankingAmount));
   push("ITR Amount", formatPublicCurrency(criteria.itrAmount));
   push("Receipts Amount", formatPublicCurrency(criteria.receiptsAmount));
   push("NIP/PD Base", formatPublicCurrency(criteria.nipPdBase));
-  push(
-    "Low LTV",
-    criteria.lowLtvMin || criteria.lowLtvMax
-      ? `${formatPublicPercent(criteria.lowLtvMin || 0)} - ${formatPublicPercent(criteria.lowLtvMax || 0)}`
-      : criteria.lowLtv
-        ? `${criteria.lowLtv}%`
-        : "",
-  );
   push(
     "Salary FOIR",
     [
@@ -914,13 +977,17 @@ const buildPublicEligibilityResult = (
     cibilScore: criteria.cibilScore,
     roi: criteria.roi,
     processingFees: criteria.processingFees,
+    processingFeesType: criteria.processingFeesType,
     loginFees: criteria.loginFees,
     insurance: criteria.insurance,
+    insuranceType: criteria.insuranceType,
+    insuranceValue: criteria.insuranceValue,
     minAge: criteria.minAge,
     maxAge: criteria.maxAge,
     maxTenureYears: criteria.maxTenureYears,
     maximumLoanAmount: criteria.maximumLoanAmount,
     companyCategory: criteria.companyCategory,
+    companyCategoryBasis: criteria.companyCategoryBasis,
     eligible,
     matchScore,
     checks,

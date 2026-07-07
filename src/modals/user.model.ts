@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { config } from "../config/config";
 import {
   allocatePrefixedSequence,
-  formatDaySequencePrefix,
+  formatYearMonthDaySequencePrefix,
 } from "../utils/idAllocator";
 import mongoose, { Schema, Document, Types } from "mongoose";
 
@@ -712,7 +712,7 @@ const allocateUniqueCustomerId = async (user: any): Promise<string> => {
   const maxAttempts = 25;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const datePrefix = formatDaySequencePrefix(new Date());
+    const datePrefix = formatYearMonthDaySequencePrefix(new Date());
     const candidate = await allocatePrefixedSequence({
       key: `customerId:${datePrefix}`,
       prefix: `FIN${datePrefix}`,

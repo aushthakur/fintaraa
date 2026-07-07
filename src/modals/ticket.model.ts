@@ -231,6 +231,11 @@ export interface ITicket extends Document {
   relatedTickets?: Types.ObjectId[];
   listingId?: Types.ObjectId; // Reference to the product listing
   transactionId?: Types.ObjectId; // Reference to transaction/barter deal
+  source?: string;
+  platform?: string;
+  formSource?: string;
+  whatsappConsent?: boolean;
+  communicationConsent?: Record<string, any>;
 }
 
 /** Subdocument Schema */
@@ -348,6 +353,11 @@ const TicketSchema = new Schema<ITicket>(
     relatedTickets: [{ type: Schema.Types.ObjectId, ref: "Ticket" }],
     listingId: { type: Schema.Types.ObjectId, ref: "Product" },
     transactionId: { type: Schema.Types.ObjectId, ref: "Transaction" },
+    source: { type: String, trim: true, default: "website" },
+    platform: { type: String, trim: true, default: "website" },
+    formSource: { type: String, trim: true },
+    whatsappConsent: { type: Boolean, default: false },
+    communicationConsent: { type: Object, default: {} },
   },
   { timestamps: true },
 );

@@ -35,6 +35,10 @@ router.post(
   asyncHandler(InsuranceQueryController.createQuery)
 );
 router.get("/stats", asyncHandler(InsuranceQueryController.getStats));
+router.get(
+  "/completed-premium-stats",
+  asyncHandler(InsuranceQueryController.getCompletedPremiumStats),
+);
 router.get("/sidebar-counts", asyncHandler(InsuranceQueryController.getSidebarCounts));
 router.get("/", asyncHandler(InsuranceQueryController.getAllQueries));
 router.get("/:id", asyncHandler(InsuranceQueryController.getQueryById));

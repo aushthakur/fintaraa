@@ -86,6 +86,12 @@ router.put(
   s3UploaderMiddleware("profile"),
   asyncHandler(AgencyController.updateAgency)
 );
+router.post(
+  "/upload-bank-document",
+  dynamicUpload([{ name: "document", maxCount: 1 }]),
+  s3UploaderMiddleware("kyc"),
+  asyncHandler(AgencyController.uploadBankDocument)
+);
 router.put(
   "/kyc-profile",
   dynamicUpload([
