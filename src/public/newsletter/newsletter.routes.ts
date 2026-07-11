@@ -1,0 +1,31 @@
+import express from "express";
+import { asyncHandler } from "../../utils/asyncHandler";
+import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
+import { NewsletterController } from "./newsletter.controller";
+
+const router = express.Router();
+
+router.post("/subscribe", asyncHandler(NewsletterController.subscribe));
+
+router.get(
+  "/",
+  authenticateToken,
+  authorize("admin"),
+  asyncHandler(NewsletterController.getAll),
+);
+
+router.get(
+  "/:id",
+  authenticateToken,
+  authorize("admin"),
+  asyncHandler(NewsletterController.getById),
+);
+
+router.delete(
+  "/:id",
+  authenticateToken,
+  authorize("admin"),
+  asyncHandler(NewsletterController.deleteById),
+);
+
+export default router;
