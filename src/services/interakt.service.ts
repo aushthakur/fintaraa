@@ -29,6 +29,23 @@ const normalizeBaseUrl = (url: string) => {
   return `${trimmed}/public/message/`;
 };
 
+const normalizePhone = (countryCode: string, phoneNumber: string) => {
+  const normalizedCountryCode = `+${countryCode.replace(/\D/g, "")}`;
+  let normalizedPhone = phoneNumber.replace(/\D/g, "");
+  const countryDigits = normalizedCountryCode.slice(1);
+
+  if (normalizedPhone.startsWith(countryDigits) && normalizedPhone.length > 10) {
+    normalizedPhone = normalizedPhone.slice(countryDigits.length);
+  }
+  normalizedPhone = normalizedPhone.replace(/^0+/, "");
+
+  if (!countryDigits || normalizedPhone.length < 7 || normalizedPhone.length > 15) {
+    throw new ApiError(400, "Invalid countryCode or phoneNumber.");
+  }
+
+  return { countryCode: normalizedCountryCode, phoneNumber: normalizedPhone };
+};
+
 export const sendInteraktTemplateMessage = async (
   payload: InteraktTemplatePayload
 ) => {
@@ -50,8 +67,27 @@ export const sendInteraktTemplateMessage = async (
     throw new ApiError(400, "Missing template name or language code.");
   }
 
+  if (
+    !Array.isArray(payload.template.bodyValues) ||
+    payload.template.bodyValues.some(
+      (value) => typeof value !== "string" || !value.trim(),
+    )
+  ) {
+    throw new ApiError(400, "Template bodyValues must be non-empty strings.");
+  }
+
+  const recipient = normalizePhone(payload.countryCode, payload.phoneNumber);
+  const normalizedPayload = {
+    ...payload,
+    ...recipient,
+    template: {
+      ...payload.template,
+      bodyValues: payload.template.bodyValues.map((value) => value.trim()),
+    },
+  };
+
   const url = normalizeBaseUrl(interaktConfig.baseUrl);
-  const response = await axios.post(url, payload, {
+  const response = await axios.post(url, normalizedPayload, {
     headers: {
       Authorization: buildAuthHeader(interaktConfig.authToken),
       "Content-Type": "application/json",

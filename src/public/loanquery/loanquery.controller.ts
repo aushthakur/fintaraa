@@ -2935,7 +2935,9 @@ export class LoanQueryController {
       }
 
       if (existingResult.status !== updatedResult.status) {
-        await notifyLoanStageUpdated(updatedResult);
+        await notifyLoanStageUpdated(updatedResult, {
+          remarks: req.body?.remarks,
+        });
       }
 
       return res
@@ -3642,8 +3644,9 @@ export class LoanQueryController {
         },
       )
         .select(
-          "status updatedByName activities customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency",
+          "status updatedByName activities customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency loanId loanType email mobile firstName lastName bankName loanAmount disbursedAmount policyDetails",
         )
+        .populate("customerId", "name email mobile")
         .lean()
         .exec();
 
@@ -3659,7 +3662,7 @@ export class LoanQueryController {
       }
 
       if (oldStatus !== status && updatedQuery) {
-        await notifyLoanStageUpdated(updatedQuery);
+        await notifyLoanStageUpdated(updatedQuery, { remarks });
       }
 
       return res

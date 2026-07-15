@@ -5,12 +5,21 @@ import { sendSingleNotification } from "./notification.service";
 import { createDefaultMailOptions, sendMail } from "../utils/emailService";
 import { sendInteraktTemplateMessage } from "./interakt.service";
 import { config } from "../config/config";
+import {
+  getLoanWhatsappTemplate,
+  LoanWhatsappTemplateKey,
+  loanWhatsappTemplateForStatus,
+} from "../config/whatsappTemplates";
 
 const stageLabels: Record<string, string> = {
   [ApplicationStatus.LOGIN_DONE]: "Login",
   [ApplicationStatus.LOGIN_APPROVED]: "Login Approved",
   [ApplicationStatus.SANCTIONED]: "Sanction",
   [ApplicationStatus.DISBURSED]: "Disbursement",
+  [ApplicationStatus.DISBURSED_PARTIAL_FULL]: "Disbursement",
+  [ApplicationStatus.DOCUMENTS_REQUESTED]: "Documents Requested",
+  [ApplicationStatus.REJECTED]: "Rejected",
+  [ApplicationStatus.REJECTED_BY_BANK]: "Rejected by Bank",
 };
 
 const getLoanNotificationContext = (query: any) => ({
@@ -28,18 +37,26 @@ const getCustomerContact = (query: any) => ({
     "Customer",
 });
 
-const templateNameForStage = (status: string) => {
-  if (status === ApplicationStatus.LOGIN_DONE)
-    return process.env.INTERAKT_LOAN_LOGIN_TEMPLATE;
-  if (status === ApplicationStatus.SANCTIONED)
-    return process.env.INTERAKT_LOAN_SANCTION_TEMPLATE;
-  if (
-    status === ApplicationStatus.DISBURSED ||
-    status === ApplicationStatus.DISBURSED_PARTIAL_FULL
-  )
-    return process.env.INTERAKT_LOAN_DISBURSEMENT_TEMPLATE;
-  return "";
+const getApplicationId = (query: any) =>
+  String(query?.loanId || query?._id?.toString?.() || "").trim();
+
+const getLenderName = (query: any) =>
+  String(query?.policyDetails?.preferredBank || query?.bankName || "").trim();
+
+const formatAmount = (value: unknown) => {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0
+    ? new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(amount)
+    : "";
 };
+
+const getRequestedDocuments = (remarks?: string) => {
+  const value = String(remarks || "").replace(/^Requested documents:\s*/i, "").trim();
+  return value || "Required loan documents";
+};
+
+const getDocumentUploadUrl = () =>
+  `${String(config.frontendUrl || "").replace(/\/+$/, "")}/application-status`;
 
 const sendLoanEmail = async (query: any, subject: string, message: string) => {
   const contact = getCustomerContact(query);
@@ -60,21 +77,25 @@ const sendLoanEmail = async (query: any, subject: string, message: string) => {
 
 const sendLoanWhatsapp = async (
   query: any,
-  templateName: string | undefined,
-  values: string[],
+  templateKey: LoanWhatsappTemplateKey,
+  values: unknown[],
 ) => {
   const contact = getCustomerContact(query);
-  if (!templateName || !contact.mobile || !config.integrations.interakt.enabled)
+  if (!contact.mobile || !config.integrations.interakt.enabled)
     return;
+  let template;
+  try {
+    template = getLoanWhatsappTemplate(templateKey, values);
+  } catch (error: any) {
+    console.log("Loan WhatsApp skipped:", error?.message || error);
+    return;
+  }
   await sendInteraktTemplateMessage({
     countryCode: config.integrations.interakt.defaultCountryCode,
     phoneNumber: contact.mobile,
     type: "Template",
-    template: {
-      name: templateName,
-      languageCode: process.env.INTERAKT_LOAN_TEMPLATE_LANGUAGE || "en",
-      bodyValues: values,
-    },
+    callbackData: `loan:${getApplicationId(query)}:${templateKey}`,
+    template,
   }).catch((error) =>
     console.log("Loan WhatsApp failed:", error?.message || error),
   );
@@ -106,17 +127,22 @@ export const notifyLoanApplicationCreated = async (queryOrId: any) => {
     "Loan Application Created",
     `Your ${context.loanType} application has been created successfully.`,
   );
-  await sendLoanWhatsapp(query, process.env.INTERAKT_LOAN_CREATED_TEMPLATE, [
-    context.loanId,
-    context.loanType,
+  await sendLoanWhatsapp(query, "applicationCreated", [
+    getCustomerContact(query).name,
+    getApplicationId(query),
   ]);
 };
 
-export const notifyLoanStageUpdated = async (queryOrId: any) => {
+export const notifyLoanStageUpdated = async (
+  queryOrId: any,
+  options: { remarks?: string } = {},
+) => {
   const query =
     typeof queryOrId === "string" || queryOrId?._bsontype
       ? await LoanQuery.findById(queryOrId)
-          .select("customerId loanId loanType status email mobile firstName lastName")
+          .select(
+            "customerId loanId loanType status email mobile firstName lastName bankName loanAmount disbursedAmount policyDetails",
+          )
           .populate("customerId", "name email mobile")
           .lean()
       : queryOrId;
@@ -138,10 +164,31 @@ export const notifyLoanStageUpdated = async (queryOrId: any) => {
     `Loan Application Update - ${context.stage}`,
     `Your loan application is now at ${context.stage}.`,
   );
-  await sendLoanWhatsapp(query, templateNameForStage(query.status), [
-    context.loanId,
-    context.stage,
-  ]);
+  const templateKey = loanWhatsappTemplateForStatus(query.status);
+  if (!templateKey) return;
+
+  const contact = getCustomerContact(query);
+  const valuesByTemplate: Record<LoanWhatsappTemplateKey, unknown[]> = {
+    applicationCreated: [contact.name, getApplicationId(query)],
+    documentsRequired: [
+      contact.name,
+      getRequestedDocuments(options.remarks),
+      getDocumentUploadUrl(),
+    ],
+    bankLoginSuccess: [contact.name, getLenderName(query), getApplicationId(query)],
+    loanSanctioned: [
+      contact.name,
+      formatAmount(query?.loanAmount),
+      getLenderName(query),
+    ],
+    loanDisbursed: [
+      contact.name,
+      formatAmount(query?.disbursedAmount ?? query?.loanAmount),
+      getLenderName(query),
+    ],
+    applicationRejected: [contact.name, getLenderName(query)],
+  };
+  await sendLoanWhatsapp(query, templateKey, valuesByTemplate[templateKey]);
 };
 
 export const notifyLoanDocumentsUploaded = async (
