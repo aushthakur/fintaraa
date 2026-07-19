@@ -60,6 +60,65 @@ const incomeBucket = (income: number) => {
   return "₹1,00,000+";
 };
 
+const cardCategories = (card: CardSeedInput) => {
+  const searchable = [
+    card.name,
+    card.cardType,
+    card.rewardsType,
+    card.shortDescription,
+    card.cashbackDetails,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const categories: string[] = [];
+
+  if (searchable.includes("cashback")) categories.push("Cashback");
+  if (
+    card.cardType === "Travel" ||
+    /travel|mile|airline|hotel|airport|lounge|atlas|diners/.test(searchable)
+  ) {
+    categories.push("Travel");
+  }
+  if (
+    card.cardType === "Fuel" ||
+    /fuel|petrol|indianoil|power\+/.test(
+      [card.name, card.cardType, card.rewardsType].join(" ").toLowerCase(),
+    )
+  ) {
+    categories.push("Fuel");
+  }
+  if (
+    /reward|point|mile|neucoin/.test(card.rewardsType.toLowerCase()) ||
+    card.cardType === "Rewards"
+  ) {
+    categories.push("Rewards");
+  }
+  if (card.annualFee === 0) categories.push("Lifetime Free");
+  if (
+    card.cardType === "Entry-level" ||
+    (card.minimumIncome <= 25000 && card.annualFee <= 500)
+  ) {
+    categories.push("Beginners");
+  }
+  if (
+    card.minimumIncome <= 50000 &&
+    ["Cashback", "Shopping", "Everyday", "Rewards", "Fuel", "Lifestyle"].includes(
+      card.cardType,
+    )
+  ) {
+    categories.push("Self-Employed");
+  }
+  if (
+    card.cardType === "Premium" &&
+    (card.annualFee >= 2500 || card.minimumIncome >= 75000)
+  ) {
+    categories.push("Super-Premium");
+  }
+
+  return Array.from(new Set(categories));
+};
+
 const commonEligibility = (income: number, score: number) => [
   "Indian resident with valid PAN, address proof, and active mobile number.",
   `Minimum monthly income of ${incomeBucket(income)} preferred.`,
@@ -763,6 +822,7 @@ const cards = banks.flatMap((bank, bankIndex) =>
       link: bankApplyUrl,
       applyUrl: bankApplyUrl,
       joiningFee,
+      categories: cardCategories(card),
       annualFeeBucket: annualFeeBucket(card.annualFee),
       incomeRequirementBucket: incomeBucket(card.minimumIncome),
       loungeAccess: card.loungeAccessAvailable

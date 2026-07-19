@@ -1,5 +1,5 @@
 {
-  "name": "pms",
+  "name": "fintaraa-node",
   "version": "1.0.0",
   "main": "src/server.ts",
   "scripts": {
@@ -16,7 +16,8 @@
     "seed:page-faqs": "ts-node src/scripts/seedPageFaqs.ts",
     "seed:careers": "ts-node src/scripts/seedCareers.ts",
     "seed:company-bank-categories": "ts-node src/scripts/seedCompanyBankCategories.ts",
-    "seed:home-banners": "ts-node src/scripts/seedHomeBanners.ts"
+    "seed:home-banners": "ts-node src/scripts/seedHomeBanners.ts",
+    "seed:loan-banners": "ts-node src/scripts/seedLoanBanners.ts"
   },
   "keywords": [],
   "author": "",

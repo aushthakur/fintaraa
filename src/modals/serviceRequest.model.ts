@@ -4,6 +4,10 @@ export enum ServiceRequestType {
   GST = "gst_registration",
   ITR = "itr_filing",
   COMPANY = "company_registration",
+  ANNUAL_COMPLIANCE = "annual_compliance",
+  TAX_COMPLIANCE = "tax_compliance",
+  MSME = "msme_registration",
+  PROJECT_REPORT = "project_report",
   FRANCHISE = "franchise_partner",
   DSA = "dsa_partner",
 }

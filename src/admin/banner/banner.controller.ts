@@ -47,9 +47,14 @@ export class BannerController {
           .json(new ApiError(400, "Invalid banner type"));
       }
 
+      const productSlug = String(req.query.productSlug || "")
+        .trim()
+        .toLowerCase();
+
       const result = await Banner.find({
         type,
         status: BannerStatus.ACTIVE,
+        ...(productSlug ? { productSlug } : {}),
       })
         .sort({ priority: 1, createdAt: -1 })
         .limit(Math.max(Math.min(Number(req.query.limit || 10), 20), 1))

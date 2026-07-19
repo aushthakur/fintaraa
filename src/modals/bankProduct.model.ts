@@ -33,6 +33,7 @@ export interface IBankProduct extends Document {
   annualFee?: number;
   joiningFee?: number;
   cardType?: string;
+  categories?: string[];
   rewardsType?: string;
   annualFeeBucket?: string;
   incomeRequirementBucket?: string;
@@ -75,6 +76,7 @@ const bankProductSchema = new Schema<IBankProduct>(
     annualFee: { type: Number, default: 0, index: true },
     joiningFee: { type: Number, default: 0 },
     cardType: { type: String, trim: true, index: true },
+    categories: { type: [String], default: [], index: true },
     rewardsType: { type: String, trim: true, index: true },
     annualFeeBucket: { type: String, trim: true, index: true },
     incomeRequirementBucket: { type: String, trim: true, index: true },
@@ -141,6 +143,7 @@ bankProductSchema.index({
   cardType: 1,
   cardNetwork: 1,
 });
+bankProductSchema.index({ type: 1, status: 1, categories: 1 });
 
 export const BankProduct = mongoose.model<IBankProduct>(
   "BankProduct",

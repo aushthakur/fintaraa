@@ -22,6 +22,8 @@ export enum BannerStatus {
 export interface IBanner extends Document {
   title: string;
   image: string;
+  mobileImage?: string;
+  productSlug?: string;
   createdAt: Date;
   updatedAt: Date;
   priority: number;
@@ -45,6 +47,13 @@ const bannerSchema = new Schema<IBanner>(
     description: { type: String },
     title: { type: String, required: true },
     image: { type: String, required: true },
+    mobileImage: { type: String, trim: true },
+    productSlug: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      index: true,
+    },
     imageAlt: { type: String, trim: true },
     type: {
       type: String,
@@ -66,6 +75,12 @@ const bannerSchema = new Schema<IBanner>(
   { timestamps: true }
 );
 
-bannerSchema.index({ type: 1, status: 1, priority: 1, createdAt: -1 });
+bannerSchema.index({
+  type: 1,
+  productSlug: 1,
+  status: 1,
+  priority: 1,
+  createdAt: -1,
+});
 
 export const Banner = mongoose.model<IBanner>("Banner", bannerSchema);

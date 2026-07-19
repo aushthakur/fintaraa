@@ -368,7 +368,7 @@ export const getAllNotifications = async (
     const limitNumber = Math.max(parseInt(limit as string, 10) || 10, 10);
 
     // Safe check for userId from query or logged-in user
-    const rawUserId = queryUser || user?._id;
+    const rawUserId = queryUser || user?._id || user?.id;
     const targetRole = queryUser ? queryRole : user?.role;
 
     // This is the fix
@@ -611,7 +611,8 @@ export const markNotificationRead = async (
   next: NextFunction
 ) => {
   try {
-    const { id: userId, role } = req.user || {};
+    const userId = req.user?._id || req.user?.id;
+    const role = req.user?.role;
     const { notificationId, markAll } = req.query;
 
     if (!userId || !role)

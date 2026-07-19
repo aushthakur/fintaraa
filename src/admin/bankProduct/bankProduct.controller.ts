@@ -255,6 +255,7 @@ export class BankProductController {
       const match = { type, status: BankProductStatus.ACTIVE };
       const [
         banks,
+        categories,
         cardTypes,
         rewardsTypes,
         networks,
@@ -262,6 +263,7 @@ export class BankProductController {
         incomeBuckets,
       ] = await Promise.all([
         BankProduct.distinct("bankName", match),
+        BankProduct.distinct("categories", match),
         BankProduct.distinct("cardType", match),
         BankProduct.distinct("rewardsType", match),
         BankProduct.distinct("cardNetwork", match),
@@ -274,6 +276,7 @@ export class BankProductController {
           200,
           {
             banks: banks.filter(Boolean).sort(),
+            categories: categories.filter(Boolean).sort(),
             cardTypes: cardTypes.filter(Boolean).sort(),
             rewardsTypes: rewardsTypes.filter(Boolean).sort(),
             networks: networks.filter(Boolean).sort(),

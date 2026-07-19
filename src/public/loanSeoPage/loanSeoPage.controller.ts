@@ -459,6 +459,15 @@ export class LoanSeoPageController {
         status: LoanSeoPageStatus.ACTIVE,
       };
       if (loanTypeSlug) query.loanTypeSlug = loanTypeSlug;
+      if (String(req.query.catalogOnly || "").toLowerCase() === "true") {
+        query.$and = ["state", "city", "pincode", "area"].map((field) => ({
+          $or: [
+            { [`location.${field}`]: "" },
+            { [`location.${field}`]: null },
+            { [`location.${field}`]: { $exists: false } },
+          ],
+        }));
+      }
       (["country", "state", "city", "pincode", "area"] as const).forEach(
         (field) => {
           if (clean(location[field])) query[`location.${field}`] = location[field];

@@ -48,6 +48,54 @@ const COMPANY_STAGES = [
   "Completed",
 ];
 
+const ANNUAL_COMPLIANCE_STAGES = [
+  "Request Submitted",
+  "Compliance Expert Assigned",
+  "Filing Scope Reviewed",
+  "Documents Pending",
+  "Documents Received",
+  "Filings Prepared",
+  "Client Approval",
+  "Filings Submitted",
+  "Completed",
+];
+
+const TAX_COMPLIANCE_STAGES = [
+  "Request Submitted",
+  "Tax Expert Assigned",
+  "Requirement Reviewed",
+  "Documents Pending",
+  "Documents Received",
+  "Tax Review",
+  "Response or Filing Prepared",
+  "Submission Completed",
+  "Completed",
+];
+
+const MSME_STAGES = [
+  "Request Submitted",
+  "Registration Expert Assigned",
+  "Eligibility Reviewed",
+  "Documents Pending",
+  "Documents Received",
+  "Application Prepared",
+  "Udyam Application Submitted",
+  "Certificate Assistance",
+  "Completed",
+];
+
+const PROJECT_REPORT_STAGES = [
+  "Request Submitted",
+  "Business Analyst Assigned",
+  "Report Scope Reviewed",
+  "Information Pending",
+  "Financial Analysis",
+  "Draft Report Prepared",
+  "Client Review",
+  "Final Report Delivered",
+  "Completed",
+];
+
 const FRANCHISE_STAGES = [
   "Inquiry Submitted",
   "Partnership Team Assigned",
@@ -77,6 +125,10 @@ const stageList = (serviceType: ServiceRequestType) =>
     [ServiceRequestType.GST]: GST_STAGES,
     [ServiceRequestType.ITR]: ITR_STAGES,
     [ServiceRequestType.COMPANY]: COMPANY_STAGES,
+    [ServiceRequestType.ANNUAL_COMPLIANCE]: ANNUAL_COMPLIANCE_STAGES,
+    [ServiceRequestType.TAX_COMPLIANCE]: TAX_COMPLIANCE_STAGES,
+    [ServiceRequestType.MSME]: MSME_STAGES,
+    [ServiceRequestType.PROJECT_REPORT]: PROJECT_REPORT_STAGES,
     [ServiceRequestType.FRANCHISE]: FRANCHISE_STAGES,
     [ServiceRequestType.DSA]: DSA_STAGES,
   })[serviceType] || GST_STAGES;
@@ -108,6 +160,32 @@ const normalizeServiceType = (value: unknown) => {
     raw === "company-registration"
   )
     return ServiceRequestType.COMPANY;
+  if (
+    raw === "annual_compliance" ||
+    raw === "annual-compliance" ||
+    raw === "annual compliance"
+  )
+    return ServiceRequestType.ANNUAL_COMPLIANCE;
+  if (
+    raw === "tax_compliance" ||
+    raw === "tax-compliance" ||
+    raw === "tax_compliances" ||
+    raw === "tax compliances"
+  )
+    return ServiceRequestType.TAX_COMPLIANCE;
+  if (
+    raw === "msme" ||
+    raw === "msme_registration" ||
+    raw === "msme-registration" ||
+    raw === "udyam_registration"
+  )
+    return ServiceRequestType.MSME;
+  if (
+    raw === "project_report" ||
+    raw === "project-report" ||
+    raw === "project report"
+  )
+    return ServiceRequestType.PROJECT_REPORT;
   if (
     raw === "franchise" ||
     raw === "franchise_partner" ||
