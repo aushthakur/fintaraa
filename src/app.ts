@@ -35,7 +35,17 @@ if (config.security.rateLimitEnabled) {
 // Middleware for parsing JSON and URL-encoded bodies
 // Co-applicant attachments are currently stored as data URLs in policyDetails,
 // so the parser limit needs to be higher than the Express default 100kb.
-app.use(express.json({ limit: "100mb" }));
+app.use(
+  express.json({
+    limit: "100mb",
+    verify: (req, _res, buffer) => {
+      const request = req as express.Request & { rawBody?: Buffer };
+      if (request.originalUrl.startsWith("/api/interakt/webhook")) {
+        request.rawBody = Buffer.from(buffer);
+      }
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
 // Logging Middleware

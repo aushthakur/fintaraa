@@ -24,6 +24,7 @@ import { ReferralEvent } from "../../modals/referralEvent.model";
 import { rewardReferralIfEligible } from "../../services/referral.service";
 import { sendSingleNotification } from "../../services/notification.service";
 import { generateAccessToken, generateRefreshToken } from "../../utils/token";
+import { consumeOtpRequest } from "../../services/otpRateLimit.service";
 
 const otpService = new CommonService(Otp);
 const userService = new CommonService(User);
@@ -1246,15 +1247,16 @@ export class UserController {
     next: NextFunction,
   ): Promise<any> {
     try {
-      const { mobile } = req.body;
+      const { mobile: rawMobile } = req.body;
 
-      if (!mobile) {
+      if (!rawMobile) {
         return res.status(400).json({
           success: false,
           message: "Phone number is required",
         });
       }
 
+      const mobile = await consumeOtpRequest(rawMobile, "user");
       let user = await User.findOne({ mobile });
       const existed = Boolean(user);
       if (!user) {
@@ -1269,7 +1271,7 @@ export class UserController {
         .endsWith("9354697528");
       const otpCode = isHardcodedOtpUser
         ? "123456"
-        : Math.floor(100000 + Math.random() * 900000).toString();
+        : crypto.randomInt(100000, 1000000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins expiry
 
       // Save or update OTP

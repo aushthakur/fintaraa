@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import crypto from "crypto";
 import ApiError from "../../utils/ApiError";
 import { config } from "../../config/config";
 import ApiResponse from "../../utils/ApiResponse";
@@ -6,6 +7,7 @@ import {
   InteraktTemplatePayload,
   sendInteraktTemplateMessage,
 } from "../../services/interakt.service";
+import { applyInteraktDeliveryWebhook } from "../../services/communicationOutbox.service";
 
 const ensureString = (value: unknown) =>
   typeof value === "string" ? value.trim() : "";
@@ -25,6 +27,40 @@ const ensureStringArray = (value: unknown) => {
 };
 
 export const InteraktController = {
+  receiveWebhook: async (req: Request, res: Response) => {
+    const webhookSecret = config.integrations.interakt.webhookSecret;
+    if (!webhookSecret) {
+      throw new ApiError(503, "Interakt webhook secret is not configured.");
+    }
+
+    const signature = ensureString(req.headers["interakt-signature"]);
+    const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
+    if (!signature || !rawBody) {
+      throw new ApiError(401, "Invalid Interakt webhook signature.");
+    }
+
+    const expected = `sha256=${crypto
+      .createHmac("sha256", webhookSecret)
+      .update(rawBody)
+      .digest("hex")}`;
+    const receivedBuffer = Buffer.from(signature);
+    const expectedBuffer = Buffer.from(expected);
+    if (
+      receivedBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(receivedBuffer, expectedBuffer)
+    ) {
+      throw new ApiError(401, "Invalid Interakt webhook signature.");
+    }
+
+    const communication = await applyInteraktDeliveryWebhook(req.body || {});
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        { matched: Boolean(communication) },
+        "Interakt webhook accepted",
+      ),
+    );
+  },
   sendTemplateTest: async (req: Request, res: Response) => {
     const body = req.body || {};
     const countryCode =

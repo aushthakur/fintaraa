@@ -62,6 +62,7 @@ import documentCatalogRoutes from "../admin/documentCatalog/documentCatalog.rout
 import formSubmitClickRoutes from "../public/formSubmitClick/formSubmitClick.routes";
 import eligibilityCriteriaRoutes from "../admin/eligibilityCriteria/eligibilityCriteria.routes";
 import eligibilityMailPermissionRoutes from "../admin/eligibilityMailPermission/eligibilityMailPermission.routes";
+import communicationOutboxRoutes from "../admin/communicationOutbox/communicationOutbox.routes";
 
 const router = Router();
 
@@ -127,5 +128,6 @@ router.use("/vehicle-rc-lookups", vehicleRcLookupRoutes);
 router.use("/form-submit-clicks", formSubmitClickRoutes);
 router.use("/eligibility-criteria", eligibilityCriteriaRoutes);
 router.use("/eligibility-mail-permissions", eligibilityMailPermissionRoutes);
+router.use("/communication-outbox", communicationOutboxRoutes);
 
 export default router;

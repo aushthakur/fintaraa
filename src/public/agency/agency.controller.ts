@@ -16,6 +16,7 @@ import { agencyLeadsService } from "../../services/agencyLeads.service";
 import { agencyPayoutService } from "../../services/agencyPayout.service";
 import { sendSingleNotification } from "../../services/notification.service";
 import { generateAccessToken, generateRefreshToken } from "../../utils/token";
+import { consumeOtpRequest } from "../../services/otpRateLimit.service";
 
 const agencyService = new CommonService(Agency);
 
@@ -306,13 +307,19 @@ const withAgencyProfileMeta = (agency: any) => {
 export class AgencyController {
   static async sendOtp(req: Request, res: Response, next: NextFunction) {
     try {
-      const { mobile, name, email, parentAgencyId } = req.body;
-      if (!mobile) {
+      const {
+        mobile: rawMobile,
+        name,
+        email,
+        parentAgencyId,
+      } = req.body;
+      if (!rawMobile) {
         return res.status(400).json({
           success: false,
           message: "Phone number is required",
         });
       }
+      const mobile = await consumeOtpRequest(rawMobile, "agency");
 
       let agency: any = await Agency.findOne({ mobile });
       if (!agency) {
@@ -364,7 +371,7 @@ export class AgencyController {
         }
       }
 
-      const otpCode = "123456";
+      const otpCode = crypto.randomInt(100000, 1000000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
       await Otp.findOneAndUpdate(

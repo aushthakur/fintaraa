@@ -2,14 +2,18 @@ import { LoanQuery } from "../modals/loanquery.model";
 import { UserType } from "../modals/notification.model";
 import { ApplicationStatus } from "../modals/insurancequery.model";
 import { sendSingleNotification } from "./notification.service";
-import { createDefaultMailOptions, sendMail } from "../utils/emailService";
-import { sendInteraktTemplateMessage } from "./interakt.service";
 import { config } from "../config/config";
+import { CommunicationChannel } from "../modals/communicationOutbox.model";
+import { enqueueCommunication } from "./communicationOutbox.service";
 import {
   getLoanWhatsappTemplate,
   LoanWhatsappTemplateKey,
   loanWhatsappTemplateForStatus,
 } from "../config/whatsappTemplates";
+import {
+  renderLoanEmail,
+  type LoanEmailTemplateKey,
+} from "./loanEmailTemplates.service";
 
 const stageLabels: Record<string, string> = {
   [ApplicationStatus.LOGIN_DONE]: "Login",
@@ -41,7 +45,11 @@ const getApplicationId = (query: any) =>
   String(query?.loanId || query?._id?.toString?.() || "").trim();
 
 const getLenderName = (query: any) =>
-  String(query?.policyDetails?.preferredBank || query?.bankName || "").trim();
+  String(
+    query?.policyDetails?.preferredBank ||
+      query?.bankName ||
+      "our lending partner",
+  ).trim();
 
 const formatAmount = (value: unknown) => {
   const amount = Number(value);
@@ -55,27 +63,72 @@ const getRequestedDocuments = (remarks?: string) => {
   return value || "Required loan documents";
 };
 
-const getDocumentUploadUrl = () =>
-  `${String(config.frontendUrl || "").replace(/\/+$/, "")}/application-status`;
+const getPublicWebsiteBaseUrl = () =>
+  String(config.publicWebsiteUrl || "https://fintaraa.com").replace(/\/+$/, "");
 
-const sendLoanEmail = async (query: any, subject: string, message: string) => {
-  const contact = getCustomerContact(query);
-  if (!contact.email) return;
-  await sendMail(
-    createDefaultMailOptions(
-      contact.email,
-      subject,
-      `<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111827">
-        <p>Hi ${contact.name},</p>
-        <p>${message}</p>
-        <p>Application ID: <strong>${query?.loanId || "-"}</strong></p>
-        <p>Regards,<br/>Fintaraa</p>
-      </div>`,
-    ),
-  ).catch((error) => console.log("Loan email failed:", error?.message || error));
+const getTrackApplicationUrl = (query: any) => {
+  const applicationId = getApplicationId(query);
+  const params = applicationId
+    ? `?applicationId=${encodeURIComponent(applicationId)}`
+    : "";
+  return `${getPublicWebsiteBaseUrl()}/application-status${params}`;
 };
 
-const sendLoanWhatsapp = async (
+const getDocumentUploadUrl = (query: any) => getTrackApplicationUrl(query);
+
+const getContactAdvisorUrl = (query: any) => {
+  const applicationId = getApplicationId(query);
+  const text = encodeURIComponent(
+    `Hi Fintaraa, I need help with loan application ${applicationId || ""}.`,
+  );
+  return `https://wa.me/918448282679?text=${text}`;
+};
+
+const getLoanEmailContext = (query: any, remarks?: string) => {
+  const contact = getCustomerContact(query);
+  return {
+    name: contact.name,
+    applicationId: getApplicationId(query) || "-",
+    bankName: getLenderName(query),
+    loanAmount: formatAmount(query?.loanAmount) || "—",
+    disburseAmount:
+      formatAmount(query?.disbursedAmount ?? query?.loanAmount) || "—",
+    documentName: getRequestedDocuments(remarks),
+    trackApplicationLink: getTrackApplicationUrl(query),
+    websiteUrl: getDocumentUploadUrl(query),
+    contactAdvisorLink: getContactAdvisorUrl(query),
+  };
+};
+
+const queueLoanEmail = async (
+  query: any,
+  templateKey: LoanEmailTemplateKey,
+  remarks?: string,
+) => {
+  const contact = getCustomerContact(query);
+  if (!contact.email) return;
+  const email = renderLoanEmail(
+    templateKey,
+    getLoanEmailContext(query, remarks),
+  );
+  const applicationId = getApplicationId(query);
+  await enqueueCommunication({
+    channel: CommunicationChannel.EMAIL,
+    eventName: templateKey,
+    referenceId: applicationId,
+    recipient: contact.email,
+    payload: {
+      to: contact.email,
+      subject: email.subject,
+      html: email.html,
+    },
+    idempotencyKey: `loan:${applicationId}:${templateKey}:email`,
+  }).catch((error) =>
+    console.log("Loan email queue failed:", error?.message || error),
+  );
+};
+
+const queueLoanWhatsapp = async (
   query: any,
   templateKey: LoanWhatsappTemplateKey,
   values: unknown[],
@@ -90,14 +143,22 @@ const sendLoanWhatsapp = async (
     console.log("Loan WhatsApp skipped:", error?.message || error);
     return;
   }
-  await sendInteraktTemplateMessage({
-    countryCode: config.integrations.interakt.defaultCountryCode,
-    phoneNumber: contact.mobile,
-    type: "Template",
-    callbackData: `loan:${getApplicationId(query)}:${templateKey}`,
-    template,
+  const applicationId = getApplicationId(query);
+  await enqueueCommunication({
+    channel: CommunicationChannel.WHATSAPP,
+    eventName: templateKey,
+    referenceId: applicationId,
+    recipient: contact.mobile,
+    payload: {
+      countryCode: config.integrations.interakt.defaultCountryCode,
+      phoneNumber: contact.mobile,
+      type: "Template",
+      callbackData: `loan:${applicationId}:${templateKey}`,
+      template,
+    },
+    idempotencyKey: `loan:${applicationId}:${templateKey}:whatsapp`,
   }).catch((error) =>
-    console.log("Loan WhatsApp failed:", error?.message || error),
+    console.log("Loan WhatsApp queue failed:", error?.message || error),
   );
 };
 
@@ -121,13 +182,8 @@ export const notifyLoanApplicationCreated = async (queryOrId: any) => {
     console.log("Failed to send loan created notification:", error),
   );
 
-  const context = getLoanNotificationContext(query);
-  await sendLoanEmail(
-    query,
-    "Loan Application Created",
-    `Your ${context.loanType} application has been created successfully.`,
-  );
-  await sendLoanWhatsapp(query, "applicationCreated", [
+  await queueLoanEmail(query, "applicationCreated");
+  await queueLoanWhatsapp(query, "applicationCreated", [
     getCustomerContact(query).name,
     getApplicationId(query),
   ]);
@@ -158,14 +214,9 @@ export const notifyLoanStageUpdated = async (
     console.log("Failed to send loan stage notification:", error),
   );
 
-  const context = getLoanNotificationContext(query);
-  await sendLoanEmail(
-    query,
-    `Loan Application Update - ${context.stage}`,
-    `Your loan application is now at ${context.stage}.`,
-  );
   const templateKey = loanWhatsappTemplateForStatus(query.status);
   if (!templateKey) return;
+  await queueLoanEmail(query, templateKey, options.remarks);
 
   const contact = getCustomerContact(query);
   const valuesByTemplate: Record<LoanWhatsappTemplateKey, unknown[]> = {
@@ -173,22 +224,22 @@ export const notifyLoanStageUpdated = async (
     documentsRequired: [
       contact.name,
       getRequestedDocuments(options.remarks),
-      getDocumentUploadUrl(),
+      getDocumentUploadUrl(query),
     ],
     bankLoginSuccess: [contact.name, getLenderName(query), getApplicationId(query)],
     loanSanctioned: [
       contact.name,
-      formatAmount(query?.loanAmount),
+      formatAmount(query?.loanAmount) || "—",
       getLenderName(query),
     ],
     loanDisbursed: [
       contact.name,
-      formatAmount(query?.disbursedAmount ?? query?.loanAmount),
+      formatAmount(query?.disbursedAmount ?? query?.loanAmount) || "—",
       getLenderName(query),
     ],
     applicationRejected: [contact.name, getLenderName(query)],
   };
-  await sendLoanWhatsapp(query, templateKey, valuesByTemplate[templateKey]);
+  await queueLoanWhatsapp(query, templateKey, valuesByTemplate[templateKey]);
 };
 
 export const notifyLoanDocumentsUploaded = async (

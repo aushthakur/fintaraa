@@ -12,6 +12,8 @@ export const config = {
   port: Number(process.env.PORT) || 8080,
   baseUrl: process.env.APP_BASE_URL!,
   frontendUrl: process.env.FRONTEND_URL!,
+  publicWebsiteUrl:
+    process.env.PUBLIC_WEBSITE_URL || "https://fintaraa.com",
   surepass: {
     environment: process.env.SUREPASS_ENVIRONMENT || "sandbox",
     timeoutMs: Number(process.env.SUREPASS_TIMEOUT_MS || 10000),
@@ -158,6 +160,7 @@ export const config = {
         process.env.INTERAKT_BASE_URL ||
         "https://api.interakt.ai/v1/public/message/",
       authToken: process.env.INTERAKT_AUTH_TOKEN || "",
+      webhookSecret: process.env.INTERAKT_WEBHOOK_SECRET || "",
       defaultCountryCode: process.env.INTERAKT_DEFAULT_COUNTRY_CODE || "+91",
       timeoutMs: Number(process.env.INTERAKT_TIMEOUT_MS || 10000),
     },
