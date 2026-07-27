@@ -16,9 +16,9 @@ const s3 = new S3Client({
   },
   ...(config.s3.baseUrl
     ? {
-      endpoint: config.s3.baseUrl, // keep only if MinIO/Wasabi/LocalStack
-      forcePathStyle: true,
-    }
+        endpoint: config.s3.baseUrl, // keep only if MinIO/Wasabi/LocalStack
+        forcePathStyle: true,
+      }
     : {}),
 });
 
@@ -31,7 +31,7 @@ export const uploadToS3 = async (
     contentDisposition?: string;
     acl?: "private" | "public-read";
     metadata?: Record<string, string>;
-  }
+  },
 ): Promise<string> => {
   if (!config.s3.enabled) {
     throw new Error("S3 is disabled or not configured correctly.");
@@ -97,6 +97,8 @@ const getContentType = (ext: string): string => {
     ".mp4": "video/mp4",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".avif": "image/avif",
     ".webm": "video/webm",
     ".pdf": "application/pdf",
     ".mov": "video/quicktime",

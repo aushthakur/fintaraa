@@ -30,37 +30,51 @@ router
     "/",
     authenticateToken,
     authorize("admin"),
-    dynamicUpload([{ name: "image", maxCount: 1 }]),
+    dynamicUpload([
+      { name: "image", maxCount: 1 },
+      { name: "mobileImage", maxCount: 1 },
+    ]),
     s3UploaderMiddleware("banner"),
     asyncHandler(
-      mediaUrlMiddleware(Banner, [{ key: "image", type: "single" }])
+      mediaUrlMiddleware(Banner, [
+        { key: "image", type: "single" },
+        { key: "mobileImage", type: "single" },
+      ]),
     ),
-    asyncHandler(createBanner)
+    asyncHandler(createBanner),
   )
   .get(
     "/:id",
     authenticateToken,
     authorize("admin"),
-    asyncHandler(getBannerById)
+    asyncHandler(getBannerById),
   )
   .put(
     "/:id",
     authenticateToken,
     authorize("admin"),
-    dynamicUpload([{ name: "image", maxCount: 1 }]),
+    dynamicUpload([
+      { name: "image", maxCount: 1 },
+      { name: "mobileImage", maxCount: 1 },
+    ]),
     s3UploaderMiddleware("banner"),
     asyncHandler(
       mediaUrlMiddleware(Banner, [
         { key: "image", type: "single", useExtractOnUpdate: true },
-      ])
+        {
+          key: "mobileImage",
+          type: "single",
+          useExtractOnUpdate: true,
+        },
+      ]),
     ),
-    asyncHandler(updateBannerById)
+    asyncHandler(updateBannerById),
   )
   .delete(
     "/:id",
     authenticateToken,
     authorize("admin"),
-    asyncHandler(deleteBannerById)
+    asyncHandler(deleteBannerById),
   );
 
 export default router;

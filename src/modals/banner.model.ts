@@ -19,6 +19,28 @@ export enum BannerStatus {
   INACTIVE = "inactive",
 }
 
+export const PRODUCT_SCOPED_BANNER_TYPES = [
+  BannerType.LOAN_DETAIL,
+  BannerType.INSURANCE_DETAIL,
+  BannerType.LOAN_DETAIL_POPUP_WEB,
+  BannerType.LOAN_DETAIL_POPUP_MOBILE,
+  BannerType.INSURANCE_DETAIL_POPUP_WEB,
+  BannerType.INSURANCE_DETAIL_POPUP_MOBILE,
+] as const;
+
+export const UPLOADED_MEDIA_BANNER_TYPES = [
+  BannerType.HOMEPAGE,
+  ...PRODUCT_SCOPED_BANNER_TYPES,
+] as const;
+
+export const RESPONSIVE_BANNER_TYPES = [
+  BannerType.LOAN_DETAIL,
+  BannerType.INSURANCE_DETAIL,
+] as const;
+
+export const isUploadedBannerMediaUrl = (value: unknown) =>
+  /^https?:\/\/\S+$/i.test(String(value || "").trim());
+
 export interface IBanner extends Document {
   title: string;
   image: string;
@@ -46,13 +68,47 @@ const bannerSchema = new Schema<IBanner>(
     highlightText: { type: String, trim: true },
     description: { type: String },
     title: { type: String, required: true },
-    image: { type: String, required: true },
-    mobileImage: { type: String, trim: true },
+    image: {
+      type: String,
+      required: true,
+      validate: {
+        validator: function (this: IBanner, value: string) {
+          const requiresUploadedMedia = UPLOADED_MEDIA_BANNER_TYPES.includes(
+            this.type as (typeof UPLOADED_MEDIA_BANNER_TYPES)[number],
+          );
+          return !requiresUploadedMedia || isUploadedBannerMediaUrl(value);
+        },
+        message: "Banner image must be uploaded media",
+      },
+    },
+    mobileImage: {
+      type: String,
+      trim: true,
+      required: function (this: IBanner) {
+        return RESPONSIVE_BANNER_TYPES.includes(
+          this.type as (typeof RESPONSIVE_BANNER_TYPES)[number],
+        );
+      },
+      validate: {
+        validator: function (this: IBanner, value?: string) {
+          const isResponsiveBanner = RESPONSIVE_BANNER_TYPES.includes(
+            this.type as (typeof RESPONSIVE_BANNER_TYPES)[number],
+          );
+          return !isResponsiveBanner || isUploadedBannerMediaUrl(value);
+        },
+        message: "Mobile banner image must be uploaded media",
+      },
+    },
     productSlug: {
       type: String,
       trim: true,
       lowercase: true,
       index: true,
+      required: function (this: IBanner) {
+        return PRODUCT_SCOPED_BANNER_TYPES.includes(
+          this.type as (typeof PRODUCT_SCOPED_BANNER_TYPES)[number],
+        );
+      },
     },
     imageAlt: { type: String, trim: true },
     type: {
@@ -72,7 +128,7 @@ const bannerSchema = new Schema<IBanner>(
       enum: Object.values(BannerStatus),
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 bannerSchema.index({

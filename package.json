@@ -17,7 +17,8 @@
     "seed:careers": "ts-node src/scripts/seedCareers.ts",
     "seed:company-bank-categories": "ts-node src/scripts/seedCompanyBankCategories.ts",
     "seed:home-banners": "ts-node src/scripts/seedHomeBanners.ts",
-    "seed:loan-banners": "ts-node src/scripts/seedLoanBanners.ts"
+    "migrate:product-banners-s3": "ts-node src/scripts/migrateProductBannersToS3.ts",
+    "migrate:banners-s3": "ts-node src/scripts/migrateProductBannersToS3.ts"
   },
   "keywords": [],
   "author": "",

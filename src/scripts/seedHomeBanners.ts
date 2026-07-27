@@ -1,10 +1,14 @@
 import "dotenv/config";
+import { readFile } from "fs/promises";
+import path from "path";
 import mongoose from "mongoose";
 import connectDB from "../config/database";
+import { uploadToS3 } from "../config/s3Uploader";
 import {
   Banner,
   BannerStatus,
   BannerType,
+  isUploadedBannerMediaUrl,
 } from "../modals/banner.model";
 
 const homeBanners = [
@@ -14,7 +18,7 @@ const homeBanners = [
     highlightText: "from 30+ Banks",
     description:
       "One secure check. Multiple trusted offers. No CIBIL impact and instant eligibility guidance.",
-    image: "/assets/home/hero-banners/financial-advisor-family.png",
+    sourceImage: "/assets/home/hero-banners/financial-advisor-family.png",
     imageAlt: "Fintaraa advisor helping customers compare financial products",
     linkUrl: "/products",
     buttonText: "Explore products",
@@ -31,7 +35,7 @@ const homeBanners = [
     highlightText: "in Minutes",
     description:
       "Compare bank and NBFC options with a secure digital journey built for speed and clarity.",
-    image: "/assets/home/hero-banners/instant-digital-loan.png",
+    sourceImage: "/assets/home/hero-banners/instant-digital-loan.png",
     imageAlt: "Professional checking instant digital loan options on mobile",
     linkUrl: "/banks",
     buttonText: "View banks",
@@ -48,7 +52,7 @@ const homeBanners = [
     highlightText: "with Better Cover",
     description:
       "Explore health, life, term, travel, and property insurance options with guided support.",
-    image: "/assets/home/hero-banners/insurance-family-protection.png",
+    sourceImage: "/assets/home/hero-banners/insurance-family-protection.png",
     imageAlt: "Family reviewing insurance protection options with advisor",
     linkUrl: "/products/insurance",
     buttonText: "Explore insurance",
@@ -65,7 +69,7 @@ const homeBanners = [
     highlightText: "that Reward You",
     description:
       "Pick cards for travel, fuel, shopping, cashback, and premium rewards with one clear flow.",
-    image: "/assets/home/hero-banners/credit-card-rewards.png",
+    sourceImage: "/assets/home/hero-banners/credit-card-rewards.png",
     imageAlt: "Professional comparing credit card rewards on mobile",
     linkUrl: "/credit-cards",
     buttonText: "Explore cards",
@@ -78,18 +82,65 @@ const homeBanners = [
   },
 ];
 
+const websitePublicDirectory = path.resolve(
+  process.cwd(),
+  "../fintaraa-website/public",
+);
+
+const resolvePublicAsset = (assetPath: string) => {
+  const absolutePath = path.resolve(
+    websitePublicDirectory,
+    assetPath.replace(/^\/+/, ""),
+  );
+  const publicPrefix = `${websitePublicDirectory}${path.sep}`;
+  if (!absolutePath.startsWith(publicPrefix)) {
+    throw new Error(`Unsafe homepage banner asset path: ${assetPath}`);
+  }
+  return absolutePath;
+};
+
 async function seedHomeBanners() {
   await connectDB();
 
   for (const banner of homeBanners) {
+    const { sourceImage, ...fields } = banner;
+    const existing = await Banner.findOne({
+      type: BannerType.HOMEPAGE,
+      title: banner.title,
+    }).lean();
+    let image = isUploadedBannerMediaUrl(existing?.image)
+      ? String(existing?.image)
+      : "";
+
+    if (!image) {
+      image = await uploadToS3(
+        await readFile(resolvePublicAsset(sourceImage)),
+        path.basename(sourceImage),
+        "banner",
+      );
+    }
+    if (!isUploadedBannerMediaUrl(image)) {
+      throw new Error(`Failed to upload homepage banner: ${banner.title}`);
+    }
+
     await Banner.updateOne(
       { type: BannerType.HOMEPAGE, title: banner.title },
-      { $set: banner },
-      { upsert: true }
+      {
+        $set: {
+          ...fields,
+          image,
+          mobileImage: isUploadedBannerMediaUrl(existing?.mobileImage)
+            ? existing?.mobileImage
+            : image,
+        },
+      },
+      { upsert: true },
     );
   }
 
-  console.log(`Seeded ${homeBanners.length} homepage banners.`);
+  console.log(
+    `Seeded ${homeBanners.length} homepage banners with uploaded S3 media.`,
+  );
 }
 
 seedHomeBanners()
