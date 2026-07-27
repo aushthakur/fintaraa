@@ -205,6 +205,7 @@ CallRecordSchema.index({ assignees: 1, assignedAt: -1 });
 CallRecordSchema.index({ phoneNumber: 1, createdAt: -1 });
 CallRecordSchema.index({ attachedLead: 1, updatedAt: -1 });
 CallRecordSchema.index({ channelAgency: 1, updatedAt: -1 });
+CallRecordSchema.index({ loanQueryId: 1, updatedAt: -1 });
 
 export const CallRecord = mongoose.model<ICallRecord>(
   "CallRecord",

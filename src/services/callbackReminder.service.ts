@@ -3,6 +3,14 @@ import Admin from "../modals/admin.model";
 import { UserType } from "../modals/notification.model";
 import Lead, { LeadFollowUpStatus } from "../modals/lead.model";
 import { CallRecord, ICallRecord } from "../modals/callRecord.model";
+import {
+  LoanFollowUpStatus,
+  LoanQuery,
+} from "../modals/loanquery.model";
+import {
+  InsuranceFollowUpStatus,
+  InsuranceQuery,
+} from "../modals/insurancequery.model";
 import { sendSingleNotification } from "../services/notification.service";
 
 const CHECK_INTERVAL_MINUTES = 1;
@@ -74,6 +82,61 @@ const getAssignedAgentIds = (record: any) => {
   }
 
   return Array.from(ids);
+};
+
+const getQueryAssignedAgentIds = (query: any) => {
+  const ids = new Set<string>();
+  [
+    query?.nextFollowUp?.assignedTo,
+    query?.assignedAgent,
+    ...(Array.isArray(query?.assignedAgents) ? query.assignedAgents : []),
+  ].forEach((assignee) => {
+    const id = toIdString(assignee);
+    if (id) ids.add(id);
+  });
+  return Array.from(ids);
+};
+
+const notifyFollowUpRecipients = async ({
+  assignedAgentIds,
+  adminIds,
+  context,
+  referenceLabel,
+}: {
+  assignedAgentIds: string[];
+  adminIds: string[];
+  context: Record<string, any>;
+  referenceLabel: string;
+}) => {
+  const agentResults = await Promise.allSettled(
+    assignedAgentIds.map((assigneeId) =>
+      sendSingleNotification({
+        type: "follow-up-reminder",
+        toUserId: assigneeId,
+        toRole: UserType.AGENT,
+        context,
+      }),
+    ),
+  );
+  const adminResults = await Promise.allSettled(
+    adminIds.map((adminId) =>
+      sendSingleNotification({
+        type: "follow-up-reminder",
+        toUserId: adminId,
+        toRole: UserType.ADMIN,
+        context,
+      }),
+    ),
+  );
+
+  [...agentResults, ...adminResults].forEach((result) => {
+    if (result.status === "rejected") {
+      console.error(
+        `[FollowUpReminder] Notification failed for ${referenceLabel}:`,
+        result.reason,
+      );
+    }
+  });
 };
 
 /**
@@ -344,6 +407,131 @@ export const processLeadFollowUpReminders = async (): Promise<void> => {
 };
 
 /**
+ * Process the dedicated follow-up fields stored on LoanQuery records.
+ */
+export const processLoanQueryFollowUpReminders = async (): Promise<void> => {
+  try {
+    const { start, end } = getReminderWindow();
+    const queries = await LoanQuery.find({
+      followUpEnabled: true,
+      "nextFollowUp.status": LoanFollowUpStatus.PENDING,
+      "nextFollowUp.dueAt": { $gt: start, $lte: end },
+      $or: [
+        { "nextFollowUp.reminderNotifiedAt": { $exists: false } },
+        { "nextFollowUp.reminderNotifiedAt": null },
+      ],
+    })
+      .select(
+        "loanId loanType firstName lastName mobile assignedAgent assignedAgents nextFollowUp",
+      )
+      .lean();
+
+    if (!queries.length) return;
+    const adminIds = await getAdminIds();
+
+    for (const query of queries) {
+      const queryId = toIdString(query._id);
+      const dueAt = query.nextFollowUp?.dueAt;
+      const context = {
+        name:
+          `${query.firstName || ""} ${query.lastName || ""}`.trim() ||
+          query.mobile ||
+          "Loan customer",
+        phone: query.mobile,
+        product: String(query.loanType || "Loan").replace(/_/g, " "),
+        followUpTime: formatIndiaTime(dueAt),
+      };
+
+      await notifyFollowUpRecipients({
+        assignedAgentIds: getQueryAssignedAgentIds(query),
+        adminIds,
+        context,
+        referenceLabel: `loan ${query.loanId || queryId}`,
+      });
+      await LoanQuery.updateOne(
+        {
+          _id: query._id,
+          "nextFollowUp.status": LoanFollowUpStatus.PENDING,
+          $or: [
+            { "nextFollowUp.reminderNotifiedAt": { $exists: false } },
+            { "nextFollowUp.reminderNotifiedAt": null },
+          ],
+        },
+        { $set: { "nextFollowUp.reminderNotifiedAt": new Date() } },
+      );
+    }
+  } catch (error) {
+    console.error("[LoanFollowUpReminder] Error in reminder process:", error);
+  }
+};
+
+/**
+ * Process the dedicated follow-up fields stored on InsuranceQuery records.
+ */
+export const processInsuranceQueryFollowUpReminders =
+  async (): Promise<void> => {
+    try {
+      const { start, end } = getReminderWindow();
+      const queries = await InsuranceQuery.find({
+        followUpEnabled: true,
+        "nextFollowUp.status": InsuranceFollowUpStatus.PENDING,
+        "nextFollowUp.dueAt": { $gt: start, $lte: end },
+        $or: [
+          { "nextFollowUp.reminderNotifiedAt": { $exists: false } },
+          { "nextFollowUp.reminderNotifiedAt": null },
+        ],
+      })
+        .select(
+          "typeOfInsurance firstName lastName mobile assignedAgent assignedAgents nextFollowUp",
+        )
+        .lean();
+
+      if (!queries.length) return;
+      const adminIds = await getAdminIds();
+
+      for (const query of queries) {
+        const queryId = toIdString(query._id);
+        const dueAt = query.nextFollowUp?.dueAt;
+        const context = {
+          name:
+            `${query.firstName || ""} ${query.lastName || ""}`.trim() ||
+            query.mobile ||
+            "Insurance customer",
+          phone: query.mobile,
+          product: String(query.typeOfInsurance || "Insurance").replace(
+            /_/g,
+            " ",
+          ),
+          followUpTime: formatIndiaTime(dueAt),
+        };
+
+        await notifyFollowUpRecipients({
+          assignedAgentIds: getQueryAssignedAgentIds(query),
+          adminIds,
+          context,
+          referenceLabel: `insurance ${queryId}`,
+        });
+        await InsuranceQuery.updateOne(
+          {
+            _id: query._id,
+            "nextFollowUp.status": InsuranceFollowUpStatus.PENDING,
+            $or: [
+              { "nextFollowUp.reminderNotifiedAt": { $exists: false } },
+              { "nextFollowUp.reminderNotifiedAt": null },
+            ],
+          },
+          { $set: { "nextFollowUp.reminderNotifiedAt": new Date() } },
+        );
+      }
+    } catch (error) {
+      console.error(
+        "[InsuranceFollowUpReminder] Error in reminder process:",
+        error,
+      );
+    }
+  };
+
+/**
  * Start the callback reminder scheduler
  * Runs every minute to check for upcoming callbacks
  */
@@ -355,6 +543,8 @@ export const startCallbackReminderScheduler = (): NodeJS.Timeout => {
   // Run immediately on start
   processCallbackReminders();
   processLeadFollowUpReminders();
+  processLoanQueryFollowUpReminders();
+  processInsuranceQueryFollowUpReminders();
 
   const intervalMs = CHECK_INTERVAL_MINUTES * 60 * 1000;
   const msUntilNextMinute = intervalMs - (Date.now() % intervalMs);
@@ -363,6 +553,8 @@ export const startCallbackReminderScheduler = (): NodeJS.Timeout => {
     const run = () => {
       processCallbackReminders();
       processLeadFollowUpReminders();
+      processLoanQueryFollowUpReminders();
+      processInsuranceQueryFollowUpReminders();
     };
 
     run();
@@ -375,5 +567,7 @@ export const startCallbackReminderScheduler = (): NodeJS.Timeout => {
 export default {
   processCallbackReminders,
   processLeadFollowUpReminders,
+  processLoanQueryFollowUpReminders,
+  processInsuranceQueryFollowUpReminders,
   startCallbackReminderScheduler,
 };

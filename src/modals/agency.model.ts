@@ -83,6 +83,13 @@ export interface IAgency extends Document {
   loginMethods?: typeof LoginMethodSchema;
   securityPreferences?: typeof SecurityPreferencesSchema;
   agentProfileCompleted?: boolean;
+  approvalReview?: {
+    status?: "pending" | "approved" | "rejected";
+    reviewedBy?: Types.ObjectId;
+    reviewedAt?: Date;
+    notes?: string;
+    checklist?: Record<string, boolean>;
+  };
   cibilScore?: number;
   cibilLastFetchedAt?: Date;
   cibilReport?: Record<string, any>;
@@ -148,6 +155,17 @@ const AgencySchema = new Schema<IAgency>(
     rmName: { type: String, trim: true },
     rmMobile: { type: String, trim: true },
     agentProfileCompleted: { type: Boolean, default: false },
+    approvalReview: {
+      status: {
+        type: String,
+        enum: ["pending", "approved", "rejected"],
+        default: "pending",
+      },
+      reviewedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+      reviewedAt: { type: Date },
+      notes: { type: String, trim: true },
+      checklist: { type: Schema.Types.Mixed, default: {} },
+    },
     bankDetails: { type: BankDetailsSchema },
     verificationRecords: {
       pan: {

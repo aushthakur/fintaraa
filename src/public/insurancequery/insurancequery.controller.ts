@@ -20,6 +20,7 @@ import Lander from "../../modals/lander.model";
 import { User } from "../../modals/user.model";
 import { Agency } from "../../modals/agency.model";
 import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
+import { leadManagementService } from "../../services/leadManagement.service";
 import Admin from "../../modals/admin.model";
 import {
   DEFAULT_QUERY_TIMEZONE,
@@ -28,6 +29,48 @@ import {
 } from "../../utils/helper";
 
 const insuranceQueryService = new CommonService(InsuranceQuery);
+
+const syncInsuranceApplicationLead = async (
+  result: any,
+  customerId: any,
+) => {
+  if (
+    !result ||
+    !["b2c_app", "b2b_app"].includes(String(result.dataSource || ""))
+  ) {
+    return;
+  }
+  try {
+    await leadManagementService.captureLead(
+      {
+        fullName: `${result.firstName || ""} ${result.lastName || ""}`.trim(),
+        email: result.email,
+        mobile: result.mobile,
+        city: result.city,
+        state: result.state,
+        pincode: result.pincode,
+        whatsappOptIn: result.whatsappConsent,
+        tags: ["app_insurance_application", result.typeOfInsurance],
+      },
+      {
+        source: String(result.dataSource),
+        channel: "insurance_application",
+        externalId: String(result._id),
+        actorId: String(customerId),
+        skipExternalNotifications: true,
+        metadata: {
+          insuranceQueryId: String(result._id),
+          insuranceType: result.typeOfInsurance,
+        },
+      },
+    );
+  } catch (leadError: any) {
+    console.error(
+      "[Lead Sync] Insurance application lead sync failed:",
+      leadError?.message || leadError,
+    );
+  }
+};
 
 const toObjectId = (value: any) => {
   const raw = value?._id || value;
@@ -684,6 +727,330 @@ const processFileUploads = (req: Request) => {
       delete req.body[field];
     }
   });
+
+  const uploadedInsuranceDocuments = Array.isArray(
+    req.body.insuranceDocuments,
+  )
+    ? req.body.insuranceDocuments
+    : req.body.insuranceDocuments
+      ? [req.body.insuranceDocuments]
+      : [];
+  const rawManifest = parseMaybeJson(req.body.insuranceDocumentManifest);
+  const manifest = Array.isArray(rawManifest) ? rawManifest.slice(0, 50) : [];
+
+  if (uploadedInsuranceDocuments.length) {
+    const existingDocuments = Array.isArray(req.body.policyDetails.documents)
+      ? req.body.policyDetails.documents
+      : [];
+    const nextDocuments = [...existingDocuments];
+    let fileOffset = 0;
+
+    const appendDocumentGroup = ({
+      key,
+      label,
+      catalogId,
+      catalogKey,
+      attachments,
+    }: {
+      key: string;
+      label: string;
+      catalogId?: string;
+      catalogKey?: string;
+      attachments: any[];
+    }) => {
+      const files = attachments
+        .map((attachment: any) => {
+          const url = extractFileUrl(attachment);
+          if (!url) return null;
+          return {
+            url,
+            name:
+              normalizeStringInput(
+                attachment?.originalname || attachment?.name || label,
+                250,
+              ) || label,
+            size: Number(attachment?.size) || undefined,
+            mimetype:
+              normalizeStringInput(attachment?.mimetype, 150) || undefined,
+          };
+        })
+        .filter(Boolean);
+      if (!files.length) return;
+
+      const existingIndex = nextDocuments.findIndex(
+        (document: any) =>
+          String(document?.key || "") === key &&
+          String(document?.catalogId || "") === String(catalogId || ""),
+      );
+      const existingFiles =
+        existingIndex >= 0 && Array.isArray(nextDocuments[existingIndex]?.files)
+          ? nextDocuments[existingIndex].files
+          : [];
+      const mergedFiles = [...existingFiles, ...files].filter(
+        (file: any, index: number, all: any[]) =>
+          all.findIndex(
+            (candidate: any) =>
+              String(candidate?.url || candidate) ===
+              String(file?.url || file),
+          ) === index,
+      );
+      const entry = {
+        key,
+        label,
+        catalogId: catalogId || undefined,
+        catalogKey: catalogKey || undefined,
+        files: mergedFiles,
+      };
+
+      if (existingIndex >= 0) nextDocuments[existingIndex] = entry;
+      else nextDocuments.push(entry);
+
+      const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]+/g, "");
+      if (
+        ["pancard", "aadhaarcard", "adharcard", "kycdocs"].includes(
+          normalizedKey,
+        ) &&
+        (!req.body.kycDocumentUrl ||
+          req.body.kycDocumentUrl === "pending_upload")
+      ) {
+        req.body.kycDocumentUrl = files[0]?.url;
+      }
+    };
+
+    manifest.forEach((entry: any) => {
+      const requestedCount = Math.max(
+        0,
+        Math.min(
+          Number(entry?.fileCount) || 0,
+          uploadedInsuranceDocuments.length - fileOffset,
+        ),
+      );
+      if (!requestedCount) return;
+      const key =
+        normalizeStringInput(
+          entry?.catalogKey || entry?.key || "supporting_document",
+          250,
+        ) || "supporting_document";
+      const label =
+        normalizeStringInput(entry?.label, 250) ||
+        key.replace(/[_-]+/g, " ");
+      appendDocumentGroup({
+        key,
+        label,
+        catalogId:
+          normalizeStringInput(entry?.catalogId, 100) || undefined,
+        catalogKey:
+          normalizeStringInput(entry?.catalogKey, 250) || undefined,
+        attachments: uploadedInsuranceDocuments.slice(
+          fileOffset,
+          fileOffset + requestedCount,
+        ),
+      });
+      fileOffset += requestedCount;
+    });
+
+    if (fileOffset < uploadedInsuranceDocuments.length) {
+      appendDocumentGroup({
+        key: "supporting_document",
+        label: "Supporting Document",
+        attachments: uploadedInsuranceDocuments.slice(fileOffset),
+      });
+    }
+
+    req.body.policyDetails.documents = nextDocuments;
+  }
+
+  delete req.body.insuranceDocuments;
+  delete req.body.insuranceDocumentManifest;
+};
+
+const applySavedInsuranceProfileDocuments = (
+  body: Record<string, any>,
+  user: any,
+) => {
+  const selections = parseMaybeJson(body.profileDocumentSelections);
+  delete body.profileDocumentSelections;
+  if (!Array.isArray(selections) || !selections.length) return;
+
+  const profileDocuments = user?.digiLockerVault?.documents || [];
+  if (!Array.isArray(profileDocuments) || !profileDocuments.length) return;
+  body.policyDetails =
+    body.policyDetails && typeof body.policyDetails === "object"
+      ? body.policyDetails
+      : {};
+  const applicationDocuments = Array.isArray(body.policyDetails.documents)
+    ? [...body.policyDetails.documents]
+    : [];
+
+  selections.slice(0, 50).forEach((selection: any) => {
+    const docType = normalizeStringInput(selection?.docType, 250);
+    const fileUrl = normalizeStringInput(selection?.fileUrl, 2000);
+    if (!docType || !fileUrl) return;
+    const ownedDocument = profileDocuments.find(
+      (document: any) =>
+        String(document?.docType || "") === docType &&
+        String(document?.fileUrl || "") === fileUrl,
+    );
+    if (!ownedDocument) return;
+
+    const key =
+      normalizeStringInput(
+        selection?.catalogKey || selection?.targetKey || docType,
+        250,
+      ) || docType;
+    const label =
+      normalizeStringInput(selection?.label, 250) ||
+      normalizeStringInput(selection?.catalogKey, 250) ||
+      docType;
+    const hasFreshUpload = applicationDocuments.some(
+      (entry: any) =>
+        String(entry?.key || "") === key &&
+        Array.isArray(entry?.files) &&
+        entry.files.length > 0,
+    );
+    if (hasFreshUpload) return;
+    const alreadyIncluded = applicationDocuments.some(
+      (entry: any) =>
+        String(entry?.key || "") === key &&
+        (entry?.files || []).some(
+          (file: any) => String(file?.url || file) === fileUrl,
+        ),
+    );
+    if (!alreadyIncluded) {
+      applicationDocuments.push({
+        key,
+        label,
+        catalogId:
+          normalizeStringInput(selection?.catalogId, 100) || undefined,
+        catalogKey:
+          normalizeStringInput(selection?.catalogKey, 250) || undefined,
+        files: [
+          {
+            url: fileUrl,
+            name:
+              normalizeStringInput(ownedDocument?.referenceId, 250) || label,
+          },
+        ],
+      });
+    }
+
+    const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    if (
+      ["pancard", "aadhaarcard", "adharcard", "kycdocs"].includes(
+        normalizedKey,
+      ) &&
+      (!body.kycDocumentUrl || body.kycDocumentUrl === "pending_upload")
+    ) {
+      body.kycDocumentUrl = fileUrl;
+    }
+  });
+
+  if (applicationDocuments.length) {
+    body.policyDetails.documents = applicationDocuments;
+  }
+};
+
+const collectReusableInsuranceDocuments = (query: any) => {
+  const collected: Array<Record<string, any>> = [];
+  const applicationDocuments = Array.isArray(
+    query?.policyDetails?.documents,
+  )
+    ? query.policyDetails.documents
+    : [];
+
+  applicationDocuments.forEach((document: any) => {
+    const docType =
+      normalizeStringInput(
+        document?.catalogKey || document?.key || "supporting_document",
+        250,
+      ) || "supporting_document";
+    const files = Array.isArray(document?.files)
+      ? document.files
+      : document?.files
+        ? [document.files]
+        : [];
+    files.forEach((file: any) => {
+      const fileUrl = extractFileUrl(file);
+      if (!fileUrl) return;
+      collected.push({
+        docType,
+        fileUrl,
+        issuer: "insurance_application",
+        referenceId:
+          normalizeStringInput(file?.name, 250) ||
+          normalizeStringInput(document?.label, 250) ||
+          query?.insuranceId ||
+          "insurance_application",
+        verified: false,
+      });
+    });
+  });
+
+  const kycDocumentUrl = extractFileUrl(query?.kycDocumentUrl);
+  if (
+    kycDocumentUrl &&
+    kycDocumentUrl !== "pending_upload" &&
+    !collected.some(
+      (document) => String(document.fileUrl) === String(kycDocumentUrl),
+    )
+  ) {
+    collected.push({
+      docType: query?.kycDocumentType || "kyc_document",
+      fileUrl: kycDocumentUrl,
+      issuer: "insurance_application",
+      referenceId: query?.insuranceId || "insurance_application",
+      verified: false,
+    });
+  }
+
+  return collected;
+};
+
+const syncInsuranceDocumentsToCustomerProfile = async ({
+  user,
+  query,
+}: {
+  user: any;
+  query: any;
+}) => {
+  const incomingDocuments = collectReusableInsuranceDocuments(query);
+  if (!user || !incomingDocuments.length) return;
+
+  const currentVaultDocuments =
+    JSON.parse(JSON.stringify(user.digiLockerVault?.documents || [])) || [];
+  const vaultByIdentity = new Map<string, any>();
+  currentVaultDocuments.forEach((document: any) => {
+    if (!document?.docType) return;
+    vaultByIdentity.set(
+      `${document.docType}:${document.fileUrl || document.number || ""}`,
+      document,
+    );
+  });
+  incomingDocuments.forEach((document) => {
+    vaultByIdentity.set(`${document.docType}:${document.fileUrl}`, document);
+  });
+
+  const currentKycDocuments =
+    JSON.parse(JSON.stringify(user.kycProfile?.documents || [])) || [];
+  const kycByIdentity = new Map<string, any>();
+  currentKycDocuments.forEach((document: any) => {
+    if (!document?.docType) return;
+    kycByIdentity.set(
+      `${document.docType}:${document.fileUrl || document.number || ""}`,
+      document,
+    );
+  });
+  incomingDocuments.forEach((document) => {
+    kycByIdentity.set(`${document.docType}:${document.fileUrl}`, document);
+  });
+
+  user.set("digiLockerVault", {
+    storageProvider: user.digiLockerVault?.storageProvider || "internal",
+    syncedAt: new Date(),
+    documents: Array.from(vaultByIdentity.values()),
+  });
+  user.set("kycProfile.documents", Array.from(kycByIdentity.values()));
+  await user.save();
 };
 
 const toNumber = (value: any) => {
@@ -897,6 +1264,22 @@ export class InsuranceQueryController {
 
       // Automatically set customerId from token
       req.body.customerId = customerId;
+      req.body.dataSource =
+        String(req.body.dataSource || req.get("x-source-platform") || "")
+          .trim()
+          .toLowerCase() || (role === "agency" || role === "agency_member"
+          ? "b2b_app"
+          : "unknown");
+      req.body.formSource =
+        String(req.body.formSource || req.body.dataSource).trim() ||
+        req.body.dataSource;
+      req.body.whatsappConsent =
+        req.body.whatsappConsent === true ||
+        ["true", "1", "yes"].includes(
+          String(req.body.whatsappConsent || "").toLowerCase(),
+        );
+      req.body.communicationConsent =
+        parseMaybeJson(req.body.communicationConsent) || {};
       if (role === "agency" || role === "agency_member") {
         req.body.channelAgency = customerId;
         if (role === "agency_member") {
@@ -914,14 +1297,25 @@ export class InsuranceQueryController {
       );
       const user = await User.findById(customerId);
       normalizeInsurancePayload(req, user);
+      applySavedInsuranceProfileDocuments(req.body, user);
 
       // Validate policyDetails against typeOfInsurance if both are provided (skip for draft)
       // This must run AFTER processFileUploads since files are moved to policyDetails
       const isDraft = req.body.status === ApplicationStatus.DRAFT;
-      if (!isDraft && req.body.typeOfInsurance && req.body.policyDetails && Object.keys(req.body.policyDetails).length > 0) {
+      const isWebsiteApplication =
+        String(req.body.dataSource || "").toLowerCase() === "website" ||
+        String(req.body.formSource || "").toLowerCase() ===
+          "website_application_flow";
+      if (
+        !isDraft &&
+        !isWebsiteApplication &&
+        req.body.typeOfInsurance &&
+        req.body.policyDetails &&
+        Object.keys(req.body.policyDetails).length > 0
+      ) {
         const allowed = allowedFieldsByFormType[req.body.typeOfInsurance] || [];
         const invalidFields = Object.keys(req.body.policyDetails).filter(
-          (field) => !allowed.includes(field)
+          (field) => field !== "documents" && !allowed.includes(field)
         );
         if (invalidFields.length > 0) {
           return res
@@ -1033,6 +1427,20 @@ export class InsuranceQueryController {
         return res
           .status(400)
           .json(new ApiError(400, "Failed to create insurance query"));
+      try {
+        await syncInsuranceDocumentsToCustomerProfile({ user, query: result });
+      } catch (profileSyncError: any) {
+        console.error(
+          "[Insurance Documents] Profile sync failed:",
+          profileSyncError?.message || profileSyncError,
+        );
+      }
+      if (
+        !isDraft &&
+        ["b2c_app", "b2b_app"].includes(String(result.dataSource || ""))
+      ) {
+        await syncInsuranceApplicationLead(result, customerId);
+      }
       return res
         .status(201)
         .json(
@@ -1702,6 +2110,17 @@ export class InsuranceQueryController {
       const hasRegularPayload = Object.keys(req.body || {}).length > 0;
       if (hasRegularPayload) {
         processFileUploads(req);
+        if (req.body.whatsappConsent !== undefined) {
+          req.body.whatsappConsent =
+            req.body.whatsappConsent === true ||
+            ["true", "1", "yes"].includes(
+              String(req.body.whatsappConsent || "").toLowerCase(),
+            );
+        }
+        if (req.body.communicationConsent !== undefined) {
+          req.body.communicationConsent =
+            parseMaybeJson(req.body.communicationConsent) || {};
+        }
       }
 
       // Prevent changing customerId
@@ -1759,6 +2178,10 @@ export class InsuranceQueryController {
           populate: true,
         },
       );
+      const isDraftSubmitted =
+        existingResult?.status === ApplicationStatus.DRAFT &&
+        updatedResult.status !== ApplicationStatus.DRAFT;
+      const session = (req as any).mongoSession;
       
       // Track status change
       if (updatedResult && existingResult?.status !== updatedResult.status) {
@@ -1798,11 +2221,9 @@ export class InsuranceQueryController {
       // Auto-assign employee if status changed from draft to non-draft and no employee assigned
       if (
         updatedResult &&
-        existingResult?.status === ApplicationStatus.DRAFT &&
-        updatedResult.status !== ApplicationStatus.DRAFT &&
+        isDraftSubmitted &&
         !updatedResult.assignedAgent
       ) {
-        const session = (req as any).mongoSession;
         await EmployeeAssignmentEngine.ensureAssignmentForInsuranceQuery(
           updatedResult as any,
           {
@@ -1817,11 +2238,9 @@ export class InsuranceQueryController {
       // Auto-assign lander if status changed from draft to non-draft and no lander assigned
       if (
         updatedResult &&
-        existingResult?.status === ApplicationStatus.DRAFT &&
-        updatedResult.status !== ApplicationStatus.DRAFT &&
+        isDraftSubmitted &&
         !updatedResult.assignedLander
       ) {
-        const session = (req as any).mongoSession;
         const result = await LanderAssignmentEngine.ensureAssignment(
           updatedResult,
           {
@@ -1831,12 +2250,16 @@ export class InsuranceQueryController {
           }
         );
         await result.save({ session });
+        await syncInsuranceApplicationLead(result, customerId);
         return res
           .status(200)
           .json(new ApiResponse(200, result, "Insurance query updated successfully"));
       }
       
       await updatedResult.save();
+      if (isDraftSubmitted) {
+        await syncInsuranceApplicationLead(updatedResult, customerId);
+      }
       return res
         .status(200)
         .json(new ApiResponse(200, updatedResult, "Insurance query updated successfully"));
@@ -2242,6 +2665,8 @@ export class InsuranceQueryController {
           .json(new ApiError(403, "You can only update documents of queries assigned to you"));
       }
 
+      processFileUploads(req);
+
       // Initialize policy details if not exists
       if (!query.policyDetails) {
         query.policyDetails = {};
@@ -2256,16 +2681,43 @@ export class InsuranceQueryController {
 
       const uploadedDocs: string[] = [];
       documentTypes.forEach((docType) => {
-        if (req.body[docType]) {
-          const urlData = req.body[docType];
-          // Extract URL from multer/S3 response format
-          const url = Array.isArray(urlData) ? urlData[0]?.url : urlData?.url || urlData;
-          if (url && query.policyDetails) {
-            query.policyDetails[docType] = url;
+        const processedValue = req.body.policyDetails?.[docType];
+        if (processedValue) {
+          if (query.policyDetails) {
+            query.policyDetails[docType] = processedValue;
             uploadedDocs.push(docType);
           }
         }
       });
+
+      const processedDocuments = Array.isArray(
+        req.body.policyDetails?.documents,
+      )
+        ? req.body.policyDetails.documents
+        : [];
+      if (processedDocuments.length && query.policyDetails) {
+        const currentDocuments = Array.isArray(query.policyDetails.documents)
+          ? query.policyDetails.documents
+          : [];
+        const documentByIdentity = new Map<string, any>();
+        [...currentDocuments, ...processedDocuments].forEach(
+          (document: any) => {
+            const firstUrl = extractFileUrl(document?.files?.[0]) || "";
+            documentByIdentity.set(
+              `${document?.key || "supporting_document"}:${firstUrl}`,
+              document,
+            );
+          },
+        );
+        query.policyDetails.documents = Array.from(
+          documentByIdentity.values(),
+        );
+        uploadedDocs.push(
+          ...processedDocuments.map(
+            (document: any) => document?.label || document?.key || "document",
+          ),
+        );
+      }
 
       // Also support direct URL input
       if (req.body.documentUrl && req.body.documentType && query.policyDetails) {
@@ -2293,6 +2745,7 @@ export class InsuranceQueryController {
         await buildInsuranceAuditFields(actorId, role),
       );
 
+      query.markModified("policyDetails");
       await query.save();
 
       return res

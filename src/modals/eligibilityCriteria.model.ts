@@ -144,7 +144,7 @@ const EligibilityCriteriaSchema = new Schema<IEligibilityCriteria>(
     roi: { type: Number },
     minAge: { type: Number },
     maxAge: { type: Number },
-    maxTenureYears: { type: Number },
+    maxTenureYears: { type: Number, min: 1, max: 30 },
     cashRental: { type: String, trim: true },
     bankRental: { type: String, trim: true },
     mixRental: { type: String, trim: true },

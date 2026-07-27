@@ -8,6 +8,7 @@ export enum AllowedDocumentType {
   AADHAAR_CARD = "aadhaar_card",
   PHOTO = "photo",
   ITR_FORM_16 = "itr_form_16",
+  FORM_16AB = "form_16ab",
   SALARY_SLIP = "salary_slip",
   OFFER_LETTER = "offer_letter",
   RELIEVING_LETTER = "relieving_letter",
@@ -16,6 +17,7 @@ export enum AllowedDocumentType {
   GST_RETURNS = "gst_returns",
   SHOP_ACT = "shop_act",
   GOVT_LICENSE = "govt_license",
+  CATALOG_DOCUMENTS = "catalog_documents",
 }
 
 // Allowed document types array for validation
@@ -87,6 +89,7 @@ export interface ILoanQueryActivity {
 
 export interface ILoanQueryFollowUp {
   dueAt?: Date;
+  reminderNotifiedAt?: Date;
   type?: LoanFollowUpType;
   reason?: string;
   assignedTo?: Types.ObjectId;
@@ -150,6 +153,7 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
     "downPaymentAmount",
     "tenure",
     "rcCopyUrl",
+    "inspectionPhotosUrl",
   ],
   [LoanType.GOLD_LOAN]: [
     "goldType",
@@ -165,6 +169,8 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
     "yearOfManufacture",
     "carIdentificationNumber",
     "carInsuranceUrl",
+    "rcCopyUrl",
+    "inspectionPhotosUrl",
   ],
   [LoanType.INSTANT_LOAN]: [
     "employmentType",
@@ -231,6 +237,7 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
     "collateralAvailable",
     "gstReturnsUrl",
     "businessRegistrationCertificateUrl",
+    "landDocumentsUrl",
     "tenure",
   ],
   [LoanType.DOD_LOAN]: [],
@@ -270,6 +277,9 @@ export interface ILoanQuery extends Document {
   street: string;
   leadBy?: string;
   dataSource?: string;
+  formSource?: string;
+  whatsappConsent?: boolean;
+  communicationConsent?: Record<string, any>;
   createdByName?: string;
   createdByRole?: string;
   updatedByName?: string;
@@ -364,6 +374,9 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     street: { type: String, required: true, trim: true },
     leadBy: { type: String, trim: true },
     dataSource: { type: String, trim: true },
+    formSource: { type: String, trim: true },
+    whatsappConsent: { type: Boolean, default: false },
+    communicationConsent: { type: Schema.Types.Mixed, default: {} },
     createdByName: { type: String, trim: true },
     createdByRole: { type: String, trim: true },
     updatedByName: { type: String, trim: true },
@@ -525,6 +538,7 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     followUpEnabled: { type: Boolean, default: false, index: true },
     nextFollowUp: {
       dueAt: { type: Date, index: true },
+      reminderNotifiedAt: { type: Date },
       type: {
         type: String,
         enum: Object.values(LoanFollowUpType),

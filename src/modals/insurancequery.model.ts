@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
 import { Gender } from "./user.model";
+import { generateApplicationId } from "../utils/applicationId";
 
 export enum InsuranceType {
   LIFE = "life",
@@ -59,6 +60,7 @@ export enum InsuranceFollowUpPriority {
 
 export interface IInsuranceQueryFollowUp {
   dueAt?: Date;
+  reminderNotifiedAt?: Date;
   type?: InsuranceFollowUpType;
   reason?: string;
   assignedTo?: Types.ObjectId;
@@ -252,6 +254,7 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
 };
 
 export interface IInsuranceQuery extends Document {
+  insuranceId?: string;
   customerId: Types.ObjectId;
   isDeleted?: boolean;
   deletedAt?: Date | null;
@@ -276,6 +279,10 @@ export interface IInsuranceQuery extends Document {
   kycDocumentUrl: string;
   typeOfInsurance: InsuranceType;
   status: ApplicationStatus;
+  dataSource?: string;
+  formSource?: string;
+  whatsappConsent?: boolean;
+  communicationConsent?: Record<string, any>;
   policyDetails?: Record<string, any>;
   assignedAgent?: Types.ObjectId;
   assignedLander?: Types.ObjectId;
@@ -305,6 +312,13 @@ export interface IInsuranceQuery extends Document {
 
 const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
   {
+    insuranceId: {
+      type: String,
+      trim: true,
+      index: true,
+      unique: true,
+      sparse: true,
+    },
     customerId: {
       type: Schema.Types.ObjectId,
       ref: "User",
@@ -366,6 +380,10 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
       default: ApplicationStatus.PENDING,
       index: true,
     },
+    dataSource: { type: String, trim: true },
+    formSource: { type: String, trim: true },
+    whatsappConsent: { type: Boolean, default: false },
+    communicationConsent: { type: Schema.Types.Mixed, default: {} },
     policyDetails: {
       type: Object,
       default: {},
@@ -426,6 +444,7 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
     followUpEnabled: { type: Boolean, default: false, index: true },
     nextFollowUp: {
       dueAt: { type: Date, index: true },
+      reminderNotifiedAt: { type: Date },
       type: {
         type: String,
         enum: Object.values(InsuranceFollowUpType),
@@ -528,6 +547,22 @@ InsuranceQuerySchema.pre(/^find/, function (this: any, next) {
   }
   this.where({ isDeleted: { $ne: true } });
   next();
+});
+
+InsuranceQuerySchema.pre("save", async function (next) {
+  const doc = this as IInsuranceQuery;
+  if (!doc.isNew || doc.insuranceId) return next();
+
+  try {
+    const session = doc.$session();
+    doc.insuranceId = await generateApplicationId(
+      "insurance",
+      session || undefined,
+    );
+    return next();
+  } catch (error) {
+    return next(error as any);
+  }
 });
 
 export const InsuranceQuery = mongoose.model<IInsuranceQuery>(

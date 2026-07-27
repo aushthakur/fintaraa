@@ -900,6 +900,7 @@ const buildPublicEligibilityResult = (
   criteria: Record<string, any>,
   filters: {
     amount: number | null;
+    monthlyIncome: number | null;
     cibilScore: number | null;
     tenureYears: number | null;
     salaryType: string;
@@ -948,6 +949,21 @@ const buildPublicEligibilityResult = (
       passed,
     });
     matchScore += passed ? 12 : -8;
+  }
+
+  const criteriaMonthlyIncome =
+    filters.salaryType === "Salaried"
+      ? toPublicNumber(criteria.netSalary)
+      : null;
+  if (criteriaMonthlyIncome && filters.monthlyIncome) {
+    const passed = filters.monthlyIncome >= criteriaMonthlyIncome;
+    checks.push({
+      label: "Monthly income",
+      requirement: `${formatPublicCurrency(criteriaMonthlyIncome)}+`,
+      provided: formatPublicCurrency(filters.monthlyIncome),
+      passed,
+    });
+    matchScore += passed ? 14 : -12;
   }
 
   if (filters.salaryType) {
@@ -1073,6 +1089,7 @@ export class EligibilityCriteriaController {
       const loanType = normalizePublicLoanType(rawLoanType);
       const salaryType = normalizeEligibilitySalaryType(req.query.salaryType);
       const amount = toPublicNumber(req.query.amount);
+      const monthlyIncome = toPublicNumber(req.query.monthlyIncome);
       const cibilScore = toPublicNumber(req.query.cibilScore);
       const tenureYears = toPublicNumber(req.query.tenureYears);
       const limit = clampPublicLimit(req.query.limit);
@@ -1106,6 +1123,7 @@ export class EligibilityCriteriaController {
         .map((criteria) =>
           buildPublicEligibilityResult(criteria, {
             amount,
+            monthlyIncome,
             cibilScore,
             tenureYears,
             salaryType,
@@ -1127,6 +1145,7 @@ export class EligibilityCriteriaController {
               loanType,
               salaryType,
               amount,
+              monthlyIncome,
               cibilScore,
               tenureYears,
               bank,

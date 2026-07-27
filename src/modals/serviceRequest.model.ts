@@ -5,6 +5,7 @@ export enum ServiceRequestType {
   ITR = "itr_filing",
   COMPANY = "company_registration",
   ANNUAL_COMPLIANCE = "annual_compliance",
+  ROC_FILING = "roc_filing",
   TAX_COMPLIANCE = "tax_compliance",
   MSME = "msme_registration",
   PROJECT_REPORT = "project_report",

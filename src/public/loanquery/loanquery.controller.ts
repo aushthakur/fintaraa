@@ -40,6 +40,8 @@ import {
   buildDateRangeInTimeZone,
   parseDateInTimeZone,
 } from "../../utils/helper";
+import { syncLinkedCallRecordFollowUp } from "../../services/callRecordFollowUp.service";
+import { leadManagementService } from "../../services/leadManagement.service";
 
 const RC_CACHE_TTL_DAYS = 365;
 const normalizeRcNumber = (value: string) =>
@@ -1011,6 +1013,225 @@ const normalizeUploadedAttachments = (value: any): Record<string, any>[] => {
     .filter(Boolean) as Record<string, any>[];
 };
 
+const reusableLoanDocumentTypes = new Set([
+  "pan_card",
+  "aadhaar_card",
+  "photo",
+  "itr_form_16",
+  "form_16ab",
+  "salary_slip",
+  "offer_letter",
+  "relieving_letter",
+  "bank_statement",
+  "gst_certificate",
+  "gst_returns",
+  "shop_act",
+  "govt_license",
+]);
+
+const reusableLoanPolicyDocumentTypes = new Set([
+  "salarySlipUrl",
+  "admissionLetterUrl",
+  "feeStructureUrl",
+  "rcCopyUrl",
+  "goldPhotosUrl",
+  "carInsuranceUrl",
+  "lastMonthBankStatementUrl",
+  "propertyDocumentsUrl",
+  "propertyOwnershipProofUrl",
+  "renovationEstimateUrl",
+  "itrUrl",
+  "gstReturnsUrl",
+  "dematStatementOrFdCopyUrl",
+  "proformaInvoiceOrQuotationUrl",
+  "businessRegistrationCertificateUrl",
+  "inspectionPhotosUrl",
+  "landDocumentsUrl",
+]);
+
+const applySavedProfileDocuments = async (
+  body: Record<string, any>,
+  customerId: any,
+) => {
+  const rawSelections = parseMaybeJson(body.profileDocumentSelections);
+  delete body.profileDocumentSelections;
+  if (!Array.isArray(rawSelections) || rawSelections.length === 0) return;
+
+  const user = await User.findById(customerId)
+    .select("digiLockerVault.documents")
+    .lean();
+  const profileDocuments = (user as any)?.digiLockerVault?.documents || [];
+  if (!profileDocuments.length) return;
+
+  body.documents =
+    body.documents && typeof body.documents === "object" ? body.documents : {};
+  body.policyDetails =
+    body.policyDetails && typeof body.policyDetails === "object"
+      ? body.policyDetails
+      : {};
+
+  rawSelections.slice(0, 50).forEach((selection: any) => {
+    const targetKey = normalizeStringInput(selection?.targetKey, 250);
+    const docType = normalizeStringInput(selection?.docType, 250);
+    const fileUrl = normalizeStringInput(selection?.fileUrl, 2000);
+    if (!targetKey || !docType || !fileUrl) return;
+
+    const ownedDocument = profileDocuments.find(
+      (document: any) =>
+        String(document?.docType || "") === docType &&
+        String(document?.fileUrl || "") === fileUrl,
+    );
+    if (!ownedDocument) return;
+
+    if (reusableLoanDocumentTypes.has(targetKey)) {
+      if (!body.documents[targetKey]) body.documents[targetKey] = fileUrl;
+      return;
+    }
+
+    if (targetKey === "bankStatementUrl") {
+      if (!body.bankStatementUrl) body.bankStatementUrl = fileUrl;
+      return;
+    }
+
+    if (reusableLoanPolicyDocumentTypes.has(targetKey)) {
+      if (!body.policyDetails[targetKey]) {
+        body.policyDetails[targetKey] = fileUrl;
+      }
+      return;
+    }
+
+    if (!targetKey.startsWith("__catalogLoanDocument:")) return;
+    const catalogDocuments = Array.isArray(body.documents.catalog_documents)
+      ? body.documents.catalog_documents
+      : [];
+    const alreadyIncluded = catalogDocuments.some(
+      (entry: any) =>
+        String(entry?.key || "") === docType &&
+        (entry?.files || []).some(
+          (file: any) => String(file?.url || file) === fileUrl,
+        ),
+    );
+    if (alreadyIncluded) return;
+
+    catalogDocuments.push({
+      catalogId: normalizeStringInput(selection?.catalogId, 100) || undefined,
+      key:
+        normalizeStringInput(selection?.catalogKey, 250) ||
+        docType ||
+        "other",
+      label:
+        normalizeStringInput(selection?.label, 250) ||
+        normalizeStringInput(selection?.catalogKey, 250) ||
+        docType,
+      files: [
+        {
+          url: fileUrl,
+          name:
+            normalizeStringInput(ownedDocument?.referenceId, 250) ||
+            normalizeStringInput(selection?.label, 250) ||
+            docType,
+        },
+      ],
+    });
+    body.documents.catalog_documents = catalogDocuments;
+  });
+};
+
+const collectReusableLoanDocuments = (query: any) => {
+  const collected: any[] = [];
+  const addDocument = (
+    docType: string,
+    value: any,
+    referenceId?: string,
+  ) => {
+    const url = extractFileUrls(value)[0];
+    if (!docType || !url) return;
+    collected.push({
+      docType,
+      fileUrl: url,
+      issuer: "loan_application",
+      referenceId: referenceId || query?.loanId || "loan_application",
+      verified: false,
+    });
+  };
+
+  Object.entries(query?.documents || {}).forEach(([docType, value]) => {
+    if (docType === "catalog_documents" && Array.isArray(value)) {
+      value.forEach((entry: any) => {
+        const attachment = (entry?.files || [])[0];
+        addDocument(
+          String(entry?.key || "other"),
+          attachment,
+          attachment?.name || entry?.label || query?.loanId,
+        );
+      });
+      return;
+    }
+    if (reusableLoanDocumentTypes.has(docType)) {
+      addDocument(docType, value);
+    }
+  });
+
+  addDocument("bankStatementUrl", query?.bankStatementUrl);
+  reusableLoanPolicyDocumentTypes.forEach((docType) => {
+    addDocument(docType, query?.policyDetails?.[docType]);
+  });
+  return collected;
+};
+
+const syncLoanDocumentsToCustomerProfile = async ({
+  customerId,
+  query,
+  session,
+}: {
+  customerId: any;
+  query: any;
+  session?: any;
+}) => {
+  const incomingDocuments = collectReusableLoanDocuments(query);
+  if (!incomingDocuments.length) return;
+
+  const userQuery = User.findById(customerId);
+  if (session) userQuery.session(session);
+  const user: any = await userQuery;
+  if (!user) return;
+
+  const currentVaultDocuments =
+    JSON.parse(JSON.stringify(user.digiLockerVault?.documents || [])) || [];
+  const vaultByType = new Map<string, any>();
+  currentVaultDocuments.forEach((document: any) => {
+    if (document?.docType) vaultByType.set(document.docType, document);
+  });
+  incomingDocuments.forEach((document) => {
+    vaultByType.set(document.docType, {
+      ...(vaultByType.get(document.docType) || {}),
+      ...document,
+    });
+  });
+
+  const currentKycDocuments =
+    JSON.parse(JSON.stringify(user.kycProfile?.documents || [])) || [];
+  const kycByIdentity = new Map<string, any>();
+  currentKycDocuments.forEach((document: any) => {
+    if (!document?.docType) return;
+    kycByIdentity.set(
+      `${document.docType}:${document.fileUrl || document.number || ""}`,
+      document,
+    );
+  });
+  incomingDocuments.forEach((document) => {
+    kycByIdentity.set(`${document.docType}:${document.fileUrl}`, document);
+  });
+
+  user.set("digiLockerVault", {
+    storageProvider: user.digiLockerVault?.storageProvider || "internal",
+    syncedAt: new Date(),
+    documents: Array.from(vaultByType.values()),
+  });
+  user.set("kycProfile.documents", Array.from(kycByIdentity.values()));
+  await user.save({ ...(session ? { session } : {}) });
+};
+
 const normalizeCoApplicants = (value: any) => {
   const parsed = parseMaybeJson(value);
   const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
@@ -1188,14 +1409,24 @@ const processFileUploads = (req: Request) => {
     "dematStatementOrFdCopyUrl",
     "proformaInvoiceOrQuotationUrl",
     "businessRegistrationCertificateUrl",
+    "inspectionPhotosUrl",
+    "landDocumentsUrl",
   ];
+  const multiFilePolicyDocumentFields = new Set([
+    "goldPhotosUrl",
+    "propertyDocumentsUrl",
+    "inspectionPhotosUrl",
+    "landDocumentsUrl",
+  ]);
 
   policyDetailsDocumentFields.forEach((field) => {
     // Only process if field is allowed for this loan type (or if loanType is not set yet)
     if (req.body[field] && (!loanType || allowedFields.includes(field))) {
-      const url = extractFileUrl(req.body[field]);
-      if (url) {
-        req.body.policyDetails[field] = url;
+      const urls = extractFileUrls(req.body[field]);
+      if (urls.length) {
+        req.body.policyDetails[field] = multiFilePolicyDocumentFields.has(field)
+          ? urls
+          : urls[0];
       }
       // Remove from body after processing
       delete req.body[field];
@@ -1209,6 +1440,7 @@ const processFileUploads = (req: Request) => {
     "aadhaar_card",
     "photo",
     "itr_form_16",
+    "form_16ab",
     "salary_slip",
     "offer_letter",
     "relieving_letter",
@@ -1229,6 +1461,44 @@ const processFileUploads = (req: Request) => {
       delete req.body[docType];
     }
   });
+
+  const catalogAttachments = normalizeUploadedAttachments(
+    req.body.catalogDocuments,
+  );
+  const catalogManifest = parseMaybeJson(req.body.catalogDocumentManifest);
+  if (catalogAttachments.length && Array.isArray(catalogManifest)) {
+    let attachmentIndex = 0;
+    const catalogDocuments = catalogManifest
+      .slice(0, 50)
+      .map((entry: any) => {
+        const fileCount = Math.max(
+          1,
+          Math.min(Number(entry?.fileCount) || 1, 10),
+        );
+        const files = catalogAttachments.slice(
+          attachmentIndex,
+          attachmentIndex + fileCount,
+        );
+        attachmentIndex += fileCount;
+
+        return {
+          catalogId: normalizeStringInput(entry?.id, 100) || undefined,
+          key: normalizeStringInput(entry?.key, 200) || "other",
+          label:
+            normalizeStringInput(entry?.label, 200) ||
+            normalizeStringInput(entry?.key, 200) ||
+            "Document",
+          files,
+        };
+      })
+      .filter((entry: any) => entry.files.length > 0);
+
+    if (catalogDocuments.length) {
+      req.body.documents.catalog_documents = catalogDocuments;
+    }
+  }
+  delete req.body.catalogDocuments;
+  delete req.body.catalogDocumentManifest;
 };
 
 const normalizeAccountType = (value?: string) => {
@@ -1646,8 +1916,28 @@ export class LoanQueryController {
       if (normalizedLoanType) req.body.loanType = normalizedLoanType;
 
       processFileUploads(req);
+      await applySavedProfileDocuments(req.body, customerId);
+      if (req.body.rcLookup !== undefined) {
+        req.body.rcLookup = parseMaybeJson(req.body.rcLookup);
+      }
 
       req.body.customerId = customerId;
+      req.body.dataSource =
+        String(req.body.dataSource || req.get("x-source-platform") || "")
+          .trim()
+          .toLowerCase() || (role === "agency" || role === "agency_member"
+          ? "b2b_app"
+          : "unknown");
+      req.body.formSource =
+        String(req.body.formSource || req.body.dataSource).trim() ||
+        req.body.dataSource;
+      req.body.whatsappConsent =
+        req.body.whatsappConsent === true ||
+        ["true", "1", "yes"].includes(
+          String(req.body.whatsappConsent || "").toLowerCase(),
+        );
+      req.body.communicationConsent =
+        parseMaybeJson(req.body.communicationConsent) || {};
 
       const [agency, updatedByName] = await Promise.all([
         role === "agency_member"
@@ -1812,8 +2102,57 @@ export class LoanQueryController {
           .json(new ApiError(400, "Failed to create loan query"));
       }
 
+      try {
+        await syncLoanDocumentsToCustomerProfile({
+          customerId,
+          query: result,
+          session,
+        });
+      } catch (profileDocumentError: any) {
+        console.error(
+          "[Profile Documents] Loan document sync failed:",
+          profileDocumentError?.message || profileDocumentError,
+        );
+      }
+
       if (!isDraft) {
         await notifyLoanApplicationCreated(result);
+        if (["b2c_app", "b2b_app"].includes(String(result.dataSource || ""))) {
+          try {
+            await leadManagementService.captureLead(
+              {
+                fullName: `${result.firstName || ""} ${result.lastName || ""}`.trim(),
+                email: result.email,
+                mobile: result.mobile,
+                productType: result.loanType,
+                loanAmount: result.loanAmount,
+                loanPurpose: result.policyDetails?.purpose,
+                city: result.city,
+                state: result.state,
+                pincode: result.pincode,
+                whatsappOptIn: result.whatsappConsent,
+                tags: ["app_loan_application"],
+              },
+              {
+                source: result.dataSource,
+                channel: "loan_application",
+                externalId: String(result._id),
+                actorId: String(customerId),
+                session,
+                skipExternalNotifications: true,
+                metadata: {
+                  loanQueryId: String(result._id),
+                  loanId: result.loanId,
+                },
+              },
+            );
+          } catch (leadError: any) {
+            console.error(
+              "[Lead Sync] Loan application lead sync failed:",
+              leadError?.message || leadError,
+            );
+          }
+        }
       }
 
       return res
@@ -2737,8 +3076,22 @@ export class LoanQueryController {
       }
 
       processFileUploads(req);
+      if (req.body.rcLookup !== undefined) {
+        req.body.rcLookup = parseMaybeJson(req.body.rcLookup);
+      }
 
       delete req.body.customerId;
+      if (req.body.whatsappConsent !== undefined) {
+        req.body.whatsappConsent =
+          req.body.whatsappConsent === true ||
+          ["true", "1", "yes"].includes(
+            String(req.body.whatsappConsent || "").toLowerCase(),
+          );
+      }
+      if (req.body.communicationConsent !== undefined) {
+        req.body.communicationConsent =
+          parseMaybeJson(req.body.communicationConsent) || {};
+      }
 
       if (req.body.accountType) {
         req.body.accountType = normalizeAccountType(req.body.accountType);
@@ -2817,6 +3170,7 @@ export class LoanQueryController {
               payload: {
                 previousStatus: existingResult.status,
                 newStatus: nextStatus,
+                actorName: updatedByName,
                 changes: activityChanges,
               },
               createdAt: new Date(),
@@ -2832,9 +3186,12 @@ export class LoanQueryController {
                 ? new Types.ObjectId(String(customerId))
                 : undefined,
               actorModel: role === "admin" ? "Admin" : "User",
-              payload: activityChanges.length
-                ? { changes: activityChanges }
-                : undefined,
+              payload: {
+                actorName: updatedByName,
+                ...(activityChanges.length
+                  ? { changes: activityChanges }
+                  : {}),
+              },
               createdAt: new Date(),
             };
       const activityEntries = [
@@ -2924,6 +3281,51 @@ export class LoanQueryController {
         await updatedResult.save({ session });
       }
 
+      if (isDraftSubmitted) {
+        await notifyLoanApplicationCreated(updatedResult);
+        if (
+          ["b2c_app", "b2b_app"].includes(
+            String(updatedResult.dataSource || ""),
+          )
+        ) {
+          try {
+            await leadManagementService.captureLead(
+              {
+                fullName:
+                  `${updatedResult.firstName || ""} ${updatedResult.lastName || ""}`.trim(),
+                email: updatedResult.email,
+                mobile: updatedResult.mobile,
+                productType: updatedResult.loanType,
+                loanAmount: updatedResult.loanAmount,
+                loanPurpose: updatedResult.policyDetails?.purpose,
+                city: updatedResult.city,
+                state: updatedResult.state,
+                pincode: updatedResult.pincode,
+                whatsappOptIn: updatedResult.whatsappConsent,
+                tags: ["app_loan_application"],
+              },
+              {
+                source: updatedResult.dataSource,
+                channel: "loan_application",
+                externalId: String(updatedResult._id),
+                actorId: String(customerId),
+                session,
+                skipExternalNotifications: true,
+                metadata: {
+                  loanQueryId: String(updatedResult._id),
+                  loanId: updatedResult.loanId,
+                },
+              },
+            );
+          } catch (leadError: any) {
+            console.error(
+              "[Lead Sync] Submitted loan draft sync failed:",
+              leadError?.message || leadError,
+            );
+          }
+        }
+      }
+
       if (
         existingResult.status !== updatedResult.status &&
         updatedResult.status === ApplicationStatus.DISBURSED
@@ -2935,6 +3337,11 @@ export class LoanQueryController {
       }
 
       if (existingResult.status !== updatedResult.status) {
+        await syncLinkedCallRecordFollowUp({
+          loanQueryId: updatedResult._id,
+          status: updatedResult.status,
+          session,
+        });
         await notifyLoanStageUpdated(updatedResult, {
           remarks: req.body?.remarks,
         });
@@ -3599,6 +4006,7 @@ export class LoanQueryController {
           oldStatus,
           newStatus: status,
           remarks,
+          actorName: updatedByName,
         },
         createdAt: new Date(),
       };
@@ -3644,7 +4052,7 @@ export class LoanQueryController {
         },
       )
         .select(
-          "status updatedByName activities customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency loanId loanType email mobile firstName lastName bankName loanAmount disbursedAmount policyDetails",
+          "status updatedByName activities customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency loanId loanType email mobile firstName lastName bankName loanAmount disbursedAmount policyDetails whatsappConsent communicationConsent",
         )
         .populate("customerId", "name email mobile")
         .lean()
@@ -3662,6 +4070,10 @@ export class LoanQueryController {
       }
 
       if (oldStatus !== status && updatedQuery) {
+        await syncLinkedCallRecordFollowUp({
+          loanQueryId: queryId,
+          status: updatedQuery.status,
+        });
         await notifyLoanStageUpdated(updatedQuery, { remarks });
       }
 
@@ -3861,6 +4273,8 @@ export class LoanQueryController {
         "dematStatementOrFdCopyUrl",
         "proformaInvoiceOrQuotationUrl",
         "businessRegistrationCertificateUrl",
+        "inspectionPhotosUrl",
+        "landDocumentsUrl",
       ];
 
       const incoming: Record<string, any> = {};
@@ -4271,6 +4685,11 @@ export class LoanQueryController {
           .status(400)
           .json(new ApiError(400, "Query is already completed or cancelled"));
       }
+
+      await syncLinkedCallRecordFollowUp({
+        loanQueryId: queryId,
+        status: updatedQuery.status,
+      });
 
       const assignedAgentIds = collectAssignedAgentIds(updatedQuery);
 

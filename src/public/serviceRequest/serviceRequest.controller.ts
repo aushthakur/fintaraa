@@ -60,6 +60,19 @@ const ANNUAL_COMPLIANCE_STAGES = [
   "Completed",
 ];
 
+const ROC_FILING_STAGES = [
+  "Request Submitted",
+  "Compliance Expert Assigned",
+  "Filing Scope Reviewed",
+  "Documents Pending",
+  "Documents Received",
+  "Forms Prepared",
+  "Client Approval",
+  "ROC Filing Submitted",
+  "SRN / Acknowledgement Generated",
+  "Completed",
+];
+
 const TAX_COMPLIANCE_STAGES = [
   "Request Submitted",
   "Tax Expert Assigned",
@@ -126,6 +139,7 @@ const stageList = (serviceType: ServiceRequestType) =>
     [ServiceRequestType.ITR]: ITR_STAGES,
     [ServiceRequestType.COMPANY]: COMPANY_STAGES,
     [ServiceRequestType.ANNUAL_COMPLIANCE]: ANNUAL_COMPLIANCE_STAGES,
+    [ServiceRequestType.ROC_FILING]: ROC_FILING_STAGES,
     [ServiceRequestType.TAX_COMPLIANCE]: TAX_COMPLIANCE_STAGES,
     [ServiceRequestType.MSME]: MSME_STAGES,
     [ServiceRequestType.PROJECT_REPORT]: PROJECT_REPORT_STAGES,
@@ -166,6 +180,13 @@ const normalizeServiceType = (value: unknown) => {
     raw === "annual compliance"
   )
     return ServiceRequestType.ANNUAL_COMPLIANCE;
+  if (
+    raw === "roc" ||
+    raw === "roc_filing" ||
+    raw === "roc-filing" ||
+    raw === "roc filing"
+  )
+    return ServiceRequestType.ROC_FILING;
   if (
     raw === "tax_compliance" ||
     raw === "tax-compliance" ||

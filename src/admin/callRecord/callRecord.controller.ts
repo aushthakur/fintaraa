@@ -1,6 +1,7 @@
 import { Types } from "mongoose";
 import ApiError from "../../utils/ApiError";
 import Admin from "../../modals/admin.model";
+import Lander from "../../modals/lander.model";
 import Ticket from "../../modals/ticket.model";
 import ApiResponse from "../../utils/ApiResponse";
 import { LoanQuery } from "../../modals/loanquery.model";
@@ -34,6 +35,10 @@ import {
   formatDateInTimeZone,
   DEFAULT_QUERY_TIMEZONE,
 } from "../../utils/helper";
+import {
+  isLoanApplicationCompleted,
+  syncLinkedCallRecordFollowUp,
+} from "../../services/callRecordFollowUp.service";
 
 const CallRecordService = new CommonService<ICallRecord>(CallRecord as any);
 
@@ -1848,6 +1853,21 @@ export class CallRecordController {
         );
       }
 
+      const finalLoanQueryId =
+        finalRecord?.loanQueryId || linkedLoanQueryId || result?.loanQueryId;
+      if (finalLoanQueryId) {
+        const linkedLoanQuery = await LoanQuery.findById(finalLoanQueryId)
+          .select("status")
+          .lean();
+        if (linkedLoanQuery) {
+          await syncLinkedCallRecordFollowUp({
+            loanQueryId: finalLoanQueryId,
+            status: linkedLoanQuery.status,
+          });
+          finalRecord = await CallRecord.findById(finalRecord?._id || result._id);
+        }
+      }
+
       const [enrichedRecord] = await enrichCallRecordsWithCustomerContext([
         normalizeCallRecordAssigneeView(finalRecord),
       ]);
@@ -2254,6 +2274,324 @@ export class CallRecordController {
     }
   }
 
+  static async getFollowUpActivity(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      if (!Types.ObjectId.isValid(req.params.id)) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid call record id"));
+      }
+
+      const actorObjectId = toObjectId((req as any).user?._id);
+      const accessMatch =
+        (req as any).user?.role === "agent" && actorObjectId
+          ? {
+              $or: [
+                { createdBy: actorObjectId },
+                { assignee: actorObjectId },
+                { assignees: actorObjectId },
+              ],
+            }
+          : buildCallRecordScopeMatch(
+              (req as any).user?._id,
+              (req as any).user?.role,
+              "created",
+            );
+      const selectedRecord = await CallRecord.findOne({
+        _id: req.params.id,
+        ...accessMatch,
+      })
+        .populate("commentBy", "name username email")
+        .populate("followUpNotes.addedBy", "name username email")
+        .populate("followUpHistory.openedBy", "name username email")
+        .populate("followUpHistory.closedBy", "name username email")
+        .lean();
+
+      if (!selectedRecord) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Call record not found"));
+      }
+
+      const loanQueryId = selectedRecord.loanQueryId;
+      const linkedRecords = loanQueryId
+        ? await CallRecord.find({
+            loanQueryId,
+            _id: { $ne: selectedRecord._id },
+          })
+            .populate("commentBy", "name username email")
+            .populate("followUpNotes.addedBy", "name username email")
+            .populate("followUpHistory.openedBy", "name username email")
+            .populate("followUpHistory.closedBy", "name username email")
+            .sort({ createdAt: 1 })
+            .lean()
+        : [];
+      const callRecords = [selectedRecord, ...linkedRecords];
+
+      const loanQuery = loanQueryId
+        ? await LoanQuery.findById(loanQueryId)
+            .select(
+              "loanId loanType status activities followUpHistory followUpEnabled nextFollowUp createdAt updatedAt",
+            )
+            .lean()
+        : null;
+
+      const activityActorIds = Array.from(
+        new Set(
+          (Array.isArray((loanQuery as any)?.activities)
+            ? (loanQuery as any).activities
+            : []
+          )
+            .map((activity: any) => String(activity?.actor || ""))
+            .filter(Boolean),
+        ),
+      );
+      const [adminActors, userActors, landerActors] = activityActorIds.length
+        ? await Promise.all([
+            Admin.find({ _id: { $in: activityActorIds } })
+              .select("name username email")
+              .lean(),
+            User.find({ _id: { $in: activityActorIds } })
+              .select("name email")
+              .lean(),
+            Lander.find({ _id: { $in: activityActorIds } })
+              .select("name username email")
+              .lean(),
+          ])
+        : [[], [], []];
+      const activityActorNames = new Map<string, string>();
+      [...adminActors, ...userActors, ...landerActors].forEach((actor: any) => {
+        activityActorNames.set(
+          String(actor?._id),
+          String(actor?.name || actor?.username || actor?.email || "").trim(),
+        );
+      });
+
+      const getPersonLabel = (person: any, fallback?: string) =>
+        String(
+          person?.name ||
+            person?.username ||
+            person?.email ||
+            fallback ||
+            "",
+        ).trim();
+      const trail: Array<Record<string, any>> = [];
+      let sequence = 0;
+      const addTrailItem = (item: Record<string, any>) => {
+        const createdAt = item.createdAt ? new Date(item.createdAt) : null;
+        if (!createdAt || Number.isNaN(createdAt.getTime())) return;
+        sequence += 1;
+        trail.push({
+          id: item.id || `follow-up-${sequence}`,
+          source: item.source || "call_record",
+          type: item.type || "follow_up_updated",
+          title: item.title || "Follow-up updated",
+          description: item.description || "",
+          actorName: item.actorName || "",
+          status: item.status || "",
+          previousStatus: item.previousStatus || "",
+          callbackAt: item.callbackAt || null,
+          callRecordId: item.callRecordId || null,
+          loanQueryId: item.loanQueryId || loanQueryId || null,
+          createdAt: createdAt.toISOString(),
+        });
+      };
+
+      callRecords.forEach((record: any) => {
+        const recordId = String(record?._id || "");
+        const history = Array.isArray(record?.followUpHistory)
+          ? record.followUpHistory
+          : [];
+        const notes = Array.isArray(record?.followUpNotes)
+          ? record.followUpNotes
+          : [];
+
+        history.forEach((entry: any, index: number) => {
+          addTrailItem({
+            id: `${recordId}-history-${entry?._id || index}`,
+            source: "call_record",
+            type: "follow_up_updated",
+            title: entry?.callbackAt
+              ? "Callback follow-up updated"
+              : "Follow-up updated",
+            description:
+              entry?.closingRemark ||
+              entry?.openingRemark ||
+              "Follow-up activity recorded",
+            actorName:
+              entry?.closedByName ||
+              getPersonLabel(entry?.closedBy) ||
+              entry?.openedByName ||
+              getPersonLabel(entry?.openedBy),
+            callbackAt: entry?.callbackAt,
+            callRecordId: recordId,
+            createdAt:
+              entry?.closedAt ||
+              entry?.openedAt ||
+              record?.updatedAt ||
+              record?.createdAt,
+          });
+        });
+
+        notes.forEach((note: any, index: number) => {
+          addTrailItem({
+            id: `${recordId}-note-${note?._id || index}`,
+            source: "call_record",
+            type: "note_added",
+            title: "Follow-up note added",
+            description: note?.remark || "Follow-up note",
+            actorName: getPersonLabel(note?.addedBy),
+            callRecordId: recordId,
+            createdAt: note?.addedAt || record?.updatedAt || record?.createdAt,
+          });
+        });
+
+        if (String(record?.comment || "").trim()) {
+          addTrailItem({
+            id: `${recordId}-comment`,
+            source: "call_record",
+            type: "comment",
+            title: "Call follow-up comment",
+            description: String(record.comment).trim(),
+            actorName: getPersonLabel(record?.commentBy),
+            callbackAt: record?.callbackAt,
+            callRecordId: recordId,
+            createdAt:
+              record?.commentedAt || record?.updatedAt || record?.createdAt,
+          });
+        }
+      });
+
+      if (loanQuery) {
+        addTrailItem({
+          id: `${loanQuery._id}-linked`,
+          source: "loan_application",
+          type: "loan_linked",
+          title: "Loan application linked",
+          description: `Linked ${String(loanQuery.loanType || "loan").replace(/_/g, " ")} application`,
+          loanQueryId: loanQuery._id,
+          createdAt:
+            selectedRecord.loanQueryCreatedAt ||
+            loanQuery.createdAt ||
+            selectedRecord.createdAt,
+        });
+
+        const loanActivities = Array.isArray(loanQuery.activities)
+          ? loanQuery.activities
+          : [];
+        loanActivities
+          .filter((activity: any) =>
+            [
+              "status_changed",
+              "follow_up_updated",
+              "note_added",
+            ].includes(String(activity?.type || "")),
+          )
+          .forEach((activity: any, index: number) => {
+            const payload = activity?.payload || {};
+            addTrailItem({
+              id: `${loanQuery._id}-activity-${activity?._id || index}`,
+              source: "loan_application",
+              type: activity?.type,
+              title:
+                activity?.type === "status_changed"
+                  ? "Loan stage updated"
+                  : activity?.type === "note_added"
+                    ? "Loan note added"
+                    : "Loan follow-up updated",
+              description:
+                activity?.description ||
+                payload?.remarks ||
+                "Loan application activity recorded",
+              actorName:
+                payload?.actorName ||
+                payload?.updatedByName ||
+                activityActorNames.get(String(activity?.actor || "")) ||
+                activity?.actorModel ||
+                "",
+              previousStatus:
+                payload?.previousStatus || payload?.oldStatus || "",
+              status: payload?.newStatus || payload?.status || "",
+              loanQueryId: loanQuery._id,
+              createdAt:
+                activity?.createdAt ||
+                loanQuery.updatedAt ||
+                loanQuery.createdAt,
+            });
+          });
+
+        const loanFollowUpHistory = Array.isArray(loanQuery.followUpHistory)
+          ? loanQuery.followUpHistory
+          : [];
+        loanFollowUpHistory.forEach((entry: any, index: number) => {
+          addTrailItem({
+            id: `${loanQuery._id}-follow-up-${entry?._id || index}`,
+            source: "loan_application",
+            type: "loan_follow_up",
+            title: `Loan follow-up ${String(entry?.action || "updated").replace(/_/g, " ")}`,
+            description:
+              entry?.remark ||
+              entry?.outcome ||
+              entry?.reason ||
+              "Loan follow-up activity recorded",
+            actorName: entry?.updatedByName || "",
+            status: entry?.status || "",
+            callbackAt: entry?.dueAt,
+            loanQueryId: loanQuery._id,
+            createdAt:
+              entry?.createdAt || loanQuery.updatedAt || loanQuery.createdAt,
+          });
+        });
+      }
+
+      trail.sort(
+        (left, right) =>
+          new Date(right.createdAt).getTime() -
+          new Date(left.createdAt).getTime(),
+      );
+
+      const loanCompleted = isLoanApplicationCompleted(loanQuery?.status);
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            callRecord: {
+              _id: selectedRecord._id,
+              firstName: selectedRecord.firstName,
+              lastName: selectedRecord.lastName,
+              phoneNumber: selectedRecord.phoneNumber,
+              followUp: loanQuery
+                ? !loanCompleted
+                : Boolean(selectedRecord.followUp),
+              callbackAt: loanCompleted ? null : selectedRecord.callbackAt,
+            },
+            loanApplication: loanQuery
+              ? {
+                  _id: loanQuery._id,
+                  loanId: loanQuery.loanId,
+                  loanType: loanQuery.loanType,
+                  status: loanQuery.status,
+                  completed: loanCompleted,
+                }
+              : null,
+            active: loanQuery
+              ? !loanCompleted
+              : Boolean(selectedRecord.followUp),
+            continuesUntilLoanCompletion: Boolean(loanQuery && !loanCompleted),
+            trail: trail.slice(0, 250),
+          },
+          "Call record follow-up activity fetched",
+        ),
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
   static async update(req: Request | any, res: Response, next: NextFunction) {
     try {
       const adminId = req.user?._id;
@@ -2348,6 +2686,24 @@ export class CallRecordController {
       const followUpExplicitlyDisabled =
         Object.prototype.hasOwnProperty.call(updateBody, "followUp") &&
         updates.followUp === false;
+      if (followUpExplicitlyDisabled && record.loanQueryId) {
+        const linkedLoanQuery = await LoanQuery.findById(record.loanQueryId)
+          .select("status")
+          .lean();
+        if (
+          linkedLoanQuery &&
+          !isLoanApplicationCompleted(linkedLoanQuery.status)
+        ) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                "Follow-up remains active until the linked loan application is completed",
+              ),
+            );
+        }
+      }
       if (followUpExplicitlyDisabled && !updates.callbackAt) {
         updates.$unset = {
           ...(updates.$unset || {}),
@@ -2503,14 +2859,18 @@ export class CallRecordController {
               : record.callbackAt,
           ),
         };
-      } else if (updates.callbackAt || updates.followUp) {
+      } else if (
+        updates.callbackAt ||
+        updates.followUp ||
+        followUpExplicitlyDisabled
+      ) {
         updates.$push = {
           ...(updates.$push || {}),
           followUpHistory: buildFollowUpHistoryEntry(
             record,
             adminId?.toString?.(),
             req.user?.name || req.user?.email || "Admin",
-            undefined,
+            followUpExplicitlyDisabled ? "Follow-up closed" : undefined,
             updates.callbackAt
               ? new Date(updates.callbackAt)
               : record.callbackAt,
@@ -2821,6 +3181,21 @@ export class CallRecordController {
           },
           { new: true },
         );
+      }
+
+      const linkedLoanQueryId =
+        finalRecord?.loanQueryId || result?.loanQueryId || record?.loanQueryId;
+      if (linkedLoanQueryId) {
+        const linkedLoanQuery = await LoanQuery.findById(linkedLoanQueryId)
+          .select("status")
+          .lean();
+        if (linkedLoanQuery) {
+          await syncLinkedCallRecordFollowUp({
+            loanQueryId: linkedLoanQueryId,
+            status: linkedLoanQuery.status,
+          });
+          finalRecord = await CallRecord.findById(req.params.id);
+        }
       }
 
       const [enrichedRecord] = await enrichCallRecordsWithCustomerContext([

@@ -378,6 +378,20 @@ const sanitizeKycEmploymentDetails = (source: any = {}) => {
   return Object.keys(next).length ? next : undefined;
 };
 
+const sanitizeKycFinancialDetails = (source: any = {}) => {
+  const next = compactObject({
+    monthlyIncome: cleanNumber(source.monthlyIncome),
+    annualIncome: cleanNumber(source.annualIncome),
+    creditScore: cleanNumber(source.creditScore),
+    existingEmiObligations: cleanNumber(source.existingEmiObligations),
+    averageBankBalance: cleanNumber(source.averageBankBalance),
+    preferredProducts: Array.isArray(source.preferredProducts)
+      ? source.preferredProducts
+      : undefined,
+  });
+  return Object.keys(next).length ? next : undefined;
+};
+
 const sanitizeKycDocuments = (documents: any) => {
   if (!Array.isArray(documents)) return undefined;
 
@@ -397,6 +411,32 @@ const sanitizeKycDocuments = (documents: any) => {
     .filter((doc) => doc.docType && (doc.fileUrl || doc.number || doc.referenceId));
 
   return next.length ? next : undefined;
+};
+
+const buildPartnerApprovalChecklist = (agency: any) => {
+  const personal = agency?.kycProfile?.personalDetails || {};
+  const bank = agency?.bankDetails || agency?.kycProfile?.bankDetails || {};
+  const checklist: Record<string, boolean> = {
+    profileReviewed: Boolean(agency?.agentProfileCompleted),
+    termsAccepted: Boolean(
+      agency?.agreedToTerms && agency?.privacyPolicyAccepted,
+    ),
+    contactAvailable: Boolean(agency?.name && agency?.mobile && agency?.email),
+    panAvailable: Boolean(
+      personal?.panNumber || agency?.verificationRecords?.pan?.number,
+    ),
+    aadhaarAvailable: Boolean(
+      personal?.aadhaarNumber || agency?.verificationRecords?.aadhaar?.number,
+    ),
+    bankAccountAvailable: Boolean(bank?.accountNumber && bank?.ifscCode),
+  };
+  return {
+    checklist,
+    missing: Object.entries(checklist)
+      .filter(([, complete]) => !complete)
+      .map(([key]) => key),
+    complete: Object.values(checklist).every(Boolean),
+  };
 };
 
 const sanitizeKycProfile = (
@@ -436,6 +476,14 @@ const sanitizeKycProfile = (
     next.employmentDetails = {
       ...(fallback.employmentDetails || {}),
       ...employmentDetails,
+    };
+  }
+
+  const financialDetails = sanitizeKycFinancialDetails(source.financialDetails);
+  if (financialDetails) {
+    next.financialDetails = {
+      ...(fallback.financialDetails || {}),
+      ...financialDetails,
     };
   }
 
@@ -713,6 +761,7 @@ export class AgencyAdminController {
             rmName: 1,
             rmMobile: 1,
             agentProfileCompleted: 1,
+            approvalReview: 1,
             agreedToTerms: 1,
             privacyPolicyAccepted: 1,
             isEmailVerified: 1,
@@ -818,7 +867,35 @@ export class AgencyAdminController {
         return res.status(400).json(new ApiError(400, "Invalid status"));
       }
 
-      const result = await agencyService.updateById(req.params.id, { status });
+      const agency = await Agency.findById(req.params.id);
+      if (!agency) {
+        return res.status(404).json(new ApiError(404, "Channel not found"));
+      }
+
+      const update: Record<string, any> = { status };
+      if (status === UserStatus.ACTIVE) {
+        const review = buildPartnerApprovalChecklist(agency);
+        if (!review.complete) {
+          return res.status(400).json(
+            new ApiError(
+              400,
+              `Partner profile review is incomplete: ${review.missing.join(", ")}`,
+              { missingFields: review.missing, checklist: review.checklist },
+            ),
+          );
+        }
+        update.approvalReview = {
+          status: "approved",
+          reviewedBy: (req as any).user?._id,
+          reviewedAt: new Date(),
+          notes: String(req.body?.notes || "").trim(),
+          checklist: review.checklist,
+        };
+      } else if (status === UserStatus.PENDING_VERIFICATION) {
+        update["approvalReview.status"] = "pending";
+      }
+
+      const result = await agencyService.updateById(req.params.id, update);
       if (!result) {
         return res.status(404).json(new ApiError(404, "Channel not found"));
       }

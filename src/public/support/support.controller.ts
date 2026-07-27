@@ -1167,7 +1167,7 @@ export const addInteraction = async (
 ): Promise<any> => {
   try {
     let { role, _id } = req.user;
-    const { initiator, receiver, action, content, ticketId } = req.body;
+    let { initiator, receiver, action, content, ticketId } = req.body;
 
     const ticket = await Ticket.findById(ticketId);
     if (!ticket)
@@ -1175,6 +1175,7 @@ export const addInteraction = async (
 
     // Admin can always interact with tickets
     const isAdmin = role === "admin";
+    if (isAdmin) initiator = _id;
 
     // Only initiator or assignee can interact
     if (role === "agency") {
@@ -1231,7 +1232,7 @@ export const addInteraction = async (
           : (await Agency.exists({ _id: ticket.requester }))
             ? "Agency"
             : "User";
-    const requesterId = isRequesterRole ? initiator : receiver;
+    const requesterId = ticket.requester;
     const requesterExist =
       requesterModel === "Agency"
         ? await Agency.findById({ _id: requesterId })

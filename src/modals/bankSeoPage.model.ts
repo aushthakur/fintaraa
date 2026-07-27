@@ -212,6 +212,10 @@ bankSeoPageSchema.index(
   },
   { unique: true },
 );
+bankSeoPageSchema.index({ status: 1, priority: 1, updatedAt: -1 });
+bankSeoPageSchema.index({ status: 1, _id: 1 });
+bankSeoPageSchema.index({ status: 1, productSlug: 1, _id: 1 });
+bankSeoPageSchema.index({ status: 1, bankSlug: 1, productSlug: 1, _id: 1 });
 
 export const BankSeoPage = mongoose.model<IBankSeoPage>(
   "BankSeoPage",

@@ -70,6 +70,7 @@ export const loanWhatsappTemplateForStatus = (
     case ApplicationStatus.DOCUMENTS_REQUESTED:
       return "documentsRequired";
     case ApplicationStatus.LOGIN_DONE:
+    case ApplicationStatus.LOGIN_APPROVED:
       return "bankLoginSuccess";
     case ApplicationStatus.SANCTIONED:
       return "loanSanctioned";

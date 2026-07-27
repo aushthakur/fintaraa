@@ -68,6 +68,7 @@ export interface CaptureLeadOptions {
   actorId?: string;
   session?: ClientSession;
   externalId?: string;
+  skipExternalNotifications?: boolean;
 }
 
 interface AssignmentContext {
@@ -349,7 +350,9 @@ export class LeadManagementService {
     });
 
     await lead.save({ session: options.session });
-    if (!existing) await this.notifyInteraktLeadCreated(lead, options);
+    if (!existing && !options.skipExternalNotifications) {
+      await this.notifyInteraktLeadCreated(lead, options);
+    }
     return {
       lead,
       created: !existing,

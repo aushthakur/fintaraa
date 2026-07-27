@@ -474,6 +474,11 @@ export class LoanSeoPageController {
         },
       );
 
+      const limit = Math.min(
+        Math.max(Number(req.query?.limit) || 200, 1),
+        1000,
+      );
+      const page = Math.max(Number(req.query?.page) || 1, 1);
       const pages = await LoanSeoPage.find({
         ...query,
       })
@@ -481,7 +486,8 @@ export class LoanSeoPageController {
           "loanType loanTypeSlug title subtitle canonicalPath location priority updatedAt",
         )
         .sort({ priority: 1, updatedAt: -1 })
-        .limit(Math.min(Number(req.query?.limit) || 200, 1000))
+        .skip((page - 1) * limit)
+        .limit(limit)
         .lean();
 
       return res

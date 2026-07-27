@@ -21,6 +21,7 @@ import { UserType } from "../../modals/notification.model";
 import { ContactSync } from "../../modals/contactSync.model";
 import { CommonService } from "../../services/common.services";
 import { ReferralEvent } from "../../modals/referralEvent.model";
+import { ReferralVisit } from "../../modals/referralVisit.model";
 import { rewardReferralIfEligible } from "../../services/referral.service";
 import { sendSingleNotification } from "../../services/notification.service";
 import { generateAccessToken, generateRefreshToken } from "../../utils/token";
@@ -28,6 +29,68 @@ import { consumeOtpRequest } from "../../services/otpRateLimit.service";
 
 const otpService = new CommonService(Otp);
 const userService = new CommonService(User);
+
+const markReferralVisitConverted = async (
+  referralCode: string,
+  convertedUserId: any,
+  visitorId?: string,
+) => {
+  const match: Record<string, any> = {
+    recordType: "referral_visit",
+    referralCode,
+    convertedUser: { $exists: false },
+  };
+  if (visitorId) match.visitorId = visitorId;
+
+  await ReferralVisit.findOneAndUpdate(
+    match,
+    {
+      $set: {
+        convertedUser: convertedUserId,
+        convertedAt: new Date(),
+      },
+    },
+    { sort: { createdAt: -1 } },
+  );
+};
+
+const attachReferral = async (
+  user: any,
+  rawReferralCode: unknown,
+  visitorId?: string,
+) => {
+  const referralCode = String(rawReferralCode || "")
+    .trim()
+    .toUpperCase();
+  if (!referralCode || user?.referredBy) return null;
+
+  const referrer: any = await User.findOne({ referralCode });
+  if (!referrer || String(referrer._id) === String(user?._id)) {
+    throw new ApiError(400, "Invalid referral code");
+  }
+
+  user.referredBy = referrer._id;
+  await user.save();
+  await ReferralEvent.findOneAndUpdate(
+    { referredUser: user._id },
+    {
+      $setOnInsert: {
+        referrer: referrer._id,
+        referredUser: user._id,
+        referralCode: referrer.referralCode,
+        status: "pending",
+        points: 100,
+      },
+    },
+    { upsert: true, new: true },
+  );
+  await markReferralVisitConverted(
+    referrer.referralCode,
+    user._id,
+    visitorId,
+  );
+  return referrer;
+};
 
 const parseJSONSafely = <T>(value: any, fallback: T): T => {
   if (value === undefined || value === null || value === "") return fallback;
@@ -517,6 +580,11 @@ export class UserController {
             status: "pending",
             points: 100,
           });
+          await markReferralVisitConverted(
+            referrer.referralCode,
+            updated._id,
+            String(req.body?.referralVisitorId || "").trim() || undefined,
+          );
         }
         await safeNotify({
           type: "account-created",
@@ -554,6 +622,11 @@ export class UserController {
           status: "pending",
           points: 100,
         });
+        await markReferralVisitConverted(
+          referrer.referralCode,
+          response._id,
+          String(req.body?.referralVisitorId || "").trim() || undefined,
+        );
       }
       await safeNotify({
         type: "account-created",
@@ -1885,7 +1958,14 @@ export class UserController {
 
   static async verifyOtp(req: Request, res: Response, next: NextFunction) {
     try {
-      const { mobile, otp, email, name } = req.body;
+      const {
+        mobile,
+        otp,
+        email,
+        name,
+        referralCode: referralInput,
+        referralVisitorId,
+      } = req.body;
       const accountSource = resolveAccountSource(req);
 
       if (!mobile || !otp) {
@@ -1969,6 +2049,11 @@ export class UserController {
 
       user.isMobileVerified = true;
       user.status = UserStatus.ACTIVE;
+      await attachReferral(
+        user,
+        referralInput,
+        String(referralVisitorId || "").trim() || undefined,
+      );
 
       const payload = { _id: user._id, email: user.email, role: user.role };
       const accessToken = generateAccessToken(payload);

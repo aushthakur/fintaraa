@@ -14,6 +14,10 @@ router
   .get(asyncHandler(CallRecordController.list))
   .post(asyncHandler(CallRecordController.create));
 router.get("/sidebar-counts", asyncHandler(CallRecordController.getSidebarCounts));
+router.get(
+  "/:id/follow-up-activity",
+  asyncHandler(CallRecordController.getFollowUpActivity),
+);
 
 router
   .route("/:id")

@@ -1,6 +1,7 @@
 import ApiError from "../../utils/ApiError";
 import ApiResponse from "../../utils/ApiResponse";
 import { NextFunction, Request, Response } from "express";
+import { Types } from "mongoose";
 import { CommonService } from "../../services/common.services";
 import { BankSeoPage, BankSeoPageStatus } from "../../modals/bankSeoPage.model";
 
@@ -389,17 +390,33 @@ export class BankSeoPageController {
         if (value) query[`location.${field}`] = value;
       });
 
+      const cursorMode =
+        clean(req.query.pagination).toLowerCase() === "cursor";
+      const cursor = clean(req.query.cursor);
+      if (cursorMode && cursor) {
+        if (!Types.ObjectId.isValid(cursor)) {
+          throw new ApiError(400, "Invalid pagination cursor");
+        }
+        query._id = { $gt: new Types.ObjectId(cursor) };
+      }
+
       const limit = Math.min(
-        Math.max(Number(req.query.limit || 500), 1),
-        5000,
+        Math.max(Number(req.query.limit || 250), 1),
+        500,
       );
-      const result = await BankSeoPage.find(query)
-        .sort({ priority: 1, updatedAt: -1 })
+      const page = Math.max(Number(req.query.page) || 1, 1);
+      const request = BankSeoPage.find(query)
+        .sort(cursorMode ? { _id: 1 } : { priority: 1, updatedAt: -1 })
         .limit(limit)
         .select(
           "bankName bankSlug productName productSlug title canonicalPath logoUrl location priority isFeatured updatedAt",
-        )
-        .lean();
+        );
+
+      if (!cursorMode) {
+        request.skip((page - 1) * limit).allowDiskUse(true);
+      }
+
+      const result = await request.lean();
 
       return res
         .status(200)

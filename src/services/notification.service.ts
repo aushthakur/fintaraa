@@ -396,10 +396,11 @@ export const getAllNotifications = async (
 
     const userObjectId = new mongoose.Types.ObjectId(rawUserId as string);
 
-    const matchStage =
-      user?.role === "admin" && !queryUser
-        ? {}
-        : { "to.user": userObjectId, "to.role": targetRole };
+    const matchStage = {
+      "to.user": userObjectId,
+      "to.role": targetRole,
+      status: { $ne: "deleted" },
+    };
 
     const notifications = await Notification.aggregate([
       { $match: matchStage },

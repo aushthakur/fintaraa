@@ -12,6 +12,7 @@ import {
 } from "../../modals/user.model";
 import { sendSingleNotification } from "../../services/notification.service";
 import { UserType } from "../../modals/notification.model";
+import { generateApplicationId } from "../../utils/applicationId";
 
 const OfferService = new CommonService(Offer);
 
@@ -208,6 +209,7 @@ export class OfferController {
       }
 
       const offers = await Offer.find(query)
+        .select("-applications -createdBy -updatedBy")
         .sort({ validTo: 1, updatedAt: -1 })
         .limit(Math.min(Number(req.query?.limit) || 50, 100))
         .lean();
@@ -310,7 +312,9 @@ export class OfferController {
       if (!user)
         return res.status(404).json(new ApiError(404, "User not found"));
 
-      const offers = await Offer.find({ status: "active" }).lean();
+      const offers = await Offer.find({ status: "active" })
+        .select("-applications -createdBy -updatedBy")
+        .lean();
       const eligibleOffers = offers.filter((offer: any) =>
         isOfferActive(offer)
       );
@@ -323,6 +327,78 @@ export class OfferController {
           snapshot,
         })
       );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getMyApplications(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const userId = (req as any)?.user?._id;
+      if (!userId)
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+
+      const productCategory = String(req.query?.productCategory || "")
+        .trim()
+        .toLowerCase();
+      const categoryFilter = ["loan", "insurance", "card"].includes(
+        productCategory,
+      )
+        ? { productCategory }
+        : {};
+
+      const offers = await Offer.find({
+        ...categoryFilter,
+        "applications.user": new Types.ObjectId(String(userId)),
+      })
+        .select(
+          "title lenderName productType productCategory applications createdAt updatedAt",
+        )
+        .lean();
+
+      const applications = offers
+        .flatMap((offer: any) =>
+          (offer.applications || [])
+            .filter((application: any) =>
+              application?.user
+                ? String(application.user) === String(userId)
+                : false,
+            )
+            .map((application: any) => ({
+              _id: `${offer._id}:${application.applicationId || userId}`,
+              offerId: offer._id,
+              applicationId:
+                application.applicationId || String(offer._id),
+              title: offer.title,
+              lenderName: offer.lenderName,
+              productType: offer.productType,
+              productCategory: offer.productCategory,
+              status: application.status || "applied",
+              appliedAt: application.appliedAt,
+              metadata: application.metadata || {},
+              createdAt: application.appliedAt || offer.createdAt,
+              updatedAt: application.appliedAt || offer.updatedAt,
+            })),
+        )
+        .sort(
+          (a: any, b: any) =>
+            new Date(b.appliedAt || 0).getTime() -
+            new Date(a.appliedAt || 0).getTime(),
+        );
+
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            applications,
+            "Offer applications fetched successfully",
+          ),
+        );
     } catch (err) {
       next(err);
     }
@@ -345,7 +421,21 @@ export class OfferController {
         req.body?.metadata && typeof req.body.metadata === "object"
           ? req.body.metadata
           : {};
+      const existingApplication =
+        existingIndex !== undefined && existingIndex >= 0
+          ? offer.applications?.[existingIndex]
+          : undefined;
+      const applicationKind =
+        offer.productCategory === "card"
+          ? "card"
+          : offer.productCategory === "insurance"
+            ? "insurance-offer"
+            : "loan-offer";
+      const applicationId =
+        existingApplication?.applicationId ||
+        (await generateApplicationId(applicationKind));
       const applicationPayload = {
+        applicationId,
         user: new Types.ObjectId(userId),
         status: (req.body?.status as any) || "applied",
         appliedAt: new Date(),
@@ -401,7 +491,12 @@ export class OfferController {
         .json(
           new ApiResponse(
             200,
-            { offerId: offer._id },
+            {
+              offerId: offer._id,
+              applicationId,
+              referenceId: applicationId,
+              productCategory: offer.productCategory,
+            },
             "Offer application recorded"
           )
         );

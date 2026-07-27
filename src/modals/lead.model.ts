@@ -36,6 +36,9 @@ export enum LeadConnectorType {
   AFFILIATE = "affiliate",
   ZAPIER = "zapier",
   MANUAL = "manual",
+  B2C_APP = "b2c_app",
+  B2B_APP = "b2b_app",
+  WEBSITE = "website",
 }
 
 export enum LeadFollowUpStatus {

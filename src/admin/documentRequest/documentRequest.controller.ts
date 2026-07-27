@@ -6,6 +6,64 @@ import { UserType } from "../../modals/notification.model";
 import { sendSingleNotification } from "../../services/notification.service";
 
 export class DocumentRequestController {
+  static async getMine(
+    req: Request & { user?: any },
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const targetUser = req.user?._id;
+      if (!targetUser) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+      const rows = await DocumentRequest.find({
+        targetUser,
+        status: { $ne: "cancelled" },
+      })
+        .sort({ status: 1, createdAt: -1 })
+        .populate("loanQuery", "loanId loanType status")
+        .lean();
+      return res
+        .status(200)
+        .json(new ApiResponse(200, rows, "Document requests fetched"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async markUploaded(
+    req: Request & { user?: any },
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const record = await DocumentRequest.findOneAndUpdate(
+        {
+          _id: req.params.id,
+          targetUser: req.user?._id,
+          status: "pending",
+        },
+        {
+          $set: {
+            status: "uploaded",
+            fulfilledAt: new Date(),
+          },
+        },
+        { new: true },
+      );
+      if (!record) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Pending document request not found"));
+      }
+      return res
+        .status(200)
+        .json(new ApiResponse(200, record, "Document request completed"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async create(req: Request & { user?: any }, res: Response, next: NextFunction) {
     try {
       const targetUser = req.body?.targetUser;

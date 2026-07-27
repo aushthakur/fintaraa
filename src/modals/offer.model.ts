@@ -17,6 +17,7 @@ export interface IOfferEligibility {
 }
 
 export interface IOfferApplication {
+  applicationId?: string;
   notes?: string;
   appliedAt: Date;
   user: Types.ObjectId;
@@ -79,6 +80,7 @@ const OfferEligibilitySchema = new Schema<IOfferEligibility>(
 
 const OfferApplicationSchema = new Schema<IOfferApplication>(
   {
+    applicationId: { type: String, trim: true },
     user: { type: Schema.Types.ObjectId, ref: "User", required: true },
     status: {
       type: String,

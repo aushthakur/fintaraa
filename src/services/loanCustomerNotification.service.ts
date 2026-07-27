@@ -134,7 +134,14 @@ const queueLoanWhatsapp = async (
   values: unknown[],
 ) => {
   const contact = getCustomerContact(query);
-  if (!contact.mobile || !config.integrations.interakt.enabled)
+  const hasWhatsappConsent =
+    query?.whatsappConsent === true ||
+    query?.communicationConsent?.whatsapp === true;
+  if (
+    !hasWhatsappConsent ||
+    !contact.mobile ||
+    !config.integrations.interakt.enabled
+  )
     return;
   let template;
   try {
@@ -166,7 +173,9 @@ export const notifyLoanApplicationCreated = async (queryOrId: any) => {
   const query =
     typeof queryOrId === "string" || queryOrId?._bsontype
       ? await LoanQuery.findById(queryOrId)
-          .select("customerId loanId loanType email mobile firstName lastName")
+          .select(
+            "customerId loanId loanType email mobile firstName lastName whatsappConsent communicationConsent",
+          )
           .populate("customerId", "name email mobile")
           .lean()
       : queryOrId;
@@ -197,7 +206,7 @@ export const notifyLoanStageUpdated = async (
     typeof queryOrId === "string" || queryOrId?._bsontype
       ? await LoanQuery.findById(queryOrId)
           .select(
-            "customerId loanId loanType status email mobile firstName lastName bankName loanAmount disbursedAmount policyDetails",
+            "customerId loanId loanType status email mobile firstName lastName bankName loanAmount disbursedAmount policyDetails whatsappConsent communicationConsent",
           )
           .populate("customerId", "name email mobile")
           .lean()

@@ -30,6 +30,7 @@ router.post(
     { name: "panKycProof", maxCount: 1 },
     { name: "shopLicense", maxCount: 1 },
     { name: "gstCertificate", maxCount: 1 },
+    { name: "insuranceDocuments", maxCount: 50 },
   ]),
   s3UploaderMiddleware("insurance-query"),
   asyncHandler(InsuranceQueryController.createQuery)
@@ -58,6 +59,7 @@ router.put(
     { name: "panKycProof", maxCount: 1 },
     { name: "shopLicense", maxCount: 1 },
     { name: "gstCertificate", maxCount: 1 },
+    { name: "insuranceDocuments", maxCount: 50 },
   ]),
   s3UploaderMiddleware("insurance-query"),
   asyncHandler(InsuranceQueryController.updateQueryById)
@@ -84,6 +86,7 @@ router.patch(
     { name: "panKycProof", maxCount: 1 },
     { name: "shopLicense", maxCount: 1 },
     { name: "gstCertificate", maxCount: 1 },
+    { name: "insuranceDocuments", maxCount: 50 },
   ]),
   s3UploaderMiddleware("insurance-query-documents"),
   asyncHandler(InsuranceQueryController.updateDocuments)

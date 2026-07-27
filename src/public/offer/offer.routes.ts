@@ -13,6 +13,12 @@ router.get(
   asyncHandler(OfferController.getEligibleOffers)
 );
 
+router.get(
+  "/applications/me",
+  authenticateToken,
+  asyncHandler(OfferController.getMyApplications)
+);
+
 router.post(
   "/:id/apply",
   authenticateToken,
