@@ -77,6 +77,10 @@ router.post(
   asyncHandler(AgencyController.syncDigiLocker)
 );
 router.get("/digilocker", asyncHandler(AgencyController.getDigiLockerDocuments));
+router.delete(
+  "/digilocker/:docType",
+  asyncHandler(AgencyController.deleteDigiLockerDocument),
+);
 router.put(
   "/",
   dynamicUpload([

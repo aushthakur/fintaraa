@@ -38,3 +38,12 @@ export const consumeOtpRequest = async (
 
   return mobile;
 };
+
+export const releaseOtpRequest = async (
+  mobileValue: unknown,
+  scope: "user" | "agency",
+) => {
+  const mobile = normalizeMobile(mobileValue);
+  if (!mobile) return;
+  await OtpRequest.findOneAndDelete({ mobile, scope }).sort({ createdAt: -1 });
+};

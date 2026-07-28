@@ -5,8 +5,13 @@ import { config } from "../../config/config";
 import ApiResponse from "../../utils/ApiResponse";
 import ApiError from "../../utils/ApiError";
 import { Request, Response, NextFunction } from "express";
+import { Types } from "mongoose";
 import { CommonService } from "../../services/common.services";
 import { generateAccessToken, generateRefreshToken } from "../../utils/token";
+import { LoanQuery } from "../../modals/loanquery.model";
+import { InsuranceQuery } from "../../modals/insurancequery.model";
+import { CallRecord } from "../../modals/callRecord.model";
+import { EligibilityMailPermission } from "../../modals/eligibilityMailPermission.model";
 
 const adminService = new CommonService(Admin);
 const landerService = new CommonService(Lander);
@@ -155,6 +160,90 @@ export class AdminController {
         message: "User updated successfully",
         user: updatedUser,
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async deleteAdmin(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<any> {
+    try {
+      const employeeId = String(req.params.id || "").trim();
+      const currentAdminId = String((req as any).user?._id || "");
+      if (!Types.ObjectId.isValid(employeeId)) {
+        throw new ApiError(400, "Invalid employee ID");
+      }
+      if (employeeId === currentAdminId) {
+        throw new ApiError(400, "You cannot delete your own account");
+      }
+
+      const session = (req as any).mongoSession;
+      const employee = await Admin.findById(employeeId).session(session || null);
+      if (!employee) {
+        throw new ApiError(404, "Employee not found");
+      }
+
+      const employeeObjectId = employee._id as Types.ObjectId;
+      await Promise.all([
+        LoanQuery.updateMany(
+          { assignedAgent: employeeObjectId },
+          { $unset: { assignedAgent: "" } },
+          { session },
+        ),
+        LoanQuery.updateMany(
+          { assignedAgents: employeeObjectId },
+          { $pull: { assignedAgents: employeeObjectId } },
+          { session },
+        ),
+        LoanQuery.updateMany(
+          { "nextFollowUp.assignedTo": employeeObjectId },
+          { $unset: { "nextFollowUp.assignedTo": "" } },
+          { session },
+        ),
+        InsuranceQuery.updateMany(
+          { assignedAgent: employeeObjectId },
+          { $unset: { assignedAgent: "" } },
+          { session },
+        ),
+        InsuranceQuery.updateMany(
+          { "nextFollowUp.assignedTo": employeeObjectId },
+          { $unset: { "nextFollowUp.assignedTo": "" } },
+          { session },
+        ),
+        CallRecord.updateMany(
+          { assignee: employeeObjectId },
+          {
+            $unset: {
+              assignee: "",
+              assignedAt: "",
+              assignmentMode: "",
+            },
+          },
+          { session },
+        ),
+        CallRecord.updateMany(
+          { assignees: employeeObjectId },
+          { $pull: { assignees: employeeObjectId } },
+          { session },
+        ),
+        EligibilityMailPermission.deleteMany(
+          { agent: employeeObjectId },
+          { session },
+        ),
+      ]);
+
+      await Admin.deleteOne({ _id: employeeObjectId }, { session });
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          { _id: employeeObjectId },
+          "Employee deleted successfully",
+        ),
+      );
     } catch (error) {
       next(error);
     }

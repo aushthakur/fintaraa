@@ -12,7 +12,7 @@ import { AgencyCommissionTransaction } from "../modals/agencyCommissionTransacti
 import { agencyEarningsService } from "./agencyEarnings.service";
 
 type LeadStage = "all" | "pre_login" | "login" | "sanction" | "disbursed";
-type ProductFilter = "all" | "loan" | "insurance";
+type ProductFilter = "all" | "loan" | "credit_card" | "insurance";
 
 const LOGIN_STATUSES = [
   ApplicationStatus.PENDING,
@@ -72,6 +72,9 @@ const stringifyId = (value: any): string => {
 const toObjectId = (value: string) =>
   Types.ObjectId.isValid(value) ? new Types.ObjectId(value) : null;
 
+const escapeRegex = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const statusFilterForStage = (stage: LeadStage) => {
   if (stage === "pre_login") return { $in: PRE_LOGIN_STATUSES };
   if (stage === "login") return { $in: LOGIN_STATUSES };
@@ -83,12 +86,97 @@ const statusFilterForStage = (stage: LeadStage) => {
 const normalizeProductFilter = (value?: string): ProductFilter => {
   const normalized = String(value || "all").trim().toLowerCase();
   if (normalized === "loan" || normalized === "loans") return "loan";
+  if (normalized === "credit_card" || normalized === "credit card") {
+    return "credit_card";
+  }
   if (
     ["insurance", "insurances", "policy", "policies"].includes(normalized)
   ) {
     return "insurance";
   }
   return "all";
+};
+
+const statusFilterForSelection = (value?: string) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (!normalized || normalized === "all") return undefined;
+  if (normalized === "pending") {
+    return {
+      $in: [
+        ApplicationStatus.PENDING,
+        ApplicationStatus.SUBMITTED,
+        ApplicationStatus.IN_PROGRESS,
+      ],
+    };
+  }
+  if (normalized === "under_review") {
+    return {
+      $in: [
+        ApplicationStatus.UNDER_REVIEW,
+        ApplicationStatus.DOCUMENT_VERIFICATION,
+      ],
+    };
+  }
+  if (normalized === "approved") {
+    return {
+      $in: [ApplicationStatus.APPROVED, ApplicationStatus.DISBURSED],
+    };
+  }
+
+  const supported = new Set<string>([
+    ApplicationStatus.ACTIVE,
+    ApplicationStatus.COMPLETED,
+    ApplicationStatus.CANCELLED,
+    ApplicationStatus.REJECTED,
+    ApplicationStatus.DRAFT,
+  ]);
+  return supported.has(normalized) ? { $in: [normalized] } : undefined;
+};
+
+const appendAndFilter = (
+  target: Record<string, any>,
+  condition?: Record<string, any>,
+) => {
+  if (!condition) return;
+  target.$and = [
+    ...(Array.isArray(target.$and) ? target.$and : []),
+    condition,
+  ];
+};
+
+const buildAmountFilter = (
+  fieldPaths: string[],
+  minAmount?: number,
+  maxAmount?: number,
+) => {
+  const min = Number(minAmount);
+  const max = Number(maxAmount);
+  const hasMin = Number.isFinite(min) && min >= 0;
+  const hasMax = Number.isFinite(max) && max >= 0;
+  if (!hasMin && !hasMax) return undefined;
+
+  const numericAmount = {
+    $max: fieldPaths.map((fieldPath) => ({
+      $convert: {
+        input: `$${fieldPath}`,
+        to: "double",
+        onError: 0,
+        onNull: 0,
+      },
+    })),
+  };
+  const comparisons = [
+    ...(hasMin ? [{ $gte: [numericAmount, min] }] : []),
+    ...(hasMax ? [{ $lte: [numericAmount, max] }] : []),
+  ];
+
+  return {
+    $expr:
+      comparisons.length === 1 ? comparisons[0] : { $and: comparisons },
+  };
 };
 
 const normalizeInsuranceTypeFilter = (value?: string): string | undefined => {
@@ -431,7 +519,10 @@ export class AgencyLeadsService {
     stage?: LeadStage;
     productType?: string;
     loanType?: string;
+    status?: string;
     search?: string;
+    minAmount?: number;
+    maxAmount?: number;
     page?: number;
     limit?: number;
   }) {
@@ -443,8 +534,9 @@ export class AgencyLeadsService {
 
     const stage = (input.stage || "all") as LeadStage;
     const stageFilter = statusFilterForStage(stage);
+    const statusFilter = statusFilterForSelection(input.status);
     const search = String(input.search || "").trim();
-    const regex = search ? new RegExp(search, "i") : null;
+    const regex = search ? new RegExp(escapeRegex(search), "i") : null;
     const normalizedLoanType = normalizeLoanType(input.loanType);
     const normalizedInsuranceType = normalizeInsuranceTypeFilter(input.loanType);
 
@@ -452,46 +544,76 @@ export class AgencyLeadsService {
       scope.ownerObjectId,
       scope.scopeObjectIds,
     );
-    if (stageFilter) loanFilter.status = stageFilter;
-    if (normalizedLoanType) loanFilter.loanType = normalizedLoanType;
+    if (stageFilter) appendAndFilter(loanFilter, { status: stageFilter });
+    if (statusFilter) appendAndFilter(loanFilter, { status: statusFilter });
+    if (productType === "credit_card") {
+      loanFilter.loanType = "credit_card";
+    } else if (normalizedLoanType) {
+      loanFilter.loanType = normalizedLoanType;
+    } else if (productType === "loan") {
+      loanFilter.loanType = { $ne: "credit_card" };
+    }
+    appendAndFilter(
+      loanFilter,
+      buildAmountFilter(
+        ["loanAmount", "policyDetails.loanAmount"],
+        input.minAmount,
+        input.maxAmount,
+      ),
+    );
     if (regex) {
-      loanFilter.$and = [
-        ...(Array.isArray(loanFilter.$and) ? loanFilter.$and : []),
-        {
-          $or: [
-            { firstName: regex },
-            { lastName: regex },
-            { mobile: regex },
-            { loanId: regex },
-            { loanType: regex },
-          ],
-        },
-      ];
+      appendAndFilter(loanFilter, {
+        $or: [
+          { firstName: regex },
+          { lastName: regex },
+          { mobile: regex },
+          { loanId: regex },
+          { loanType: regex },
+        ],
+      });
     }
 
     const insuranceFilter: Record<string, any> = this.buildInsuranceOwnershipFilter(
       scope.ownerObjectId,
       scope.scopeObjectIds,
     );
-    if (stageFilter) insuranceFilter.status = stageFilter;
+    if (stageFilter) appendAndFilter(insuranceFilter, { status: stageFilter });
+    if (statusFilter) {
+      appendAndFilter(insuranceFilter, { status: statusFilter });
+    }
     if (normalizedInsuranceType) insuranceFilter.typeOfInsurance = normalizedInsuranceType;
+    appendAndFilter(
+      insuranceFilter,
+      buildAmountFilter(
+        [
+          "policyDetails.sumInsured",
+          "policyDetails.sumAssured",
+          "policyDetails.coverageRequired",
+          "policyDetails.propertyValue",
+          "policyDetails.averageMonthlyStockValue",
+          "policyDetails.currentMarketValue",
+          "policyDetails.monthlyTurnover",
+          "annualIncome",
+        ],
+        input.minAmount,
+        input.maxAmount,
+      ),
+    );
     if (regex) {
-      insuranceFilter.$and = [
-        ...(Array.isArray(insuranceFilter.$and) ? insuranceFilter.$and : []),
-        {
-          $or: [
-            { firstName: regex },
-            { lastName: regex },
-            { mobile: regex },
-            { email: regex },
-            { typeOfInsurance: regex },
-          ],
-        },
-      ];
+      appendAndFilter(insuranceFilter, {
+        $or: [
+          { firstName: regex },
+          { lastName: regex },
+          { mobile: regex },
+          { email: regex },
+          { typeOfInsurance: regex },
+        ],
+      });
     }
 
     const shouldLoadLoans =
       productType === "loan" ||
+      productType === "credit_card" ||
       (productType === "all" && !normalizedInsuranceType);
     const shouldLoadInsurance =
       productType === "insurance" ||
@@ -510,8 +632,8 @@ export class AgencyLeadsService {
             .populate("assignedAgent", "name username email mobile")
             .populate("assignedLander", "name email mobile")
             .sort({ updatedAt: -1 })
-            .skip(productType === "loan" ? skip : 0)
-            .limit(productType === "loan" ? limit : unionTarget)
+            .skip(productType !== "all" ? skip : 0)
+            .limit(productType !== "all" ? limit : unionTarget)
             .lean()
         : [],
       shouldLoadInsurance

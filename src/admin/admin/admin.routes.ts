@@ -96,7 +96,12 @@ userRouter.put(
 );
 userRouter
   .route("/:id")
-  .get(asyncHandler(AdminController.getAdminById)) // GET /:id
-  .put(asyncHandler(AdminController.updateAdmin)); // PUT /:id
+  .get(authenticateToken, authorize("admin"), asyncHandler(AdminController.getAdminById))
+  .put(authenticateToken, authorize("admin"), asyncHandler(AdminController.updateAdmin))
+  .delete(
+    authenticateToken,
+    authorize("admin"),
+    asyncHandler(AdminController.deleteAdmin),
+  );
 
 export default userRouter;

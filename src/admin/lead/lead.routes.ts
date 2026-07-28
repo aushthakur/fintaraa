@@ -44,6 +44,11 @@ router.get("/pipeline/summary", asyncHandler(LeadController.pipelineSummary));
 router.get("/chat/conversations", asyncHandler(LeadChatController.getConversations));
 
 router.get("/:id", asyncHandler(LeadController.getLead));
+router.delete(
+  "/:id",
+  authorize("admin"),
+  asyncHandler(LeadController.deleteLead),
+);
 router.post("/:id/notes", asyncHandler(LeadController.addNote));
 router.post("/:id/follow-ups", asyncHandler(LeadController.addFollowUp));
 router.post(

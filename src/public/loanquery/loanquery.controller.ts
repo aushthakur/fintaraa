@@ -309,6 +309,17 @@ const sanitizeLoanQueryListItem = (item: any) => {
   };
 };
 
+const resolveCibilGender = (
+  ...candidates: unknown[]
+): "male" | "female" | undefined => {
+  for (const candidate of candidates) {
+    const normalized = String(candidate || "").trim().toLowerCase();
+    if (normalized === "male" || normalized === "m") return "male";
+    if (normalized === "female" || normalized === "f") return "female";
+  }
+  return undefined;
+};
+
 const loanQueryListFields = [
   "_id",
   "loanId",
@@ -1685,8 +1696,12 @@ export class LoanQueryController {
         name: req.body?.name || req.body?.fullName || user.name,
         panNumber: req.body?.panNumber || user.panCard,
         mobile: req.body?.mobile || user.mobile,
-        gender:
-          req.body?.gender || (user.gender === "female" ? "female" : "male"),
+        gender: resolveCibilGender(
+          req.body?.gender,
+          (query as any)?.gender,
+          (query as any)?.policyDetails?.gender,
+          user.gender,
+        ),
         consent: req.body?.consent || "Y",
       });
 
@@ -1868,7 +1883,7 @@ export class LoanQueryController {
         name: user.name,
         mobile: user.mobile,
         panCard: user.panCard,
-        gender: user.gender === "female" ? "female" : "male",
+        gender: resolveCibilGender(user.gender),
         consent: "Y",
       });
 
@@ -2998,6 +3013,10 @@ export class LoanQueryController {
       const customerId = (req as any).user?._id;
       const { role } = (req as any).user || {};
 
+      if (!Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
+
       const result = await loanQueryService.getById(
         req.params.id,
         role !== "admin",
@@ -3671,11 +3690,15 @@ export class LoanQueryController {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
 
+      if (!Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
+
       const query = await LoanQuery.findById(req.params.id)
         .select("-activities -documents -rcLookup -policyDetails.coApplicants")
         .populate(
           "customerId",
-          "name email mobile profilePictureUrl cibilScore cibilLastFetchedAt cibilPdfLastFetchedAt",
+          "name email mobile gender profilePictureUrl cibilScore cibilLastFetchedAt cibilPdfLastFetchedAt",
         )
         .populate(
           "assignedAgent",
@@ -3811,6 +3834,7 @@ export class LoanQueryController {
               cibilPdfLastFetchedAt: 1,
               cibilPdfReport: 1,
               digiLockerVault: 1,
+              gender: 1,
             })
             .lean()
             .exec()

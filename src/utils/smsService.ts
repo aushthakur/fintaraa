@@ -124,7 +124,7 @@ const sendAirtelIqSMS = async (
   );
 
   const response = await axios.post(airtel.baseUrl, payload, {
-    timeout: 30000,
+    timeout: 10000,
     headers: {
       accept: "application/json",
       "content-type": "application/json",

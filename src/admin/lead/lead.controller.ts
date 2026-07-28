@@ -193,6 +193,40 @@ export class LeadController {
     }
   }
 
+  static async deleteLead(req: Request, res: Response, next: NextFunction) {
+    try {
+      const leadId = String(req.params.id || "").trim();
+      if (!Types.ObjectId.isValid(leadId)) {
+        throw new ApiError(400, "Invalid lead ID");
+      }
+
+      const session = (req as any).mongoSession;
+      const lead = await Lead.findByIdAndDelete(leadId, { session });
+      if (!lead) {
+        throw new ApiError(404, "Lead not found");
+      }
+
+      const assignedAgentId = lead.assignment?.current?.agent;
+      const wasActiveLead = ![
+        LeadStatus.CONVERTED,
+        LeadStatus.CLOSED,
+      ].includes(lead.status);
+      if (assignedAgentId && wasActiveLead) {
+        await Agent.updateOne(
+          { _id: assignedAgentId, activeLeads: { $gt: 0 } },
+          { $inc: { activeLeads: -1 } },
+          { session },
+        );
+      }
+
+      return res
+        .status(200)
+        .json(new ApiResponse(200, { _id: lead._id }, "Lead deleted successfully"));
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async addNote(req: Request, res: Response, next: NextFunction) {
     try {
       const actorId = (req as any).user?._id;

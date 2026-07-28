@@ -2023,7 +2023,11 @@ export class InsuranceQueryController {
     try {
       const customerId = (req as any).user?._id;
       const { role } = (req as any).user || {};
-      
+
+      if (!Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
+
       const result = await insuranceQueryService.getById(
         req.params.id,
         role !== "admin"
@@ -2465,7 +2469,11 @@ export class InsuranceQueryController {
     try {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
-      
+
+      if (!Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
+
       const query = await InsuranceQuery.findById(req.params.id)
         .populate("customerId", "name email mobile profilePictureUrl")
         .populate("assignedAgent", "name username email mobile profilePictureUrl")

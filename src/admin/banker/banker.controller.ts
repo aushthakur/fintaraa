@@ -3,6 +3,7 @@ import ApiResponse from "../../utils/ApiResponse";
 import { Banker } from "../../modals/banker.model";
 import { NextFunction, Request, Response } from "express";
 import { CommonService } from "../../services/common.services";
+import { isValidObjectId } from "../../utils/helper";
 
 const BankerService = new CommonService(Banker);
 
@@ -39,6 +40,9 @@ export class BankerController {
 
   static async getBankerById(req: Request, res: Response, next: NextFunction) {
     try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json(new ApiError(400, "Invalid banker id"));
+      }
       const { role } = (req as any).user;
       const result = await BankerService.getById(req.params.id);
       if (!result)
@@ -60,6 +64,9 @@ export class BankerController {
     next: NextFunction
   ) {
     try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json(new ApiError(400, "Invalid banker id"));
+      }
       const result = await BankerService.updateById(req.params.id, req.body);
       if (!result)
         return res
@@ -79,6 +86,9 @@ export class BankerController {
     next: NextFunction
   ) {
     try {
+      if (!isValidObjectId(req.params.id)) {
+        return res.status(400).json(new ApiError(400, "Invalid banker id"));
+      }
       const result = await BankerService.deleteById(req.params.id);
       if (!result)
         return res
