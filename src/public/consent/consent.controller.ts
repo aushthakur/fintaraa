@@ -3,6 +3,7 @@ import ApiResponse from "../../utils/ApiResponse";
 import ApiError from "../../utils/ApiError";
 import { ConsentHistory, IConsentEvent } from "../../modals/consentHistory.model";
 import { CommonService } from "../../services/common.services";
+import { resolveConsentActorModel } from "../../services/communicationConsent.service";
 
 const ConsentService = new CommonService<IConsentEvent>(ConsentHistory as any);
 
@@ -15,6 +16,8 @@ export class ConsentController {
       const payload = {
         ...req.body,
         user: userId,
+        actorModel: resolveConsentActorModel(req.user?.role),
+        actorRole: req.user?.role,
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"],
         collectedAt: req.body?.collectedAt || new Date(),

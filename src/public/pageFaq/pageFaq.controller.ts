@@ -88,8 +88,12 @@ const dynamicCandidates = (pathname: string) => {
   const candidates = [pathname];
   if (segments[0] === "blog" && segments[1]) candidates.push("/blog/[slug]");
   if (segments[0] === "products" && segments[1]) {
-    candidates.push("/products/[loanType]");
-    candidates.push("/products/[insuranceType]");
+    const productSlug = segments[1].toLowerCase();
+    if (productSlug.includes("insurance") || productSlug === "retirement-plan") {
+      candidates.push("/products/[insuranceType]");
+    } else {
+      candidates.push("/products/[loanType]");
+    }
     candidates.push("/products/[product]");
   }
   if (segments[0] === "banks" && segments[1] && segments[2]) {
@@ -144,17 +148,33 @@ export class PageFaqController {
   static async resolve(req: Request, res: Response, next: NextFunction) {
     try {
       const pathname = normalizePathname(req.query.pathname);
-      const candidates = dynamicCandidates(pathname);
-      const pageFaq = await PageFaq.findOne({
+      const exactMatch = await PageFaq.findOne({
         recordType: "page_faq",
         status: "active",
         $or: [
-          { pagePathname: { $in: candidates } },
-          { pathAliases: { $in: candidates } },
+          { pagePathname: pathname },
+          { pathAliases: pathname },
         ],
       })
         .sort({ priorityOrder: 1, updatedAt: -1 })
         .lean();
+      const fallbackCandidates = dynamicCandidates(pathname).filter(
+        (candidate) => candidate !== pathname,
+      );
+      const pageFaq =
+        exactMatch ||
+        (fallbackCandidates.length
+          ? await PageFaq.findOne({
+              recordType: "page_faq",
+              status: "active",
+              $or: [
+                { pagePathname: { $in: fallbackCandidates } },
+                { pathAliases: { $in: fallbackCandidates } },
+              ],
+            })
+              .sort({ priorityOrder: 1, updatedAt: -1 })
+              .lean()
+          : null);
 
       return res
         .status(200)

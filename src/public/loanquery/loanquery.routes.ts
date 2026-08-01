@@ -7,6 +7,7 @@ import {
   dynamicUpload,
   s3UploaderMiddleware,
 } from "../../middlewares/s3FileUploadMiddleware";
+import { requireApprovedDsaIfAgency } from "../../middlewares/dsaAuthMiddleware";
 
 const router = Router();
 
@@ -56,8 +57,13 @@ const loanUploadFields = [
   ...coApplicantUploadFields,
 ];
 
+router.get(
+  "/public/track",
+  asyncHandler(LoanQueryController.getPublicTrackingStatus),
+);
+
 // All routes require authentication
-router.use(authenticateToken);
+router.use(authenticateToken, requireApprovedDsaIfAgency);
 
 router.post("/rc-lookup", asyncHandler(LoanQueryController.fetchRcDetails));
 router.post("/:id/cibil", asyncHandler(LoanQueryController.fetchCibilForQuery));
@@ -66,8 +72,20 @@ router.post(
   asyncHandler(LoanQueryController.fetchCibilForPerson),
 );
 router.post(
+  "/:id/cibil-person-pdf",
+  asyncHandler(LoanQueryController.fetchCibilPdfForPerson),
+);
+router.get(
+  "/:id/co-applicants/:index/cibil-pdf",
+  asyncHandler(LoanQueryController.downloadCoApplicantCibilPdf),
+);
+router.post(
   "/fetch-cibil-pdf-by-mobile",
   asyncHandler(LoanQueryController.fetchCibilPdfByMobile),
+);
+router.post(
+  "/download-cibil-pdf-by-mobile",
+  asyncHandler(LoanQueryController.downloadCibilPdfByMobile),
 );
 
 // CRUD routes for loan queries

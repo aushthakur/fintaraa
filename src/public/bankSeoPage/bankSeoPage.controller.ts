@@ -45,6 +45,21 @@ const parseArrayInput = (value: any) => {
   return [];
 };
 
+const parseObjectInput = (value: any) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+};
+
 const truthy = (value: unknown, fallback = true) => {
   if (value === undefined || value === null || value === "") return fallback;
   return ["true", "1", "yes"].includes(String(value).toLowerCase());
@@ -321,7 +336,11 @@ const normalizePayload = (body: Record<string, any>) => ({
   ...body,
   bankSlug: toSlug(body.bankSlug || body.bankName),
   productSlug: toSlug(body.productSlug || body.productName),
-  location: normalizeLocation(body.location || body),
+  location: normalizeLocation(
+    Object.keys(parseObjectInput(body.location)).length
+      ? parseObjectInput(body.location)
+      : body,
+  ),
   heroStats: parseArrayInput(body.heroStats),
   bankStats: parseArrayInput(body.bankStats),
   whyApply: parseArrayInput(body.whyApply),

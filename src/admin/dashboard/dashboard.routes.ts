@@ -6,6 +6,13 @@ import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
 const router = Router();
 
 router.get(
+  "/command-centre",
+  authenticateToken,
+  authorize("admin"),
+  asyncHandler(DashboardController.getCommandCentre),
+);
+
+router.get(
   "/overview",
   authenticateToken,
   authorize("admin"),

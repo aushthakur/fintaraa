@@ -11,6 +11,7 @@ import {
   InsuranceQueryActivityType,
   InsuranceType,
 } from "../modals/insurancequery.model";
+import { normalizeLoanType } from "../utils/loanType";
 
 type AssignableQuery = ILoanQuery | IInsuranceQuery;
 
@@ -36,6 +37,8 @@ type AssignmentCandidate = {
 };
 
 const normalize = (value?: string) => String(value || "").trim().toLowerCase();
+const normalizeLoanFocus = (value?: string) =>
+  normalizeLoanType(value) || normalize(value);
 
 const hasPincodeMatch = (targetPincode?: string, serviceablePincodes?: string[]) => {
   if (!serviceablePincodes || serviceablePincodes.length === 0) return true;
@@ -54,8 +57,10 @@ const hasProductMatch = (
   candidate: AssignmentCandidate,
 ) => {
   if (loanType) {
-    const focus = (candidate.productFocusLoan || []).map(normalize).filter(Boolean);
-    return focus.length === 0 || focus.includes(normalize(loanType));
+    const focus = (candidate.productFocusLoan || [])
+      .map(normalizeLoanFocus)
+      .filter(Boolean);
+    return focus.length === 0 || focus.includes(normalizeLoanFocus(loanType));
   }
   if (insuranceType) {
     const focus = (candidate.productFocusInsurance || []).map(normalize).filter(Boolean);

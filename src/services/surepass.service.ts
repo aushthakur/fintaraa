@@ -1,6 +1,10 @@
 import axios, { AxiosError } from "axios";
 import ApiError from "../utils/ApiError";
 import { config } from "../config/config";
+import {
+  extractCibilPdfLink,
+  persistCibilPdfReport,
+} from "./cibilPdfStorage.service";
 
 type SurepassEnvironment = "sandbox" | "production";
 
@@ -201,13 +205,18 @@ export const fetchSurepassCibilReport = async (
       timeout: config.surepass.timeoutMs,
     });
 
-    console.log(data);
+    const storedReport = extractCibilPdfLink(data)
+      ? await persistCibilPdfReport(data, {
+          environment: envConfig.environment,
+        })
+      : null;
 
     return {
       environment: envConfig.environment,
-      data,
+      data: storedReport?.report || data,
     };
   } catch (error) {
+    if (error instanceof ApiError) throw error;
     const err = error as AxiosError<any>;
     const status = err.response?.status || 500;
     const message =
@@ -233,18 +242,22 @@ export const fetchSurepassCibilPdfReport = async (
     const url = `${envConfig.baseUrl}${config.surepass.endpoints.cibilPdf}`;
     payload = { ...payload, consent: "Y" };
 
-    console.log(url, payload);
     const { data } = await axios.post(url, payload, {
       headers: {
         Authorization: `Bearer ${envConfig.token}`,
         "Content-Type": "application/json",
       },
+      timeout: config.surepass.timeoutMs,
+    });
+    const storedPdf = await persistCibilPdfReport(data, {
+      environment: envConfig.environment,
     });
     return {
       environment: envConfig.environment,
-      data,
+      data: storedPdf.report,
     };
   } catch (error) {
+    if (error instanceof ApiError) throw error;
     const err = error as AxiosError<any>;
     const status = err.response?.status || 500;
     const message =

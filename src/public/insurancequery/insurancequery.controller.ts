@@ -22,11 +22,18 @@ import { Agency } from "../../modals/agency.model";
 import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
 import { leadManagementService } from "../../services/leadManagement.service";
 import Admin from "../../modals/admin.model";
+import { notifyInsuranceApplicationStatus } from "../../services/insuranceCustomerNotification.service";
 import {
   DEFAULT_QUERY_TIMEZONE,
   buildDateRangeInTimeZone,
   parseDateInTimeZone,
 } from "../../utils/helper";
+import { applyDsaAttribution } from "../../services/dsaAttribution.service";
+import {
+  normalizeApplicationCommunicationConsent,
+  recordCommunicationConsentAudit,
+  requiresApplicationWhatsappConsent,
+} from "../../services/communicationConsent.service";
 
 const insuranceQueryService = new CommonService(InsuranceQuery);
 
@@ -36,7 +43,9 @@ const syncInsuranceApplicationLead = async (
 ) => {
   if (
     !result ||
-    !["b2c_app", "b2b_app"].includes(String(result.dataSource || ""))
+    !["b2c_app", "b2b_app", "website"].includes(
+      String(result.dataSource || ""),
+    )
   ) {
     return;
   }
@@ -50,7 +59,26 @@ const syncInsuranceApplicationLead = async (
         state: result.state,
         pincode: result.pincode,
         whatsappOptIn: result.whatsappConsent,
-        tags: ["app_insurance_application", result.typeOfInsurance],
+        tags: [
+          result.dataSource === "website"
+            ? "website_insurance_application"
+            : "app_insurance_application",
+          result.typeOfInsurance,
+        ],
+        utmSource: result.attribution?.source,
+        utmMedium: result.attribution?.medium,
+        utmCampaign: result.attribution?.campaign,
+        utmTerm: result.attribution?.term,
+        utmContent: result.attribution?.content,
+        landingPage: result.attribution?.landingPage,
+        campaignId: result.attribution?.campaign,
+        attribution: result.attribution,
+        queryParams: result.attribution?.queryParams,
+        lastTouchPage: result.attribution?.lastTouchPage,
+        lastTouchQueryParams: result.attribution?.lastTouchQueryParams,
+        gclid: result.attribution?.gclid,
+        fbclid: result.attribution?.fbclid,
+        dsaReferralCode: result.attribution?.dsaReferralCode,
       },
       {
         source: String(result.dataSource),
@@ -119,6 +147,37 @@ const getIdString = (value: any) => {
   if (typeof value === "string") return value;
   if (value?._id) return String(value._id);
   return String(value);
+};
+
+const canAccessInsuranceQuery = async (
+  query: any,
+  userId: any,
+  role?: string,
+) => {
+  if (role === "admin") return true;
+  const actorId = getIdString(userId);
+  if (!actorId) return false;
+
+  if (role === "agent") {
+    return getIdString(query?.assignedAgent) === actorId;
+  }
+  if (role === "lander") {
+    return getIdString(query?.assignedLander) === actorId;
+  }
+  if (role === "agency" || role === "agency_member") {
+    const allowedIds = new Set([actorId]);
+    if (role === "agency_member") {
+      const member = await Agency.findById(actorId)
+        .select("parentAgency")
+        .lean();
+      const parentId = getIdString((member as any)?.parentAgency);
+      if (parentId) allowedIds.add(parentId);
+    }
+    return [query?.channelAgency, query?.ownerAgency, query?.customerId].some(
+      (value) => allowedIds.has(getIdString(value)),
+    );
+  }
+  return getIdString(query?.customerId) === actorId;
 };
 
 const normalizeRoleName = (role?: any) =>
@@ -679,9 +738,13 @@ const buildAutoCloseInsuranceFollowUpMutation = ({
 const processFileUploads = (req: Request) => {
   // Initialize policyDetails if it doesn't exist
   req.body.policyDetails = parseMaybeJson(req.body.policyDetails);
+  if (req.body.rcLookup !== undefined) {
+    req.body.rcLookup = parseMaybeJson(req.body.rcLookup);
+  }
   if (!req.body.policyDetails || typeof req.body.policyDetails !== "object") {
     req.body.policyDetails = {};
   }
+  req.body.attribution = parseMaybeJson(req.body.attribution) || {};
 
   // Process kycDocumentUrl (main field)
   if (req.body.kycDocumentUrl) {
@@ -1244,6 +1307,50 @@ const normalizeInsurancePayload = (
 };
 
 export class InsuranceQueryController {
+  static async getPublicTrackingStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const applicationId = String(req.query?.applicationId || "")
+        .trim()
+        .toUpperCase();
+      const mobile = String(req.query?.mobile || "").replace(/\D/g, "");
+
+      if (!applicationId || mobile.length !== 10) {
+        return res.status(400).json(
+          new ApiError(
+            400,
+            "Application number and a valid 10-digit registered mobile number are required",
+          ),
+        );
+      }
+
+      const query = await InsuranceQuery.findOne({
+        insuranceId: applicationId,
+        mobile,
+        isDeleted: { $ne: true },
+      })
+        .select(
+          "_id insuranceId typeOfInsurance status createdAt updatedAt",
+        )
+        .lean();
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          query || null,
+          query
+            ? "Insurance application found"
+            : "No matching insurance application found",
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async createQuery(
     req: Request,
     res: Response,
@@ -1253,6 +1360,7 @@ export class InsuranceQueryController {
       // Get customer ID from authenticated user token
       const customerId = (req as any).user?._id;
       const role = (req as any).user?.role;
+      const session = (req as any).mongoSession;
       if (!customerId) {
         return res
           .status(401)
@@ -1261,6 +1369,9 @@ export class InsuranceQueryController {
 
       // Process uploaded files and map URLs
       processFileUploads(req);
+      if (role !== "agency" && role !== "agency_member") {
+        await applyDsaAttribution(req.body);
+      }
 
       // Automatically set customerId from token
       req.body.customerId = customerId;
@@ -1273,13 +1384,33 @@ export class InsuranceQueryController {
       req.body.formSource =
         String(req.body.formSource || req.body.dataSource).trim() ||
         req.body.dataSource;
-      req.body.whatsappConsent =
-        req.body.whatsappConsent === true ||
-        ["true", "1", "yes"].includes(
-          String(req.body.whatsappConsent || "").toLowerCase(),
-        );
-      req.body.communicationConsent =
-        parseMaybeJson(req.body.communicationConsent) || {};
+      const isDraft = req.body.status === ApplicationStatus.DRAFT;
+      const normalizedConsent = normalizeApplicationCommunicationConsent({
+        whatsappConsent: req.body.whatsappConsent,
+        communicationConsent: parseMaybeJson(req.body.communicationConsent),
+        source: req.body.dataSource,
+        formSource: req.body.formSource,
+      });
+      req.body.whatsappConsent = normalizedConsent.whatsapp;
+      req.body.communicationConsent = normalizedConsent.details;
+      if (
+        requiresApplicationWhatsappConsent({
+          status: req.body.status,
+          source: req.body.dataSource,
+          formSource: req.body.formSource,
+          role,
+        }) &&
+        !normalizedConsent.whatsapp
+      ) {
+        return res
+          .status(400)
+          .json(
+            new ApiError(
+              400,
+              "WhatsApp communication consent is required to submit this application",
+            ),
+          );
+      }
       if (role === "agency" || role === "agency_member") {
         req.body.channelAgency = customerId;
         if (role === "agency_member") {
@@ -1301,7 +1432,6 @@ export class InsuranceQueryController {
 
       // Validate policyDetails against typeOfInsurance if both are provided (skip for draft)
       // This must run AFTER processFileUploads since files are moved to policyDetails
-      const isDraft = req.body.status === ApplicationStatus.DRAFT;
       const isWebsiteApplication =
         String(req.body.dataSource || "").toLowerCase() === "website" ||
         String(req.body.formSource || "").toLowerCase() ===
@@ -1394,8 +1524,6 @@ export class InsuranceQueryController {
           createdAt: new Date(),
         });
         
-        const session = (req as any).mongoSession;
-
         // Auto-assign employee (from Admin model with role=agent)
         if (result && !result.assignedAgent) {
           result = await EmployeeAssignmentEngine.ensureAssignmentForInsuranceQuery(
@@ -1427,6 +1555,25 @@ export class InsuranceQueryController {
         return res
           .status(400)
           .json(new ApiError(400, "Failed to create insurance query"));
+      if (!isDraft && result.whatsappConsent) {
+        await recordCommunicationConsentAudit({
+          actorId: String(customerId),
+          actorRole: role,
+          referenceId: `insurance:${String(result._id)}`,
+          purpose: "insurance_application_communications",
+          source: result.dataSource,
+          formSource: result.formSource,
+          communicationConsent: result.communicationConsent || {},
+          ipAddress: req.ip,
+          userAgent: String(req.headers["user-agent"] || ""),
+          session,
+          metadata: {
+            applicationId: (result as any).insuranceId,
+            applicationType: "insurance",
+            insuranceType: (result as any).typeOfInsurance,
+          },
+        });
+      }
       try {
         await syncInsuranceDocumentsToCustomerProfile({ user, query: result });
       } catch (profileSyncError: any) {
@@ -1440,6 +1587,17 @@ export class InsuranceQueryController {
         ["b2c_app", "b2b_app"].includes(String(result.dataSource || ""))
       ) {
         await syncInsuranceApplicationLead(result, customerId);
+      }
+      if (!isDraft) {
+        await notifyInsuranceApplicationStatus(result, {
+          created: true,
+          eventKey: "application-created",
+        }).catch((notificationError: any) =>
+          console.error(
+            "[Insurance Notification] Create notification failed:",
+            notificationError?.message || notificationError,
+          ),
+        );
       }
       return res
         .status(201)
@@ -2129,6 +2287,11 @@ export class InsuranceQueryController {
 
       // Prevent changing customerId
       delete req.body.customerId;
+      delete req.body.channelAgency;
+      delete req.body.ownerAgency;
+      delete req.body.dsaReferralCode;
+      delete req.body.dsaCode;
+      req.body.attribution = existingResult.attribution || {};
       const auditFields = await buildInsuranceAuditFields(customerId, role);
       const actorName = auditFields.updatedByName || "";
       const explicitFollowUpMutation = hasExplicitFollowUpPayload
@@ -2141,6 +2304,40 @@ export class InsuranceQueryController {
           })
         : null;
       const nextStatus = req.body.status || existingResult.status;
+      if (hasRegularPayload) {
+        const normalizedConsent = normalizeApplicationCommunicationConsent({
+          whatsappConsent:
+            req.body.whatsappConsent !== undefined
+              ? req.body.whatsappConsent
+              : existingResult.whatsappConsent,
+          communicationConsent:
+            req.body.communicationConsent !== undefined
+              ? req.body.communicationConsent
+              : existingResult.communicationConsent,
+          source: req.body.dataSource || existingResult.dataSource,
+          formSource: req.body.formSource || existingResult.formSource,
+        });
+        req.body.whatsappConsent = normalizedConsent.whatsapp;
+        req.body.communicationConsent = normalizedConsent.details;
+        if (
+          requiresApplicationWhatsappConsent({
+            status: nextStatus,
+            source: req.body.dataSource || existingResult.dataSource,
+            formSource: req.body.formSource || existingResult.formSource,
+            role,
+          }) &&
+          !normalizedConsent.whatsapp
+        ) {
+          return res
+            .status(400)
+            .json(
+              new ApiError(
+                400,
+                "WhatsApp communication consent is required to submit this application",
+              ),
+            );
+        }
+      }
       const autoCloseFollowUpMutation =
         !explicitFollowUpMutation &&
         nextStatus !== existingResult.status &&
@@ -2186,6 +2383,26 @@ export class InsuranceQueryController {
         existingResult?.status === ApplicationStatus.DRAFT &&
         updatedResult.status !== ApplicationStatus.DRAFT;
       const session = (req as any).mongoSession;
+
+      if (isDraftSubmitted && updatedResult.whatsappConsent) {
+        await recordCommunicationConsentAudit({
+          actorId: String(customerId),
+          actorRole: role,
+          referenceId: `insurance:${String(updatedResult._id)}`,
+          purpose: "insurance_application_communications",
+          source: updatedResult.dataSource,
+          formSource: updatedResult.formSource,
+          communicationConsent: updatedResult.communicationConsent || {},
+          ipAddress: req.ip,
+          userAgent: String(req.headers["user-agent"] || ""),
+          session,
+          metadata: {
+            applicationId: updatedResult.insuranceId,
+            applicationType: "insurance",
+            insuranceType: updatedResult.typeOfInsurance,
+          },
+        });
+      }
       
       // Track status change
       if (updatedResult && existingResult?.status !== updatedResult.status) {
@@ -2255,6 +2472,16 @@ export class InsuranceQueryController {
         );
         await result.save({ session });
         await syncInsuranceApplicationLead(result, customerId);
+        if (existingResult?.status !== result.status) {
+          await notifyInsuranceApplicationStatus(result, {
+            previousStatus: existingResult?.status,
+          }).catch((notificationError: any) =>
+            console.error(
+              "[Insurance Notification] Status notification failed:",
+              notificationError?.message || notificationError,
+            ),
+          );
+        }
         return res
           .status(200)
           .json(new ApiResponse(200, result, "Insurance query updated successfully"));
@@ -2263,6 +2490,16 @@ export class InsuranceQueryController {
       await updatedResult.save();
       if (isDraftSubmitted) {
         await syncInsuranceApplicationLead(updatedResult, customerId);
+      }
+      if (existingResult?.status !== updatedResult.status) {
+        await notifyInsuranceApplicationStatus(updatedResult, {
+          previousStatus: existingResult?.status,
+        }).catch((notificationError: any) =>
+          console.error(
+            "[Insurance Notification] Status notification failed:",
+            notificationError?.message || notificationError,
+          ),
+        );
       }
       return res
         .status(200)
@@ -2486,11 +2723,15 @@ export class InsuranceQueryController {
           .json(new ApiError(404, "Insurance query not found"));
       }
 
-      // Check permissions - landers should use their own routes at /lander/*
-      if (role === "lander" && query.assignedLander?._id?.toString() !== userId) {
+      if (!(await canAccessInsuranceQuery(query, userId, role))) {
         return res
           .status(403)
-          .json(new ApiError(403, "You can only view queries assigned to you"));
+          .json(
+            new ApiError(
+              403,
+              "You can only view insurance queries owned by or assigned to you",
+            ),
+          );
       }
 
       const enrichedActivities = await enrichInsuranceActivityActors(
@@ -2641,6 +2882,18 @@ export class InsuranceQueryController {
       }
 
       await query.save();
+
+      if (oldStatus !== status) {
+        await notifyInsuranceApplicationStatus(query, {
+          previousStatus: oldStatus,
+          remarks,
+        }).catch((notificationError: any) =>
+          console.error(
+            "[Insurance Notification] Status notification failed:",
+            notificationError?.message || notificationError,
+          ),
+        );
+      }
 
       return res
         .status(200)
@@ -2973,6 +3226,16 @@ export class InsuranceQueryController {
       }
 
       await query.save();
+
+      await notifyInsuranceApplicationStatus(query, {
+        previousStatus: oldStatus,
+        remarks,
+      }).catch((notificationError: any) =>
+        console.error(
+          "[Insurance Notification] Completion notification failed:",
+          notificationError?.message || notificationError,
+        ),
+      );
 
       // Adjust lander load - reduce by 1 as this query is now completed
       if (query.assignedAgent) {

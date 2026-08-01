@@ -12,6 +12,8 @@ import {
   LoginMethodSchema,
   LoginMethodType,
   SecurityPreferencesSchema,
+  IPushToken,
+  PushTokenSchema,
   UserStatus,
   Gender,
 } from "./user.model";
@@ -20,6 +22,11 @@ export type AgencyRole = "agency" | "agency_member";
 
 export interface IAgency extends Document {
   agencyId?: string;
+  referralCode?: string;
+  businessName?: string;
+  gstin?: string;
+  onboardingSubmittedAt?: Date;
+  lastLoginAt?: Date;
   name: string;
   email: string;
   mobile: string;
@@ -28,6 +35,8 @@ export interface IAgency extends Document {
   status: UserStatus;
   password?: string;
   refreshToken?: string;
+  fcmToken?: string;
+  fcmTokens?: IPushToken[];
   avatar?: string;
   profilePictureUrl?: string;
   agreedToTerms: boolean;
@@ -88,6 +97,8 @@ export interface IAgency extends Document {
     reviewedBy?: Types.ObjectId;
     reviewedAt?: Date;
     notes?: string;
+    rejectionReason?: string;
+    resubmittedAt?: Date;
     checklist?: Record<string, boolean>;
   };
   cibilScore?: number;
@@ -112,6 +123,18 @@ const AgencySchema = new Schema<IAgency>(
   {
     name: { type: String, required: true, trim: true },
     agencyId: { type: String, unique: true, sparse: true, index: true },
+    referralCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
+      uppercase: true,
+      trim: true,
+    },
+    businessName: { type: String, trim: true },
+    gstin: { type: String, trim: true, uppercase: true, index: true },
+    onboardingSubmittedAt: { type: Date },
+    lastLoginAt: { type: Date },
     email: {
       type: String,
       index: true,
@@ -135,6 +158,8 @@ const AgencySchema = new Schema<IAgency>(
     },
     password: { type: String },
     refreshToken: { type: String },
+    fcmToken: { type: String, unique: true, sparse: true },
+    fcmTokens: { type: [PushTokenSchema], default: [] },
     avatar: { type: String },
     profilePictureUrl: { type: String },
     agreedToTerms: { type: Boolean, default: false },
@@ -164,6 +189,8 @@ const AgencySchema = new Schema<IAgency>(
       reviewedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
       reviewedAt: { type: Date },
       notes: { type: String, trim: true },
+      rejectionReason: { type: String, trim: true },
+      resubmittedAt: { type: Date },
       checklist: { type: Schema.Types.Mixed, default: {} },
     },
     bankDetails: { type: BankDetailsSchema },
@@ -230,6 +257,8 @@ const AgencySchema = new Schema<IAgency>(
   { timestamps: true }
 );
 
+AgencySchema.index({ "fcmTokens.token": 1 });
+
 const allocateUniqueAgencyId = async (agency: AgencyDocument): Promise<string> => {
   const session = agency.$session();
   const AgencyModel = agency.constructor as typeof Agency;
@@ -262,6 +291,9 @@ const allocateUniqueAgencyId = async (agency: AgencyDocument): Promise<string> =
 AgencySchema.pre("save", async function (this: AgencyDocument, next) {
   if (this.isNew && !this.agencyId) {
     this.agencyId = await allocateUniqueAgencyId(this);
+  }
+  if (!this.referralCode && this.agencyId) {
+    this.referralCode = `DSA${String(this.agencyId).replace(/[^a-z0-9]/gi, "").slice(-8)}`.toUpperCase();
   }
   if (!this.isModified("password")) return next();
   if (!this.password) return next();

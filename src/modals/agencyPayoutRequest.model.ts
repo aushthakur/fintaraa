@@ -19,6 +19,12 @@ interface IAgencyPayoutBankDetails {
 export interface IAgencyPayoutRequest extends Document {
   ownerAgency: Types.ObjectId;
   requestedBy: Types.ObjectId;
+  payoutProfile?: Types.ObjectId;
+  destinationEncryptedSnapshot?: string;
+  destinationMasked?: string;
+  commissionTransactions?: Types.ObjectId[];
+  payoutAllocations?: Array<{ transaction: Types.ObjectId; amount: number }>;
+  reservationActive?: boolean;
   amount: number;
   method: AgencyPayoutMethod;
   upiId?: string;
@@ -49,6 +55,24 @@ const AgencyPayoutRequestSchema = new Schema<IAgencyPayoutRequest>(
       required: true,
       index: true,
     },
+    payoutProfile: { type: Schema.Types.ObjectId, ref: "AgencyPayoutProfile" },
+    destinationEncryptedSnapshot: { type: String, select: false },
+    destinationMasked: { type: String, trim: true },
+    commissionTransactions: [
+      { type: Schema.Types.ObjectId, ref: "AgencyCommissionTransaction" },
+    ],
+    payoutAllocations: [
+      {
+        transaction: {
+          type: Schema.Types.ObjectId,
+          ref: "AgencyCommissionTransaction",
+          required: true,
+        },
+        amount: { type: Number, required: true, min: 0 },
+        _id: false,
+      },
+    ],
+    reservationActive: { type: Boolean, default: true, index: true },
     amount: { type: Number, required: true, min: 0 },
     method: {
       type: String,
@@ -80,6 +104,14 @@ const AgencyPayoutRequestSchema = new Schema<IAgencyPayoutRequest>(
 );
 
 AgencyPayoutRequestSchema.index({ ownerAgency: 1, status: 1, createdAt: -1 });
+AgencyPayoutRequestSchema.index(
+  { ownerAgency: 1, reservationActive: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { reservationActive: true },
+    name: "one_active_agency_payout",
+  },
+);
 
 export const AgencyPayoutRequest = mongoose.model<IAgencyPayoutRequest>(
   "AgencyPayoutRequest",

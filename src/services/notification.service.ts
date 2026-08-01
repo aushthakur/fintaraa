@@ -14,6 +14,10 @@ import { emitNotificationToUser } from "../config/socket.io";
 import { UserType, Notification } from "../modals/notification.model";
 import { NotificationMessages } from "./../config/notificationMessages";
 import { sendWebPushToUser } from "./webPush.service";
+import {
+  canonicalNotificationRole,
+  notificationRoleAliases,
+} from "./notificationRecipient.service";
 
 interface SendNotificationOptions {
   type: string;
@@ -22,6 +26,7 @@ interface SendNotificationOptions {
   toUserId: string;
   toRole: UserType;
   data?: Record<string, string | number>;
+  dedupeKey?: string;
   fromUser?: { _id: string; role: UserType };
 }
 
@@ -41,11 +46,32 @@ interface SingleNotifyOptions {
   direction?: "sender" | "receiver";
   context: Record<string, string | number>;
   fromUser?: { _id: string; role: UserType };
+  dedupeKey?: string;
 }
 
-const buildDashboardUrl = () => {
-  const baseUrl = String(config.frontendUrl || "").trim().replace(/\/+$/, "");
-  return baseUrl ? `${baseUrl}/dashboard` : "/dashboard";
+const buildNotificationUrl = (
+  role: UserType,
+  requestedUrl?: string | number,
+) => {
+  const explicitUrl = String(requestedUrl || "").trim();
+  if (explicitUrl) return explicitUrl;
+
+  if ([UserType.ADMIN, UserType.AGENT].includes(role)) {
+    const adminUrl = String(config.frontendUrl || "")
+      .trim()
+      .replace(/\/+$/, "");
+    return adminUrl
+      ? `${adminUrl}/dashboard/notifications`
+      : "/dashboard/notifications";
+  }
+
+  const websiteUrl = String(config.publicWebsiteUrl || "")
+    .trim()
+    .replace(/\/+$/, "");
+  const path = [UserType.AGENCY, UserType.AGENCY_MEMBER].includes(role)
+    ? "/partner/profile/notifications"
+    : "/account/profile/notifications";
+  return websiteUrl ? `${websiteUrl}${path}` : path;
 };
 
 const toStringMap = (payload: Record<string, unknown>) =>
@@ -103,22 +129,52 @@ export const NotificationService = {
     options: SendNotificationOptions,
     authUser?: { _id: string; role: UserType }
   ) {
-    const { type, title, message, toRole, toUserId, fromUser, data: meta } = options;
+    const {
+      type,
+      title,
+      message,
+      toRole,
+      toUserId,
+      fromUser,
+      data: meta,
+      dedupeKey,
+    } = options;
     const sender = fromUser || authUser;
+    const canonicalToRole = await canonicalNotificationRole(toUserId, toRole);
+    const canonicalSender = sender
+      ? {
+          ...sender,
+          role: await canonicalNotificationRole(sender._id, sender.role),
+        }
+      : undefined;
 
     let notification: any;
 
     try {
       // Create notification
-      notification = await Notification.create({
-        type,
-        title,
-        message,
-        to: { user: new Types.ObjectId(toUserId), role: toRole },
-        ...(sender
-          ? { from: { user: new Types.ObjectId(sender._id), role: sender.role } }
-          : {}),
-      });
+      try {
+        notification = await Notification.create({
+          type,
+          title,
+          message,
+          data: meta || {},
+          ...(dedupeKey ? { dedupeKey } : {}),
+          to: { user: new Types.ObjectId(toUserId), role: canonicalToRole },
+          ...(canonicalSender
+            ? {
+                from: {
+                  user: new Types.ObjectId(canonicalSender._id),
+                  role: canonicalSender.role,
+                },
+              }
+            : {}),
+        });
+      } catch (error: any) {
+        if (dedupeKey && error?.code === 11000) {
+          return Notification.findOne({ dedupeKey });
+        }
+        throw error;
+      }
 
       const resolveUserByRole = async (id: string, role: UserType) => {
         switch (role) {
@@ -141,13 +197,15 @@ export const NotificationService = {
 
       // Fetch sender and recipient
       const [recipient, senderUser]: any = await Promise.all([
-        resolveUserByRole(toUserId, toRole),
-        sender ? resolveUserByRole(sender._id, sender.role) : Promise.resolve(null),
+        resolveUserByRole(toUserId, canonicalToRole),
+        canonicalSender
+          ? resolveUserByRole(canonicalSender._id, canonicalSender.role)
+          : Promise.resolve(null),
       ]);
 
       if (!recipient) throw new Error(`Recipient not found: ${toUserId}`);
-      if (sender && !senderUser)
-        throw new Error(`Sender not found: ${sender._id}`);
+      if (canonicalSender && !senderUser)
+        throw new Error(`Sender not found: ${canonicalSender._id}`);
 
       const isUserRole = [
         "user",
@@ -156,7 +214,7 @@ export const NotificationService = {
         "employer",
         "agency",
         "agency_member",
-      ].includes(toRole);
+      ].includes(canonicalToRole);
       const preferences = isUserRole
         ? recipient?.preferences?.notifications || recipient?.notification || {}
         : {};
@@ -166,7 +224,7 @@ export const NotificationService = {
 
       const tasks: Promise<any>[] = [];
       const { mobile, email }: any = recipient;
-      const dashboardUrl = buildDashboardUrl();
+      const destinationUrl = buildNotificationUrl(canonicalToRole, meta?.url);
       const notificationId = notification._id.toString();
       const fcmTokens = getRecipientFcmTokens(recipient);
 
@@ -182,7 +240,7 @@ export const NotificationService = {
           type,
           notificationId,
           screen: getNotificationScreen(type),
-          url: dashboardUrl,
+          url: destinationUrl,
           title,
           body: message,
         });
@@ -241,7 +299,7 @@ export const NotificationService = {
         tasks.push(
           sendWebPushToUser({
             userId: toUserId,
-            role: toRole,
+            role: canonicalToRole,
             payload: {
               title,
               body: message,
@@ -250,7 +308,7 @@ export const NotificationService = {
               data: {
                 type,
                 notificationId,
-                url: dashboardUrl,
+                url: destinationUrl,
               },
             },
           }),
@@ -263,7 +321,7 @@ export const NotificationService = {
         ...(meta || {}),
         type,
         notificationId,
-        url: dashboardUrl,
+        url: destinationUrl,
       });
 
       // --- Email Notification ---
@@ -338,13 +396,14 @@ export async function sendSingleNotification({
   toRole,
   fromUser,
   direction = "receiver",
+  dedupeKey,
 }: SingleNotifyOptions) {
   const template = NotificationMessages[type]?.[direction];
   if (!template) throw new Error(`Missing notification template for ${type}`);
 
   const { title, message } = template(context);
 
-  await NotificationService.send({
+  return NotificationService.send({
     type,
     toRole,
     toUserId,
@@ -352,6 +411,7 @@ export async function sendSingleNotification({
     title: title.toString(),
     data: context,
     message: message.toString(),
+    dedupeKey,
   });
 }
 
@@ -362,19 +422,25 @@ export const getAllNotifications = async (
 ) => {
   try {
     const { user } = req;
-    const { page = 1, limit = 10, user: queryUser, queryRole } = req.query;
+    const { page = 1, limit = 10, user: queryUser } = req.query;
 
     const pageNumber = Math.max(parseInt(page as string, 10) || 1, 1);
     const limitNumber = Math.max(parseInt(limit as string, 10) || 10, 10);
 
-    // Safe check for userId from query or logged-in user
-    const rawUserId = queryUser || user?._id || user?.id;
-    const targetRole = queryUser ? queryRole : user?.role;
+    const rawUserId = String(user?._id || user?.id || "").trim();
+    const requestedUserId = String(queryUser || "").trim();
+    if (requestedUserId && requestedUserId !== rawUserId) {
+      return res
+        .status(403)
+        .json(new ApiResponse(403, null, "You can only view your own notifications."));
+    }
+    // Notification inbox routes are self-service. The authenticated identity,
+    // including its role, must not be replaceable through query parameters.
+    const targetRole = user?.role;
 
     // This is the fix
     if (
       !rawUserId ||
-      typeof rawUserId !== "string" ||
       !mongoose.isValidObjectId(rawUserId)
     ) {
       return res
@@ -395,10 +461,14 @@ export const getAllNotifications = async (
     }
 
     const userObjectId = new mongoose.Types.ObjectId(rawUserId as string);
+    const targetRoles = await notificationRoleAliases(
+      rawUserId as string,
+      targetRole,
+    );
 
     const matchStage = {
       "to.user": userObjectId,
-      "to.role": targetRole,
+      "to.role": { $in: targetRoles },
       status: { $ne: "deleted" },
     };
 
@@ -557,6 +627,8 @@ export const getAllNotifications = async (
           readAt: 1,
           status: 1,
           message: 1,
+          data: 1,
+          campaignId: 1,
           createdAt: 1,
           to: {
             _id: 1,
@@ -622,6 +694,7 @@ export const markNotificationRead = async (
         .json(new ApiResponse(400, null, "Missing user information."));
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
+    const targetRoles = await notificationRoleAliases(String(userId), role);
 
     // =====================
     // 🔹 Mark ALL as Read
@@ -630,7 +703,7 @@ export const markNotificationRead = async (
       const result = await Notification.updateMany(
         {
           "to.user": userObjectId,
-          "to.role": role,
+          "to.role": { $in: targetRoles },
           status: "unread",
         },
         {
@@ -665,7 +738,7 @@ export const markNotificationRead = async (
       {
         _id: new mongoose.Types.ObjectId(notificationId as string),
         "to.user": userObjectId,
-        "to.role": role,
+        "to.role": { $in: targetRoles },
         status: { $ne: "read" },
       },
       {
@@ -710,24 +783,37 @@ export const getNotificationStats = async (
 ) => {
   try {
     const { user } = req;
-    const { user: queryUser, role: queryRole } = req.query;
+    const { user: queryUser } = req.query;
+    const targetUserId = String(user?._id || user?.id || "").trim();
+    const requestedUserId = String(queryUser || "").trim();
+    if (requestedUserId && requestedUserId !== targetUserId) {
+      return res
+        .status(403)
+        .json(new ApiResponse(403, null, "You can only view your own notification stats."));
+    }
+    const targetUserRole = user?.role;
 
-    const targetUserId = (queryUser as string) || user?._id;
-    const targetUserRole = (queryRole as string) || user?.role;
-
-    if (!targetUserId || !targetUserRole) {
+    if (
+      !targetUserId ||
+      !mongoose.isValidObjectId(targetUserId) ||
+      !targetUserRole
+    ) {
       return res
         .status(400)
         .json(new ApiResponse(400, null, "User ID and role are required."));
     }
 
     const userObjectId = new mongoose.Types.ObjectId(targetUserId);
+    const targetRoles = await notificationRoleAliases(
+      String(targetUserId),
+      targetUserRole,
+    );
 
     const stats = await Notification.aggregate([
       {
         $match: {
           "to.user": userObjectId,
-          "to.role": targetUserRole,
+          "to.role": { $in: targetRoles },
         },
       },
       {

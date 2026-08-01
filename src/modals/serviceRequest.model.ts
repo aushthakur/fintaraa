@@ -28,6 +28,15 @@ export type ServiceWorkflowItem = {
   updatedAt?: Date;
 };
 
+export type ServiceFollowUpItem = {
+  scheduledAt?: Date;
+  note?: string;
+  status: "pending" | "completed" | "cancelled";
+  assignedExecutive?: string;
+  updatedBy?: string;
+  updatedAt: Date;
+};
+
 export interface IServiceRequest extends Document {
   recordType: "service_request";
   queryId: string;
@@ -37,6 +46,7 @@ export interface IServiceRequest extends Document {
   mobile: string;
   email?: string;
   businessName?: string;
+  monthlyLoanAmount?: string;
   businessType?: string;
   gstRequirement?: string;
   state?: string;
@@ -50,6 +60,10 @@ export interface IServiceRequest extends Document {
   currentStage: string;
   currentStageIndex: number;
   assignedExecutive?: string;
+  followUpAt?: Date;
+  followUpNote?: string;
+  followUpStatus?: "pending" | "completed" | "cancelled";
+  followUpHistory?: ServiceFollowUpItem[];
   details?: Record<string, any>;
   documents?: Array<{
     name: string;
@@ -76,6 +90,22 @@ const timelineSchema = new Schema<ServiceWorkflowItem>(
   { _id: false }
 );
 
+const followUpSchema = new Schema<ServiceFollowUpItem>(
+  {
+    scheduledAt: { type: Date },
+    note: { type: String, trim: true, maxlength: 1000 },
+    status: {
+      type: String,
+      enum: ["pending", "completed", "cancelled"],
+      default: "pending",
+    },
+    assignedExecutive: { type: String, trim: true },
+    updatedBy: { type: String, trim: true },
+    updatedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const serviceRequestSchema = new Schema<IServiceRequest>(
   {
     recordType: {
@@ -96,6 +126,7 @@ const serviceRequestSchema = new Schema<IServiceRequest>(
     mobile: { type: String, required: true, trim: true, index: true },
     email: { type: String, trim: true },
     businessName: { type: String, trim: true },
+    monthlyLoanAmount: { type: String, trim: true, maxlength: 100 },
     businessType: { type: String, trim: true },
     gstRequirement: { type: String, trim: true },
     state: { type: String, trim: true },
@@ -114,6 +145,15 @@ const serviceRequestSchema = new Schema<IServiceRequest>(
     currentStage: { type: String, required: true, trim: true },
     currentStageIndex: { type: Number, default: 0 },
     assignedExecutive: { type: String, trim: true },
+    followUpAt: { type: Date, index: true },
+    followUpNote: { type: String, trim: true, maxlength: 1000 },
+    followUpStatus: {
+      type: String,
+      enum: ["pending", "completed", "cancelled"],
+      default: "pending",
+      index: true,
+    },
+    followUpHistory: { type: [followUpSchema], default: [] },
     details: { type: Object, default: {} },
     documents: {
       type: [

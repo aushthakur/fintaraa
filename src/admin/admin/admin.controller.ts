@@ -12,6 +12,7 @@ import { LoanQuery } from "../../modals/loanquery.model";
 import { InsuranceQuery } from "../../modals/insurancequery.model";
 import { CallRecord } from "../../modals/callRecord.model";
 import { EligibilityMailPermission } from "../../modals/eligibilityMailPermission.model";
+import { normalizeLoanType } from "../../utils/loanType";
 
 const adminService = new CommonService(Admin);
 const landerService = new CommonService(Lander);
@@ -79,7 +80,9 @@ export class AdminController {
     );
     normalized.productFocusLoan = AdminController.normalizeArrayInput(
       payload.productFocusLoan,
-    );
+    )
+      .map((item) => normalizeLoanType(item))
+      .filter(Boolean);
     normalized.productFocusInsurance = AdminController.normalizeArrayInput(
       payload.productFocusInsurance,
     );

@@ -14,6 +14,7 @@ import {
   purchaseCreditScoreCheck,
   fetchUserCibilReport,
   fetchUserCibilPdfReport,
+  downloadUserCibilPdfReport,
 } from "./cibil.controller";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticateToken } from "../../middlewares/authMiddleware";
@@ -29,6 +30,11 @@ router.post(
   "/payment/order",
   authenticateToken,
   asyncHandler(createBureauScorePaymentOrder),
+);
+router.get(
+  "/user/pdf/download",
+  authenticateToken,
+  asyncHandler(downloadUserCibilPdfReport),
 );
 router.post(
   "/payment/verify-and-fetch",

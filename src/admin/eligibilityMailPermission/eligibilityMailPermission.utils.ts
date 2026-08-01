@@ -1,6 +1,7 @@
 import { LoanType } from "../../modals/loanquery.model";
 import { InsuranceType } from "../../modals/insurancequery.model";
 import { EligibilityMailPermission } from "../../modals/eligibilityMailPermission.model";
+import { normalizeLoanType } from "../../utils/loanType";
 
 type QueryType = "loan" | "insurance";
 
@@ -25,6 +26,21 @@ export const normalizeEnumArray = (
       values
         .map((item) => normalizeToken(item))
         .filter((item) => allowed.has(item)),
+    ),
+  );
+};
+
+export const normalizeLoanTypeArray = (input: any): LoanType[] => {
+  const values = Array.isArray(input)
+    ? input
+    : typeof input === "string"
+      ? input.split(",")
+      : [];
+  return Array.from(
+    new Set(
+      values
+        .map((item) => normalizeLoanType(String(item || "")))
+        .filter((item): item is LoanType => Boolean(item)),
     ),
   );
 };
@@ -83,9 +99,13 @@ export const checkEligibilityMailAccess = async ({
   }
 
   if (queryType === "loan") {
-    const normalizedLoanType = normalizeToken(loanType);
+    const normalizedLoanType =
+      normalizeLoanType(String(loanType || "")) || normalizeToken(loanType);
     const allowedLoanTypes = Array.isArray(rule.loanTypes)
-      ? rule.loanTypes.map(normalizeToken)
+      ? rule.loanTypes.map(
+          (item) =>
+            normalizeLoanType(String(item || "")) || normalizeToken(item),
+        )
       : [];
     const allowed =
       Boolean(rule.allowAllLoanTypes) ||

@@ -2,6 +2,7 @@ import { Schema, model, Document, Types } from "mongoose";
 
 export interface IFormSubmitClick extends Document {
   user: Types.ObjectId;
+  actorModel: "User" | "Agency";
   formType: string;
   action:
     | "submitted"
@@ -19,7 +20,17 @@ export interface IFormSubmitClick extends Document {
 
 const FormSubmitClickSchema = new Schema(
   {
-    user: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    user: {
+      type: Schema.Types.ObjectId,
+      refPath: "actorModel",
+      required: true,
+    },
+    actorModel: {
+      type: String,
+      enum: ["User", "Agency"],
+      default: "User",
+      required: true,
+    },
     formType: { type: String, trim: true, required: true },
     action: {
       type: String,

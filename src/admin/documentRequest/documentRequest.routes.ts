@@ -16,6 +16,11 @@ router.put(
   asyncHandler(DocumentRequestController.markUploaded),
 );
 router.get(
+  "/targets",
+  authorize("admin"),
+  asyncHandler(DocumentRequestController.searchTargets),
+);
+router.get(
   "/",
   authorize("admin"),
   asyncHandler(DocumentRequestController.getAll),

@@ -58,6 +58,7 @@ export interface IBanner extends Document {
   secondaryLinkUrl?: string;
   imageAlt?: string;
   displayDurationMs?: number;
+  contentOverlay?: boolean;
   description?: string;
   status: BannerStatus;
 }
@@ -121,6 +122,7 @@ const bannerSchema = new Schema<IBanner>(
     secondaryButtonText: { type: String },
     secondaryLinkUrl: { type: String },
     displayDurationMs: { type: Number, default: 5000, min: 1500, max: 30000 },
+    contentOverlay: { type: Boolean, default: false },
     priority: { type: Number, default: 1 },
     status: {
       type: String,

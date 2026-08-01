@@ -83,6 +83,7 @@ export interface ICallRecord extends Document {
   loanQueryCreatedAt?: Date;
   insuranceQueryId?: Types.ObjectId;
   insuranceQueryCreatedAt?: Date;
+  supportTicketId?: Types.ObjectId;
   channelMatchedAt?: Date;
   createdBy?: Types.ObjectId;
   updatedBy?: Types.ObjectId;
@@ -193,6 +194,7 @@ const CallRecordSchema = new Schema<ICallRecord>(
     loanQueryCreatedAt: { type: Date },
     insuranceQueryId: { type: Schema.Types.ObjectId, ref: "InsuranceQuery" },
     insuranceQueryCreatedAt: { type: Date },
+    supportTicketId: { type: Schema.Types.ObjectId, ref: "Ticket" },
     channelMatchedAt: { type: Date },
     createdBy: { type: Schema.Types.ObjectId, ref: "Admin" },
     updatedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
@@ -206,6 +208,7 @@ CallRecordSchema.index({ phoneNumber: 1, createdAt: -1 });
 CallRecordSchema.index({ attachedLead: 1, updatedAt: -1 });
 CallRecordSchema.index({ channelAgency: 1, updatedAt: -1 });
 CallRecordSchema.index({ loanQueryId: 1, updatedAt: -1 });
+CallRecordSchema.index({ supportTicketId: 1 }, { unique: true, sparse: true });
 
 export const CallRecord = mongoose.model<ICallRecord>(
   "CallRecord",

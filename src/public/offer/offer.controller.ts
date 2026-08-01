@@ -315,10 +315,9 @@ export class OfferController {
       const offers = await Offer.find({ status: "active" })
         .select("-applications -createdBy -updatedBy")
         .lean();
-      const eligibleOffers = offers.filter((offer: any) =>
-        isOfferActive(offer)
-      );
-      // .filter((offer: any) => matchesEligibility(offer, user as any));
+      const eligibleOffers = offers
+        .filter((offer: any) => isOfferActive(offer))
+        .filter((offer: any) => matchesEligibility(offer, user as any));
 
       const snapshot = getUserSnapshot(user as any);
       return res.status(200).json(

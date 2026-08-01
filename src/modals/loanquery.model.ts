@@ -25,7 +25,11 @@ export const allowedDocumentTypes = Object.values(AllowedDocumentType);
 
 export enum LoanType {
   PERSONAL_LOAN = "personal_loan",
+  TOP_UP_LOAN = "top_up_loan",
+  BALANCE_TRANSFER_TOP_UP_LOAN = "Balance Transfer+ Top Up Loan",
   EDUCATION_LOAN = "education_loan",
+  CAR_LOAN = "Vechile Loan",
+  TWO_WHEELER_LOAN = "Two Wheeler Loan",
   VEHICLE_LOAN = "vehicle_loan",
   GOLD_LOAN = "gold_loan",
   LOAN_AGAINST_CAR = "loan_against_car",
@@ -37,6 +41,8 @@ export enum LoanType {
   MACHINERY_LOAN = "machinery_loan",
   HOME_LOAN = "home_loan",
   BUSINESS_LOAN = "business_loan",
+  AGRICULTURE_LOAN = "Agriculture Loan",
+  SOLAR_LOAN = "Solar Loan",
   DOD_LOAN = "dod_loan",
   OD_LOAN = "od_loan",
   INDUSTRIAL_LOAN = "industrial_loan",
@@ -130,6 +136,14 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
   [LoanType.VEHICLE_LOAN]: [
     "vehicleType",
     "carLoanType",
+    "makeModel",
+    "year",
+    "kmDriven",
+    "price",
+    "loanAmount",
+    "onRoadPrice",
+    "downPayment",
+    "isUsed",
     "carRegistrationNumber",
     "carOwnerName",
     "carFatherName",
@@ -247,6 +261,47 @@ export const allowedFieldsByFormType: Record<string, string[]> = {
   [LoanType.CREDIT_CARD]: [],
 };
 
+// These products have distinct persisted loan types and dynamic forms whose
+// fields are intentionally extensible. An empty list keeps the existing
+// permissive validation behavior; reusing another product's non-empty list
+// would reject legitimate variant-specific fields.
+allowedFieldsByFormType[LoanType.TOP_UP_LOAN] = [];
+allowedFieldsByFormType[LoanType.BALANCE_TRANSFER_TOP_UP_LOAN] = [];
+allowedFieldsByFormType[LoanType.CAR_LOAN] = [];
+allowedFieldsByFormType[LoanType.TWO_WHEELER_LOAN] = [];
+allowedFieldsByFormType[LoanType.AGRICULTURE_LOAN] = [];
+allowedFieldsByFormType[LoanType.SOLAR_LOAN] = [];
+allowedFieldsByFormType[LoanType.MACHINERY_LOAN] = Array.from(
+  new Set([
+    ...allowedFieldsByFormType[LoanType.MACHINERY_LOAN],
+    ...allowedFieldsByFormType[LoanType.BUSINESS_LOAN],
+  ]),
+);
+
+// Shared form identity metadata is retained in policyDetails for products
+// such as Construction Loan that intentionally share a persisted loan type.
+Object.values(allowedFieldsByFormType).forEach((fields) => {
+  if (fields.length === 0) return;
+  for (const field of [
+    "productVariant",
+    "metaFlowKey",
+    "productLabel",
+    "requestedProductName",
+    "requestedProductSlug",
+  ]) {
+    if (!fields.includes(field)) fields.push(field);
+  }
+});
+
+export const isLoanPolicyFieldAllowed = (
+  loanType: string | undefined,
+  field: string,
+) => {
+  if (!loanType) return true;
+  const allowedFields = allowedFieldsByFormType[loanType] || [];
+  return allowedFields.length === 0 || allowedFields.includes(field);
+};
+
 export interface ILoanQuery extends Document {
   customerId: Types.ObjectId;
   loanId?: string;
@@ -280,6 +335,7 @@ export interface ILoanQuery extends Document {
   formSource?: string;
   whatsappConsent?: boolean;
   communicationConsent?: Record<string, any>;
+  attribution?: Record<string, any>;
   createdByName?: string;
   createdByRole?: string;
   updatedByName?: string;
@@ -377,6 +433,7 @@ const LoanQuerySchema = new Schema<ILoanQuery>(
     formSource: { type: String, trim: true },
     whatsappConsent: { type: Boolean, default: false },
     communicationConsent: { type: Schema.Types.Mixed, default: {} },
+    attribution: { type: Schema.Types.Mixed, default: {} },
     createdByName: { type: String, trim: true },
     createdByRole: { type: String, trim: true },
     updatedByName: { type: String, trim: true },
@@ -625,6 +682,7 @@ LoanQuerySchema.index({ customerId: 1 });
 LoanQuerySchema.index({ loanType: 1, createdAt: -1 });
 LoanQuerySchema.index({ loanType: 1, status: 1, createdAt: -1 });
 LoanQuerySchema.index({ ownerAgency: 1, status: 1, createdAt: -1 });
+LoanQuerySchema.index({ "attribution.dsaReferralCode": 1, createdAt: -1 });
 LoanQuerySchema.index({
   followUpEnabled: 1,
   "nextFollowUp.status": 1,

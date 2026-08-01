@@ -13,6 +13,7 @@ import {
   UserStatus,
   IKycProfile,
   AccountSource,
+  RegistrationSource,
   LoanProductType,
   LoginMethodType,
   KycVerificationStatus,
@@ -21,75 +22,39 @@ import { UserType } from "../../modals/notification.model";
 import { ContactSync } from "../../modals/contactSync.model";
 import { CommonService } from "../../services/common.services";
 import { ReferralEvent } from "../../modals/referralEvent.model";
-import { ReferralVisit } from "../../modals/referralVisit.model";
-import { rewardReferralIfEligible } from "../../services/referral.service";
 import { sendSingleNotification } from "../../services/notification.service";
 import { generateAccessToken, generateRefreshToken } from "../../utils/token";
-import { consumeOtpRequest } from "../../services/otpRateLimit.service";
+import { normalizeLoanType } from "../../utils/loanType";
+import { normalizeReferralCode } from "../../utils/referral";
+import {
+  attachReferralToNewRegistration,
+  createUserWithReferralCode,
+  ensureUserReferralCode,
+  findEligibleReferrerByCode,
+  repairStoredReferralAttribution,
+} from "../../services/referralAttribution.service";
+import {
+  consumeOtpRequest,
+  releaseOtpRequest,
+} from "../../services/otpRateLimit.service";
 
 const otpService = new CommonService(Otp);
 const userService = new CommonService(User);
+const LEGACY_STATIC_OTP_MOBILE = "9354697528";
+const LEGACY_STATIC_OTP_CODE = "123456";
 
-const markReferralVisitConverted = async (
-  referralCode: string,
-  convertedUserId: any,
-  visitorId?: string,
-) => {
-  const match: Record<string, any> = {
-    recordType: "referral_visit",
-    referralCode,
-    convertedUser: { $exists: false },
-  };
-  if (visitorId) match.visitorId = visitorId;
-
-  await ReferralVisit.findOneAndUpdate(
-    match,
-    {
-      $set: {
-        convertedUser: convertedUserId,
-        convertedAt: new Date(),
-      },
-    },
-    { sort: { createdAt: -1 } },
-  );
-};
-
-const attachReferral = async (
-  user: any,
-  rawReferralCode: unknown,
-  visitorId?: string,
-) => {
-  const referralCode = String(rawReferralCode || "")
-    .trim()
-    .toUpperCase();
-  if (!referralCode || user?.referredBy) return null;
-
-  const referrer: any = await User.findOne({ referralCode });
-  if (!referrer || String(referrer._id) === String(user?._id)) {
-    throw new ApiError(400, "Invalid referral code");
+const getStaticUserOtp = (mobile: string) => {
+  const normalizedMobile = String(mobile || "").replace(/\D/g, "").slice(-10);
+  if (
+    config.otp.staticMobile &&
+    config.otp.staticCode &&
+    normalizedMobile === config.otp.staticMobile
+  ) {
+    return config.otp.staticCode;
   }
-
-  user.referredBy = referrer._id;
-  await user.save();
-  await ReferralEvent.findOneAndUpdate(
-    { referredUser: user._id },
-    {
-      $setOnInsert: {
-        referrer: referrer._id,
-        referredUser: user._id,
-        referralCode: referrer.referralCode,
-        status: "pending",
-        points: 100,
-      },
-    },
-    { upsert: true, new: true },
-  );
-  await markReferralVisitConverted(
-    referrer.referralCode,
-    user._id,
-    visitorId,
-  );
-  return referrer;
+  return normalizedMobile === LEGACY_STATIC_OTP_MOBILE
+    ? LEGACY_STATIC_OTP_CODE
+    : "";
 };
 
 const parseJSONSafely = <T>(value: any, fallback: T): T => {
@@ -134,6 +99,7 @@ const normalizeDocumentEntries = (
         issuer: doc.issuer || doc.issuedBy || "user_provided",
         fileUrl: doc.fileUrl || doc.url,
         issuedOn: doc.issuedOn || doc.issueDate,
+        uploadedAt: doc.uploadedAt || new Date(),
         referenceId: doc.referenceId || doc.name,
         verified: doc.verified ?? false,
       };
@@ -163,6 +129,7 @@ const mapUploadsToDocuments = (
       password: encryptDocumentPassword(file?.password || docPasswords[index]),
       issuer: file?.issuer || "user_uploaded",
       referenceId: file?.name || docNames[index],
+      uploadedAt: new Date(),
       verified: false,
     }))
     .filter((doc: any) => doc.fileUrl);
@@ -198,13 +165,20 @@ const normalizePreferredProducts = (items: any) => {
       source.productType = source.loanType;
     if (!source.productType && source.cardType)
       source.productType = source.cardType;
-    const normalizedValue = source.productType
-      ? source.productType.toString().toLowerCase()
-      : undefined;
-    const normalizedType = normalizedValue
-      ? (Object.values(LoanProductType).find(
-          (type) => type === normalizedValue,
-        ) as LoanProductType | undefined)
+    const rawProductType = source.productType
+      ? source.productType.toString().trim()
+      : "";
+    const normalizedLoanType = normalizeLoanType(rawProductType);
+    const normalizedType = rawProductType
+      ? ((normalizedLoanType &&
+          (Object.values(LoanProductType) as string[]).includes(
+            normalizedLoanType,
+          )
+          ? normalizedLoanType
+          : Object.values(LoanProductType).find(
+              (type) =>
+                String(type).toLowerCase() === rawProductType.toLowerCase(),
+            )) as LoanProductType | undefined)
       : undefined;
     if (!normalizedType) return acc;
     acc.push({
@@ -261,24 +235,112 @@ const resolveAccountSource = (req: Request): AccountSource => {
   );
 };
 
+const resolveRegistrationSource = (
+  req: Request,
+  accountSource: AccountSource,
+  hasReferral = false,
+): RegistrationSource => {
+  if (hasReferral) return RegistrationSource.REFERRAL;
+
+  const normalized = String(
+    req.body?.registrationSource ||
+      req.body?.acquisitionSource ||
+      req.body?.utmMedium ||
+      req.get("x-registration-source") ||
+      "",
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+
+  if (["referral", "refer", "referred"].includes(normalized)) {
+    return RegistrationSource.REFERRAL;
+  }
+  if (["paid", "cpc", "ppc", "ads", "paid_social"].includes(normalized)) {
+    return RegistrationSource.PAID;
+  }
+  if (["whatsapp", "wa"].includes(normalized)) {
+    return RegistrationSource.WHATSAPP;
+  }
+  if (["organic", "seo", "direct"].includes(normalized)) {
+    return RegistrationSource.ORGANIC;
+  }
+  if (accountSource === AccountSource.APP) return RegistrationSource.APP;
+  if (accountSource === AccountSource.WEBSITE)
+    return RegistrationSource.WEBSITE;
+  if (accountSource === AccountSource.ADMIN) return RegistrationSource.ADMIN;
+  if (accountSource === AccountSource.CRM) return RegistrationSource.CRM;
+  return RegistrationSource.UNKNOWN;
+};
+
+const acquisitionSensitiveKeys = new Set([
+  "token",
+  "access_token",
+  "refresh_token",
+  "otp",
+  "code",
+  "password",
+  "mobile",
+  "phone",
+  "email",
+  "pan",
+  "aadhaar",
+]);
+
+const normalizeAcquisitionParams = (value: unknown) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, string | string[]> = {};
+  Object.entries(value as Record<string, unknown>)
+    .slice(0, 60)
+    .forEach(([rawKey, rawValue]) => {
+      const key = String(rawKey || "").trim().slice(0, 100);
+      if (!key || acquisitionSensitiveKeys.has(key.toLowerCase())) return;
+      const values = (Array.isArray(rawValue) ? rawValue : [rawValue])
+        .map((item) => String(item ?? "").trim().slice(0, 500))
+        .filter(Boolean)
+        .slice(0, 10);
+      if (!values.length) return;
+      result[key] = values.length === 1 ? values[0] : values;
+    });
+  return result;
+};
+
+const resolveAcquisition = (req: Request) => {
+  const raw = req.body?.acquisition;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const text = (key: string, max = 500) => {
+    const value = String(raw[key] || "").trim().slice(0, max);
+    return value || undefined;
+  };
+  const queryParams = normalizeAcquisitionParams(raw.queryParams);
+  const lastTouchQueryParams = normalizeAcquisitionParams(
+    raw.lastTouchQueryParams,
+  );
+  return {
+    source: text("source", 120) || "direct",
+    medium: text("medium", 120),
+    campaign: text("campaign", 160),
+    term: text("term", 160),
+    content: text("content", 160),
+    landingPage: text("landingPage", 1000),
+    referrer: text("referrer", 1000),
+    gclid: text("gclid", 240),
+    fbclid: text("fbclid", 240),
+    dsaReferralCode: text("dsaReferralCode", 40),
+    capturedAt: text("capturedAt", 80),
+    queryParams,
+    lastTouchPage: text("lastTouchPage", 1000),
+    lastTouchQueryParams,
+    lastTouchAt: text("lastTouchAt", 80),
+  };
+};
+
 const normalizePushPlatform = (value?: unknown) => {
   const platform = String(value || "")
     .trim()
     .toLowerCase();
   if (["ios", "android", "web"].includes(platform)) return platform;
   return "unknown";
-};
-
-const generateReferralCode = async () => {
-  const prefix = "FINTARA";
-  const maxAttempts = 10;
-  for (let i = 0; i < maxAttempts; i += 1) {
-    const suffix = Math.floor(100 + Math.random() * 900).toString();
-    const code = `${prefix}${suffix}`;
-    const exists = await User.findOne({ referralCode: code }).select("_id");
-    if (!exists) return code;
-  }
-  throw new ApiError(500, "Failed to generate referral code");
 };
 
 const resolveDocPasswordKey = () => {
@@ -417,7 +479,14 @@ export class UserController {
         req?.body?.cancelledChequeOrPassbook?.[0]?.url;
       const avatar = req?.body?.avatar?.[0]?.url;
       const normalizedPanCard = normalizePanCard(panCard);
+      const normalizedReferralInput = normalizeReferralCode(referralInput);
       const accountSource = resolveAccountSource(req);
+      const registrationSource = resolveRegistrationSource(
+        req,
+        accountSource,
+        Boolean(normalizedReferralInput),
+      );
+      const acquisition = resolveAcquisition(req);
 
       if (!email || !mobile || !name) {
         return res
@@ -488,6 +557,8 @@ export class UserController {
         cancelledChequeOrPassbook,
         kycProfile,
         accountSource,
+        registrationSource,
+        acquisition,
         notification: resolveNotificationPayload(req.body),
         status:
           role === "user" ? UserStatus.ACTIVE : UserStatus.PENDING_VERIFICATION,
@@ -508,6 +579,9 @@ export class UserController {
         );
       }
       if (existingByMobile) {
+        const registrationSourceForExisting = existingByMobile.referredBy
+          ? RegistrationSource.REFERRAL
+          : resolveRegistrationSource(req, accountSource, false);
         // Ensure provided email (if any) is unique across other users
         if (email && email !== existingByMobile.email) {
           const emailTaken = await User.findOne({
@@ -541,6 +615,16 @@ export class UserController {
         ) {
           updatePayload.accountSource = accountSource;
         }
+        if (
+          registrationSourceForExisting !== RegistrationSource.UNKNOWN &&
+          (!existingByMobile.registrationSource ||
+            existingByMobile.registrationSource === RegistrationSource.UNKNOWN)
+        ) {
+          updatePayload.registrationSource = registrationSourceForExisting;
+        }
+        if (acquisition && !existingByMobile.acquisition) {
+          updatePayload.acquisition = acquisition;
+        }
         if (kycProfile) {
           updatePayload.kycProfile = {
             ...((existingByMobile.kycProfile as any) || {}),
@@ -557,35 +641,15 @@ export class UserController {
           req.body,
           existingByMobile,
         );
-        let referrer: any = null;
-        if (referralInput) {
-          referrer = await User.findOne({ referralCode: referralInput });
-          if (!referrer) {
-            return res
-              .status(400)
-              .json(new ApiError(400, "Invalid referral code"));
-          }
-          updatePayload.referredBy = referrer._id;
-        }
         const updated = await userService.updateById(
           existingByMobile._id.toString(),
           updatePayload,
           { populate: false },
         );
-        if (referrer) {
-          await ReferralEvent.create({
-            referrer: referrer._id,
-            referredUser: updated._id,
-            referralCode: referrer.referralCode,
-            status: "pending",
-            points: 100,
-          });
-          await markReferralVisitConverted(
-            referrer.referralCode,
-            updated._id,
-            String(req.body?.referralVisitorId || "").trim() || undefined,
-          );
-        }
+        // Request input can never add or replace attribution on an existing
+        // account. Repair history only when the account already stores it.
+        await repairStoredReferralAttribution(updated);
+        await ensureUserReferralCode(updated);
         await safeNotify({
           type: "account-created",
           toUserId: updated._id.toString(),
@@ -598,33 +662,26 @@ export class UserController {
           .json(new ApiResponse(200, updated, "Account updated successfully"));
       }
 
-      const referralCode = await generateReferralCode();
-      userData.referralCode = referralCode;
-
       let referrer: any = null;
-      if (referralInput) {
-        referrer = await User.findOne({ referralCode: referralInput });
+      if (normalizedReferralInput) {
+        referrer = await findEligibleReferrerByCode(normalizedReferralInput);
         if (!referrer) {
           return res
             .status(400)
             .json(new ApiError(400, "Invalid referral code"));
         }
+        // Persist attribution with the newly-created user so a transient event
+        // write failure is recoverable on the next request.
         userData.referredBy = referrer._id;
+        userData.registrationSource = RegistrationSource.REFERRAL;
       }
 
-      const response = await userService.create(userData);
+      const response = await createUserWithReferralCode(userData);
 
       if (referrer) {
-        await ReferralEvent.create({
-          referrer: referrer._id,
-          referredUser: response._id,
-          referralCode: referrer.referralCode,
-          status: "pending",
-          points: 100,
-        });
-        await markReferralVisitConverted(
-          referrer.referralCode,
-          response._id,
+        await attachReferralToNewRegistration(
+          response,
+          normalizedReferralInput,
           String(req.body?.referralVisitorId || "").trim() || undefined,
         );
       }
@@ -1283,12 +1340,28 @@ export class UserController {
       if (!user) {
         return res.status(401).json({ message: "Invalid email or password" });
       }
+      if (
+        userData?.isDeleted ||
+        [
+          UserStatus.SUSPENDED,
+          UserStatus.INACTIVE,
+          UserStatus.DEACTIVATED,
+        ].includes(userData?.status)
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "This account is not active. Please contact support.",
+        });
+      }
 
       const isMatch = await user.comparePassword(password);
 
       if (!isMatch) {
         return res.status(401).json({ message: "Invalid email or password" });
       }
+      await repairStoredReferralAttribution(userData);
+      await ensureUserReferralCode(userData);
+      user.referralCode = userData.referralCode;
       const payload = {
         role: "user",
         _id: userData._id,
@@ -1332,6 +1405,20 @@ export class UserController {
       const mobile = await consumeOtpRequest(rawMobile, "user");
       let user = await User.findOne({ mobile });
       const existed = Boolean(user);
+      if (
+        user?.isDeleted ||
+        [
+          UserStatus.SUSPENDED,
+          UserStatus.INACTIVE,
+          UserStatus.DEACTIVATED,
+        ].includes(user?.status as UserStatus)
+      ) {
+        await releaseOtpRequest(mobile, "user");
+        return res.status(403).json({
+          success: false,
+          message: "This account is not active. Please contact support.",
+        });
+      }
       if (!user) {
         // Don't auto-create user with placeholder email during OTP generation
         // User will be created only when they verify OTP and provide actual email
@@ -1339,12 +1426,10 @@ export class UserController {
         user = null;
       }
 
-      const isHardcodedOtpUser = String(mobile)
-        .replace(/\D/g, "")
-        .endsWith("9354697528");
-      const otpCode = isHardcodedOtpUser
-        ? "123456"
-        : crypto.randomInt(100000, 1000000).toString();
+      const staticOtp = getStaticUserOtp(mobile);
+      const isHardcodedOtpUser = Boolean(staticOtp);
+      const otpCode =
+        staticOtp || crypto.randomInt(100000, 1000000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins expiry
 
       // Save or update OTP
@@ -1359,34 +1444,43 @@ export class UserController {
         { upsert: true, new: true, setDefaultsOnInsert: true },
       );
 
-      // Send OTP via Airtel IQ SMS in background to avoid blocking API response
       const maskedMobile = maskMobileForLogs(mobile);
-      void sendSMS({
-        to: mobile,
-        otp: otpCode,
-      })
-        .then((dispatchResult) => {
-          if (dispatchResult.success) {
-            logger.info(`[OTP][User] SMS dispatched to=${maskedMobile}`);
-            return;
+      if (isHardcodedOtpUser) {
+        logger.info(
+          `[OTP][User] Static test OTP prepared to=${maskedMobile}; SMS dispatch skipped`,
+        );
+      } else {
+        try {
+          const dispatchResult = await sendSMS({
+            to: mobile,
+            otp: otpCode,
+          });
+          if (!dispatchResult.success) {
+            throw new Error(dispatchResult.reason);
           }
-          logger.warn(
-            `[OTP][User] SMS not dispatched to=${maskedMobile} reason=${dispatchResult.reason}`,
-          );
-        })
-        .catch((smsError: unknown) => {
+          logger.info(`[OTP][User] SMS dispatched to=${maskedMobile}`);
+        } catch (smsError: unknown) {
           const errMessage =
             smsError instanceof Error ? smsError.message : String(smsError);
           logger.error(
             `[OTP][User] SMS dispatch failed to=${maskedMobile} error=${errMessage}`,
           );
-          // Don't fail the request, OTP is still valid for testing
-        });
+          await Promise.all([
+            Otp.deleteOne({ mobile, otp: otpCode, verified: false }),
+            releaseOtpRequest(mobile, "user"),
+          ]);
+          return res.status(503).json({
+            success: false,
+            message: "OTP could not be sent. Please try again.",
+          });
+        }
+      }
 
       return res.status(200).json({
         success: true,
         message: "OTP has been sent successfully",
         existed,
+        expiresInSeconds: 5 * 60,
       });
     } catch (error) {
       next(error);
@@ -1966,7 +2060,14 @@ export class UserController {
         referralCode: referralInput,
         referralVisitorId,
       } = req.body;
+      const normalizedReferralInput = normalizeReferralCode(referralInput);
       const accountSource = resolveAccountSource(req);
+      const registrationSource = resolveRegistrationSource(
+        req,
+        accountSource,
+        Boolean(normalizedReferralInput),
+      );
+      const acquisition = resolveAcquisition(req);
 
       if (!mobile || !otp) {
         return res.status(400).json({
@@ -1989,11 +2090,23 @@ export class UserController {
           .json({ success: false, message: "OTP already used" });
       }
 
-      otpDoc.verified = true;
-      await otpDoc.save();
-
       let user: any = await User.findOne({ mobile });
       const accountExisted = Boolean(user);
+      let newUserReferrer: any = null;
+      if (!user && normalizedReferralInput) {
+        newUserReferrer = await findEligibleReferrerByCode(
+          normalizedReferralInput,
+        );
+        if (!newUserReferrer) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid referral code",
+          });
+        }
+      }
+
+      otpDoc.verified = true;
+      await otpDoc.save();
 
       // If user doesn't exist, create a minimal account so the verified phone
       // can continue through the onboarding flow without requesting OTP again.
@@ -2015,9 +2128,9 @@ export class UserController {
           });
         }
 
-        // Create new user
-        const referralCode = await generateReferralCode();
-        user = await User.create({
+        // Create new user. Attribution is persisted in the same document so
+        // ReferralEvent creation can be retried safely if it is interrupted.
+        user = await createUserWithReferralCode({
           mobile,
           email: nextEmail,
           name: name || `User ${mobile.slice(-4)}`,
@@ -2027,8 +2140,12 @@ export class UserController {
           status: UserStatus.ACTIVE,
           isMobileVerified: true,
           isEmailVerified: false,
-          referralCode,
           accountSource,
+          registrationSource: newUserReferrer
+            ? RegistrationSource.REFERRAL
+            : registrationSource,
+          referredBy: newUserReferrer?._id,
+          acquisition,
           password:
             crypto.randomBytes(12).toString("hex") +
             "@" +
@@ -2041,19 +2158,50 @@ export class UserController {
         user.accountSource = accountSource;
       }
 
-      if ([UserStatus.SUSPENDED, UserStatus.INACTIVE].includes(user.status)) {
+      if (
+        user.isDeleted ||
+        [
+          UserStatus.SUSPENDED,
+          UserStatus.INACTIVE,
+          UserStatus.DEACTIVATED,
+        ].includes(user.status)
+      ) {
         return res
           .status(403)
           .json({ success: false, message: `Account ${user.status}` });
       }
+      if (
+        (accountExisted && user.referredBy
+          ? RegistrationSource.REFERRAL
+          : accountExisted
+            ? resolveRegistrationSource(req, accountSource, false)
+            : registrationSource) !== RegistrationSource.UNKNOWN &&
+        (!user.registrationSource ||
+          user.registrationSource === RegistrationSource.UNKNOWN)
+      ) {
+        user.registrationSource = accountExisted
+          ? user.referredBy
+            ? RegistrationSource.REFERRAL
+            : resolveRegistrationSource(req, accountSource, false)
+          : registrationSource;
+      }
+      if (acquisition && !user.acquisition) {
+        user.acquisition = acquisition;
+      }
 
       user.isMobileVerified = true;
       user.status = UserStatus.ACTIVE;
-      await attachReferral(
-        user,
-        referralInput,
-        String(referralVisitorId || "").trim() || undefined,
-      );
+      if (accountExisted) {
+        // Never attribute an already-existing account from request input.
+        await repairStoredReferralAttribution(user);
+      } else if (newUserReferrer) {
+        await attachReferralToNewRegistration(
+          user,
+          normalizedReferralInput,
+          String(referralVisitorId || "").trim() || undefined,
+        );
+      }
+      await ensureUserReferralCode(user);
 
       const payload = { _id: user._id, email: user.email, role: user.role };
       const accessToken = generateAccessToken(payload);
@@ -2356,7 +2504,6 @@ export class UserController {
       });
 
       if (verification?.status === KycVerificationStatus.VERIFIED) {
-        await rewardReferralIfEligible(_id);
         await safeNotify({
           type: "kyc-verified",
           toUserId: updatedUser._id.toString(),
@@ -2393,8 +2540,10 @@ export class UserController {
       }
       let result: any = await userService.getById(userId);
       if (!result?.referralCode) {
-        const referralCode = await generateReferralCode();
-        result = await userService.updateById(userId, { referralCode });
+        const user = await User.findById(userId);
+        if (!user) throw new ApiError(404, "User not found");
+        await ensureUserReferralCode(user);
+        result = await userService.getById(userId);
       }
       return res
         .status(200)

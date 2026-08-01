@@ -17,6 +17,7 @@ export interface ISeoMetadata extends Document {
   twitterTitle?: string;
   twitterDescription?: string;
   twitterImage?: string;
+  schemaEnabled?: boolean;
   isActive: boolean;
   createdAt?: Date;
   updatedAt?: Date;
@@ -46,6 +47,7 @@ const SeoMetadataSchema = new Schema<ISeoMetadata>(
     twitterTitle: { type: String, trim: true },
     twitterDescription: { type: String, trim: true },
     twitterImage: { type: String, trim: true },
+    schemaEnabled: { type: Boolean, default: true },
     isActive: { type: Boolean, default: true, index: true },
   },
   { timestamps: true },

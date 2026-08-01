@@ -6,6 +6,7 @@ import { authenticateToken, authorize } from "../../middlewares/authMiddleware";
 import { dynamicUpload, s3UploaderMiddleware } from "../../middlewares/s3FileUploadMiddleware";
 import { config } from "../../config/config";
 import ApiError from "../../utils/ApiError";
+import { requireLeadRecordAccess } from "./leadAccess.middleware";
 
 const router = express.Router();
 
@@ -33,7 +34,8 @@ router.post(
   asyncHandler(LeadController.ingestFromConnector)
 );
 
-router.use(authenticateToken);
+router.use(authenticateToken, authorize("admin", "agent", "lander"));
+router.param("id", requireLeadRecordAccess);
 
 router
   .route("/")
@@ -56,7 +58,11 @@ router.post(
   asyncHandler(LeadController.updateFollowUpStatus)
 );
 router.post("/:id/status", asyncHandler(LeadController.updateStatus));
-router.post("/:id/reassign", asyncHandler(LeadController.reassign));
+router.post(
+  "/:id/reassign",
+  authorize("admin"),
+  asyncHandler(LeadController.reassign),
+);
 router.post("/:id/escalate", asyncHandler(LeadController.escalate));
 router.post(
   "/:id/convert",

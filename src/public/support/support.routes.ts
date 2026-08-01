@@ -41,6 +41,7 @@ import {
 } from "./support.controller";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticateToken } from "../../middlewares/authMiddleware";
+import { resolveChatStaffRole } from "../../utils/chatStaffRole";
 import {
   dynamicUpload,
   s3UploaderMiddleware,
@@ -48,10 +49,34 @@ import {
 
 const router = express.Router();
 
+const requireActiveAdminEmployee = async (
+  req: express.Request | any,
+  res: express.Response,
+  next: express.NextFunction,
+) => {
+  try {
+    const staffRole = await resolveChatStaffRole(
+      req.user?._id,
+      req.user?.role,
+    );
+    if (staffRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        status: 403,
+        message: "Only an active admin employee can perform this action",
+      });
+    }
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+};
+
 // AGENT ROUTES
 router.post(
   "/agents",
   authenticateToken,
+  requireActiveAdminEmployee,
   dynamicUpload([{ name: "profilePictureUrl", maxCount: 1 }]),
   s3UploaderMiddleware("profile"),
   asyncHandler(createAgent)
@@ -60,17 +85,29 @@ router.post(
 router.put(
   "/update-agent/:id",
   authenticateToken,
+  requireActiveAdminEmployee,
   dynamicUpload([{ name: "profilePictureUrl", maxCount: 1 }]),
   s3UploaderMiddleware("profile"),
   asyncHandler(updateAgent)
 );
 
 router.get("/agents", authenticateToken, asyncHandler(getAgents));
-router.get("/agents/:id", authenticateToken, asyncHandler(getAgentByID));
-router.delete("/agents/:id", authenticateToken, asyncHandler(deleteAgent));
+router.get(
+  "/agents/:id",
+  authenticateToken,
+  requireActiveAdminEmployee,
+  asyncHandler(getAgentByID),
+);
+router.delete(
+  "/agents/:id",
+  authenticateToken,
+  requireActiveAdminEmployee,
+  asyncHandler(deleteAgent),
+);
 router.get(
   "/agents/deactivate/:id",
   authenticateToken,
+  requireActiveAdminEmployee,
   asyncHandler(deactivateAgent)
 );
 
@@ -78,7 +115,12 @@ router.get(
 router.get("/tickets", authenticateToken, asyncHandler(getTickets));
 router.get("/tickets/:id", authenticateToken, asyncHandler(getTicket));
 router.post("/tickets", authenticateToken, asyncHandler(createTicket));
-router.delete("/tickets/:id", authenticateToken, asyncHandler(deleteTicket));
+router.delete(
+  "/tickets/:id",
+  authenticateToken,
+  requireActiveAdminEmployee,
+  asyncHandler(deleteTicket),
+);
 router.post(
   "/tickets/interactions",
   authenticateToken,
@@ -94,6 +136,7 @@ router.get(
 router.post(
   "/tickets/manually-assigned",
   authenticateToken,
+  requireActiveAdminEmployee,
   asyncHandler(manualAssignTicketToAgent)
 );
 

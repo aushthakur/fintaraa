@@ -283,6 +283,8 @@ export interface IInsuranceQuery extends Document {
   formSource?: string;
   whatsappConsent?: boolean;
   communicationConsent?: Record<string, any>;
+  attribution?: Record<string, any>;
+  rcLookup?: Record<string, any>;
   policyDetails?: Record<string, any>;
   assignedAgent?: Types.ObjectId;
   assignedLander?: Types.ObjectId;
@@ -384,6 +386,8 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
     formSource: { type: String, trim: true },
     whatsappConsent: { type: Boolean, default: false },
     communicationConsent: { type: Schema.Types.Mixed, default: {} },
+    attribution: { type: Schema.Types.Mixed, default: {} },
+    rcLookup: { type: Schema.Types.Mixed, default: null },
     policyDetails: {
       type: Object,
       default: {},
@@ -534,6 +538,7 @@ const InsuranceQuerySchema = new Schema<IInsuranceQuery>(
 InsuranceQuerySchema.index({ mobile: 1, email: 1 });
 InsuranceQuerySchema.index({ customerId: 1 });
 InsuranceQuerySchema.index({ ownerAgency: 1, status: 1, createdAt: -1 });
+InsuranceQuerySchema.index({ "attribution.dsaReferralCode": 1, createdAt: -1 });
 InsuranceQuerySchema.index({
   followUpEnabled: 1,
   "nextFollowUp.status": 1,

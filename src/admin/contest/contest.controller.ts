@@ -212,6 +212,7 @@ export class ContestController {
       const match: Record<string, any> = {
         ownerAgency: new Types.ObjectId(ownerAgencyId),
         queryType: "loan",
+        isCanonical: { $ne: false },
       };
       if (Object.keys(disbursedAtFilter).length) {
         match.disbursedAt = disbursedAtFilter;

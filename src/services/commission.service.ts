@@ -3,6 +3,7 @@ import ApiError from "../utils/ApiError";
 import { User } from "../modals/user.model";
 import { InsuranceType, InsuranceQuery } from "../modals/insurancequery.model";
 import { LoanQuery, LoanType } from "../modals/loanquery.model";
+import { normalizeLoanType } from "../utils/loanType";
 import {
   EligibilityCriteria,
   EligibilityCommissionType,
@@ -13,6 +14,7 @@ import {
   fetchSurepassCibilReport,
   prepareSurepassCibilPayload,
 } from "./surepass.service";
+import { extractStoredCibilPdf } from "./cibilPdfStorage.service";
 
 type ProductType = LoanType | InsuranceType | string;
 
@@ -27,6 +29,9 @@ const normalizeLookupValue = (value?: any) =>
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
+
+const normalizeLoanLookupValue = (value?: any) =>
+  normalizeLoanType(String(value || "")) || normalizeLookupValue(value);
 
 const normalizeSalaryType = (value?: any) => {
   const key = normalizeLookupValue(value);
@@ -91,7 +96,7 @@ export class CommissionService {
     bankName?: string;
     salaryType?: string;
   }) {
-    const loanTypeKey = normalizeLookupValue(input.loanType);
+    const loanTypeKey = normalizeLoanLookupValue(input.loanType);
     if (!loanTypeKey) return null;
 
     const bankNameKey = normalizeLookupValue(input.bankName);
@@ -108,7 +113,7 @@ export class CommissionService {
 
     return (
       pick((criteria: any) => {
-        const rowLoan = normalizeLookupValue(criteria.loanType);
+        const rowLoan = normalizeLoanLookupValue(criteria.loanType);
         const rowBank = normalizeLookupValue(criteria.bankName);
         const rowSalary = normalizeSalaryType(criteria.salaryType);
         return (
@@ -120,7 +125,7 @@ export class CommissionService {
         );
       }) ||
       pick((criteria: any) => {
-        const rowLoan = normalizeLookupValue(criteria.loanType);
+        const rowLoan = normalizeLoanLookupValue(criteria.loanType);
         const rowBank = normalizeLookupValue(criteria.bankName);
         return (
           rowLoan === loanTypeKey &&
@@ -130,7 +135,7 @@ export class CommissionService {
       }) ||
       pick(
         (criteria: any) =>
-          normalizeLookupValue(criteria.loanType) === loanTypeKey,
+          normalizeLoanLookupValue(criteria.loanType) === loanTypeKey,
       ) ||
       null
     );
@@ -283,8 +288,15 @@ export class CommissionService {
 
           if (cibilScore) {
             // Save CIBIL score in user model
+            const fetchedAt = new Date();
             user.cibilScore = cibilScore;
-            user.cibilLastFetchedAt = new Date();
+            user.cibilLastFetchedAt = fetchedAt;
+            (user as any).cibilReport = cibilResponse.data;
+            (user as any).cibilRequestPayload = cibilPayload;
+            if (extractStoredCibilPdf(cibilResponse.data)) {
+              user.cibilPdfLastFetchedAt = fetchedAt;
+              (user as any).cibilPdfReport = cibilResponse.data;
+            }
             await user.save({ session });
 
             console.log(

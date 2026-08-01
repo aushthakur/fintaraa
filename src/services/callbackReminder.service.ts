@@ -12,10 +12,14 @@ import {
   InsuranceQuery,
 } from "../modals/insurancequery.model";
 import { sendSingleNotification } from "../services/notification.service";
+import { getLoanTypeDisplayLabel } from "../utils/loanType";
 
 const CHECK_INTERVAL_MINUTES = 1;
-const REMINDER_MINUTES_BEFORE = 15;
+export const REMINDER_MINUTES_BEFORE = 15;
+export const REMINDER_CATCH_UP_MINUTES = 60;
 const INDIA_TIME_ZONE = "Asia/Kolkata";
+let schedulerTimer: NodeJS.Timeout | null = null;
+let reminderCycleRunning = false;
 
 const indiaDateTimeFormatter = new Intl.DateTimeFormat("en-IN", {
   timeZone: INDIA_TIME_ZONE,
@@ -27,10 +31,10 @@ const indiaDateTimeFormatter = new Intl.DateTimeFormat("en-IN", {
   hour12: true,
 });
 
-const getReminderWindow = () => {
-  const now = new Date();
+export const getReminderWindow = (now = new Date()) => {
   return {
-    start: now,
+    start: new Date(now.getTime() - REMINDER_CATCH_UP_MINUTES * 60 * 1000),
+    now,
     end: new Date(now.getTime() + REMINDER_MINUTES_BEFORE * 60 * 1000),
   };
 };
@@ -102,12 +106,16 @@ const notifyFollowUpRecipients = async ({
   adminIds,
   context,
   referenceLabel,
+  dedupePrefix,
 }: {
   assignedAgentIds: string[];
   adminIds: string[];
   context: Record<string, any>;
   referenceLabel: string;
+  dedupePrefix: string;
 }) => {
+  const assignedIds = new Set(assignedAgentIds);
+  const broadcastAdminIds = adminIds.filter((adminId) => !assignedIds.has(adminId));
   const agentResults = await Promise.allSettled(
     assignedAgentIds.map((assigneeId) =>
       sendSingleNotification({
@@ -115,16 +123,18 @@ const notifyFollowUpRecipients = async ({
         toUserId: assigneeId,
         toRole: UserType.AGENT,
         context,
+        dedupeKey: `${dedupePrefix}:agent:${assigneeId}`,
       }),
     ),
   );
   const adminResults = await Promise.allSettled(
-    adminIds.map((adminId) =>
+    broadcastAdminIds.map((adminId) =>
       sendSingleNotification({
         type: "follow-up-reminder",
         toUserId: adminId,
         toRole: UserType.ADMIN,
         context,
+        dedupeKey: `${dedupePrefix}:admin:${adminId}`,
       }),
     ),
   );
@@ -137,6 +147,9 @@ const notifyFollowUpRecipients = async ({
       );
     }
   });
+  return [...agentResults, ...adminResults].filter(
+    (result) => result.status === "fulfilled" && Boolean(result.value),
+  ).length;
 };
 
 /**
@@ -145,9 +158,14 @@ const notifyFollowUpRecipients = async ({
  */
 export const processCallbackReminders = async (): Promise<void> => {
   try {
-    const { start: reminderWindowStart, end: reminderWindowEnd } =
+    const {
+      start: reminderWindowStart,
+      now,
+      end: reminderWindowEnd,
+    } =
       getReminderWindow();
     const baseFilter = {
+      followUp: true,
       callbackAt: {
         $gt: reminderWindowStart,
         $lte: reminderWindowEnd,
@@ -174,7 +192,7 @@ export const processCallbackReminders = async (): Promise<void> => {
       const [windowTotal, nextCallbacks] = await Promise.all([
         CallRecord.countDocuments(baseFilter),
         CallRecord.find({
-          callbackAt: { $gt: reminderWindowStart },
+          callbackAt: { $gt: now },
         })
           .select("_id phoneNumber firstName lastName productService callbackAt callbackNotifiedAt")
           .sort({ callbackAt: 1 })
@@ -188,7 +206,7 @@ export const processCallbackReminders = async (): Promise<void> => {
             : null;
           const minutesAway = callbackAt
             ? Math.round(
-                (callbackAt.getTime() - reminderWindowStart.getTime()) /
+                (callbackAt.getTime() - now.getTime()) /
                   60000,
               )
             : "-";
@@ -228,7 +246,12 @@ export const processCallbackReminders = async (): Promise<void> => {
         };
 
         const assignedAgentIds = getAssignedAgentIds(record);
+        const assignedIds = new Set(assignedAgentIds);
+        const broadcastAdminIds = adminIds.filter(
+          (adminId) => !assignedIds.has(adminId),
+        );
 
+        let persistedNotifications = 0;
         for (const assigneeId of assignedAgentIds) {
           try {
             await sendSingleNotification({
@@ -236,7 +259,9 @@ export const processCallbackReminders = async (): Promise<void> => {
               toUserId: assigneeId,
               toRole: UserType.AGENT,
               context,
+              dedupeKey: `callback:${recordId}:agent:${assigneeId}`,
             });
+            persistedNotifications += 1;
             console.log(
               `[CallbackReminder] Notified assigned agent ${assigneeId} for callback ${recordId}`,
             );
@@ -249,14 +274,16 @@ export const processCallbackReminders = async (): Promise<void> => {
         }
 
         // Send notifications to all admins
-        for (const adminId of adminIds) {
+        for (const adminId of broadcastAdminIds) {
           try {
             await sendSingleNotification({
               type: "callback-reminder",
               toUserId: adminId,
               toRole: UserType.ADMIN,
               context,
+              dedupeKey: `callback:${recordId}:admin:${adminId}`,
             });
+            persistedNotifications += 1;
           } catch (error) {
             console.error(
               `[CallbackReminder] Error notifying admin ${adminId}:`,
@@ -265,13 +292,21 @@ export const processCallbackReminders = async (): Promise<void> => {
           }
         }
         console.log(
-          `[CallbackReminder] Notified ${adminIds.length} admins for callback ${recordId}`,
+          `[CallbackReminder] Notified ${broadcastAdminIds.length} additional admins for callback ${recordId}`,
         );
 
-        // Update the record to mark as notified
-        await CallRecord.findByIdAndUpdate(recordId, {
-          callbackNotifiedAt: new Date(),
-        });
+        if (persistedNotifications > 0) {
+          await CallRecord.updateOne(
+            {
+              _id: recordId,
+              $or: [
+                { callbackNotifiedAt: { $exists: false } },
+                { callbackNotifiedAt: null },
+              ],
+            },
+            { callbackNotifiedAt: new Date() },
+          );
+        }
       } catch (error) {
         console.error(
           `[CallbackReminder] Error processing callback ${record._id}:`,
@@ -302,11 +337,33 @@ export const processLeadFollowUpReminders = async (): Promise<void> => {
     const leads = await Lead.find({
       followUps: {
         $elemMatch: {
-          reminderAt: {
-            $gt: reminderWindowStart,
-            $lte: reminderWindowEnd,
-          },
           status: LeadFollowUpStatus.PENDING,
+          $and: [
+            {
+              $or: [
+                {
+                  reminderAt: {
+                    $gt: reminderWindowStart,
+                    $lte: reminderWindowEnd,
+                  },
+                },
+                {
+                  reminderAt: null,
+                  dueAt: {
+                    $gt: reminderWindowStart,
+                    $lte: reminderWindowEnd,
+                  },
+                },
+                {
+                  reminderAt: { $exists: false },
+                  dueAt: {
+                    $gt: reminderWindowStart,
+                    $lte: reminderWindowEnd,
+                  },
+                },
+              ],
+            },
+          ],
           $or: [
             { reminderNotifiedAt: { $exists: false } },
             { reminderNotifiedAt: null },
@@ -329,10 +386,11 @@ export const processLeadFollowUpReminders = async (): Promise<void> => {
       const followUps = ((lead.followUps || []) as any[]).filter(
         (followUp) =>
           followUp?.status === LeadFollowUpStatus.PENDING &&
-          followUp?.reminderAt &&
           !followUp?.reminderNotifiedAt &&
-          new Date(followUp.reminderAt) > reminderWindowStart &&
-          new Date(followUp.reminderAt) <= reminderWindowEnd,
+          (followUp?.reminderAt || followUp?.dueAt) &&
+          new Date(followUp.reminderAt || followUp.dueAt) >
+            reminderWindowStart &&
+          new Date(followUp.reminderAt || followUp.dueAt) <= reminderWindowEnd,
       );
 
       for (const followUp of followUps) {
@@ -351,31 +409,41 @@ export const processLeadFollowUpReminders = async (): Promise<void> => {
               ? assignee.toString()
               : (assignee as string)
             : null;
+          const broadcastAdminIds = adminIds.filter(
+            (adminId) => adminId !== assigneeId,
+          );
 
           const context = {
             name: lead.fullName || lead.mobile || "Lead",
             phone: lead.mobile,
             product: lead.productType || "Lead",
-            followUpTime: formatIndiaTime(followUp.reminderAt),
+            followUpTime: formatIndiaTime(
+              followUp.reminderAt || followUp.dueAt,
+            ),
           };
 
+          let persistedNotifications = 0;
           if (assigneeId) {
             await sendSingleNotification({
               type: "follow-up-reminder",
               toUserId: assigneeId,
               toRole: UserType.AGENT,
               context,
+              dedupeKey: `lead-follow-up:${leadId}:${followUpId}:agent:${assigneeId}`,
             });
+            persistedNotifications += 1;
           }
 
-          for (const adminId of adminIds) {
+          for (const adminId of broadcastAdminIds) {
             try {
               await sendSingleNotification({
                 type: "follow-up-reminder",
                 toUserId: adminId,
                 toRole: UserType.ADMIN,
                 context,
+                dedupeKey: `lead-follow-up:${leadId}:${followUpId}:admin:${adminId}`,
               });
+              persistedNotifications += 1;
             } catch (error) {
               console.error(
                 `[FollowUpReminder] Error notifying admin ${adminId}:`,
@@ -384,11 +452,24 @@ export const processLeadFollowUpReminders = async (): Promise<void> => {
             }
           }
 
-          await Lead.updateOne(
-            { _id: leadId, "followUps._id": followUpId },
-            { $set: { "followUps.$.reminderNotifiedAt": new Date() } },
-          );
-          processedCount += 1;
+          if (persistedNotifications > 0) {
+            await Lead.updateOne(
+              {
+                _id: leadId,
+                followUps: {
+                  $elemMatch: {
+                    _id: followUpId,
+                    $or: [
+                      { reminderNotifiedAt: { $exists: false } },
+                      { reminderNotifiedAt: null },
+                    ],
+                  },
+                },
+              },
+              { $set: { "followUps.$.reminderNotifiedAt": new Date() } },
+            );
+            processedCount += 1;
+          }
         } catch (error) {
           console.error(
             `[FollowUpReminder] Error processing follow-up ${followUp?._id}:`,
@@ -422,7 +503,7 @@ export const processLoanQueryFollowUpReminders = async (): Promise<void> => {
       ],
     })
       .select(
-        "loanId loanType firstName lastName mobile assignedAgent assignedAgents nextFollowUp",
+        "loanId loanType policyDetails.productVariant policyDetails.metaFlowKey policyDetails.requestedProductName policyDetails.requestedProductSlug policyDetails.productLabel firstName lastName mobile assignedAgent assignedAgents nextFollowUp",
       )
       .lean();
 
@@ -438,17 +519,18 @@ export const processLoanQueryFollowUpReminders = async (): Promise<void> => {
           query.mobile ||
           "Loan customer",
         phone: query.mobile,
-        product: String(query.loanType || "Loan").replace(/_/g, " "),
+        product: getLoanTypeDisplayLabel(query.loanType, query.policyDetails),
         followUpTime: formatIndiaTime(dueAt),
       };
 
-      await notifyFollowUpRecipients({
+      const persistedNotifications = await notifyFollowUpRecipients({
         assignedAgentIds: getQueryAssignedAgentIds(query),
         adminIds,
         context,
         referenceLabel: `loan ${query.loanId || queryId}`,
+        dedupePrefix: `loan-follow-up:${queryId}:${String(dueAt)}`,
       });
-      await LoanQuery.updateOne(
+      if (persistedNotifications > 0) await LoanQuery.updateOne(
         {
           _id: query._id,
           "nextFollowUp.status": LoanFollowUpStatus.PENDING,
@@ -505,13 +587,14 @@ export const processInsuranceQueryFollowUpReminders =
           followUpTime: formatIndiaTime(dueAt),
         };
 
-        await notifyFollowUpRecipients({
+        const persistedNotifications = await notifyFollowUpRecipients({
           assignedAgentIds: getQueryAssignedAgentIds(query),
           adminIds,
           context,
           referenceLabel: `insurance ${queryId}`,
+          dedupePrefix: `insurance-follow-up:${queryId}:${String(dueAt)}`,
         });
-        await InsuranceQuery.updateOne(
+        if (persistedNotifications > 0) await InsuranceQuery.updateOne(
           {
             _id: query._id,
             "nextFollowUp.status": InsuranceFollowUpStatus.PENDING,
@@ -536,32 +619,40 @@ export const processInsuranceQueryFollowUpReminders =
  * Runs every minute to check for upcoming callbacks
  */
 export const startCallbackReminderScheduler = (): NodeJS.Timeout => {
+  if (schedulerTimer) return schedulerTimer;
   console.log(
     `[CallbackReminder] Scheduler started - checking every ${CHECK_INTERVAL_MINUTES} minute(s), aligned to minute boundary`,
   );
 
-  // Run immediately on start
-  processCallbackReminders();
-  processLeadFollowUpReminders();
-  processLoanQueryFollowUpReminders();
-  processInsuranceQueryFollowUpReminders();
+  const run = async () => {
+    if (reminderCycleRunning) {
+      console.log("[CallbackReminder] Previous reminder cycle is still running; skipping overlap");
+      return;
+    }
+    reminderCycleRunning = true;
+    try {
+      await Promise.allSettled([
+        processCallbackReminders(),
+        processLeadFollowUpReminders(),
+        processLoanQueryFollowUpReminders(),
+        processInsuranceQueryFollowUpReminders(),
+      ]);
+    } finally {
+      reminderCycleRunning = false;
+    }
+  };
+
+  // Run immediately on start.
+  void run();
 
   const intervalMs = CHECK_INTERVAL_MINUTES * 60 * 1000;
   const msUntilNextMinute = intervalMs - (Date.now() % intervalMs);
-  let interval: NodeJS.Timeout;
-  const initialTimeout = setTimeout(() => {
-    const run = () => {
-      processCallbackReminders();
-      processLeadFollowUpReminders();
-      processLoanQueryFollowUpReminders();
-      processInsuranceQueryFollowUpReminders();
-    };
-
-    run();
-    interval = setInterval(run, intervalMs);
+  schedulerTimer = setTimeout(() => {
+    void run();
+    schedulerTimer = setInterval(() => void run(), intervalMs);
   }, msUntilNextMinute);
 
-  return initialTimeout as unknown as NodeJS.Timeout;
+  return schedulerTimer;
 };
 
 export default {

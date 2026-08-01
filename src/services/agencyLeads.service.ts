@@ -2,7 +2,10 @@ import { Types } from "mongoose";
 import { Agency } from "../modals/agency.model";
 import ApiError from "../utils/ApiError";
 import { LoanQuery } from "../modals/loanquery.model";
-import { normalizeLoanType } from "../utils/loanType";
+import {
+  getLoanTypeMatchValues,
+  normalizeLoanType,
+} from "../utils/loanType";
 import {
   ApplicationStatus,
   InsuranceQuery,
@@ -23,12 +26,27 @@ const LOGIN_STATUSES = [
   ApplicationStatus.ACTIVE,
 ];
 
-const SANCTION_STATUSES = [ApplicationStatus.APPROVED];
+const SANCTION_STATUSES = [
+  ApplicationStatus.APPROVED,
+  ApplicationStatus.LOGIN_APPROVED,
+  ApplicationStatus.SANCTIONED,
+  ApplicationStatus.APPROVED_WITH_CONDITIONS,
+];
 const DISBURSED_STATUSES = [
   ApplicationStatus.DISBURSED,
   ApplicationStatus.COMPLETED,
+  ApplicationStatus.DISBURSED_PARTIAL_FULL,
+  ApplicationStatus.COMPLETED_SUCCESS,
 ];
 const PRE_LOGIN_STATUSES = [ApplicationStatus.DRAFT];
+const REJECTED_STATUSES = [
+  ApplicationStatus.REJECTED,
+  ApplicationStatus.CANCELLED,
+  ApplicationStatus.REJECTED_BY_BANK,
+  ApplicationStatus.CANCELLED_BY_CUSTOMER,
+  ApplicationStatus.DROPPED_LOST,
+  ApplicationStatus.NOT_ELIGIBLE,
+];
 
 const INSURANCE_TYPE_SET = new Set<string>(
   Object.values(InsuranceType).map((value) => String(value).toLowerCase()),
@@ -117,22 +135,27 @@ const statusFilterForSelection = (value?: string) => {
       $in: [
         ApplicationStatus.UNDER_REVIEW,
         ApplicationStatus.DOCUMENT_VERIFICATION,
+        ApplicationStatus.ACTIVE,
       ],
     };
   }
   if (normalized === "approved") {
-    return {
-      $in: [ApplicationStatus.APPROVED, ApplicationStatus.DISBURSED],
-    };
+    return { $in: [...SANCTION_STATUSES, ...DISBURSED_STATUSES] };
+  }
+  if (["sanction", "sanctioned"].includes(normalized)) {
+    return { $in: SANCTION_STATUSES };
+  }
+  if (["disbursed", "completed"].includes(normalized)) {
+    return { $in: DISBURSED_STATUSES };
+  }
+  if (["rejected", "declined"].includes(normalized)) {
+    return { $in: REJECTED_STATUSES };
+  }
+  if (["draft", "pre_login"].includes(normalized)) {
+    return { $in: PRE_LOGIN_STATUSES };
   }
 
-  const supported = new Set<string>([
-    ApplicationStatus.ACTIVE,
-    ApplicationStatus.COMPLETED,
-    ApplicationStatus.CANCELLED,
-    ApplicationStatus.REJECTED,
-    ApplicationStatus.DRAFT,
-  ]);
+  const supported = new Set<string>(Object.values(ApplicationStatus));
   return supported.has(normalized) ? { $in: [normalized] } : undefined;
 };
 
@@ -145,6 +168,28 @@ const appendAndFilter = (
     ...(Array.isArray(target.$and) ? target.$and : []),
     condition,
   ];
+};
+
+const buildProductVariantFilter = (value?: string) => {
+  const raw = String(value || "").trim();
+  if (!raw) return undefined;
+  const key = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const fields = [
+    "policyDetails.productVariant",
+    "policyDetails.metaFlowKey",
+    "policyDetails.requestedProductName",
+    "policyDetails.requestedProductSlug",
+    "policyDetails.productLabel",
+  ];
+  const pattern = /construction[\s_-]*loan/i;
+  const conditions = fields.map((field) => ({ [field]: pattern }));
+  if (key === "construction" || key === "constructionloan") {
+    return { $or: conditions };
+  }
+  if (key === "home" || key === "homeloan") {
+    return { $nor: conditions };
+  }
+  throw new ApiError(400, "Invalid productVariant");
 };
 
 const buildAmountFilter = (
@@ -324,6 +369,11 @@ export class AgencyLeadsService {
                   $cond: [{ $in: ["$status", DISBURSED_STATUSES] }, 1, 0],
                 },
               },
+              stageRejected: {
+                $sum: {
+                  $cond: [{ $in: ["$status", REJECTED_STATUSES] }, 1, 0],
+                },
+              },
             },
           },
         ]),
@@ -351,6 +401,11 @@ export class AgencyLeadsService {
               stageDisbursed: {
                 $sum: {
                   $cond: [{ $in: ["$status", DISBURSED_STATUSES] }, 1, 0],
+                },
+              },
+              stageRejected: {
+                $sum: {
+                  $cond: [{ $in: ["$status", REJECTED_STATUSES] }, 1, 0],
                 },
               },
             },
@@ -382,6 +437,7 @@ export class AgencyLeadsService {
             $match: {
               ownerAgency: scope.ownerObjectId,
               queryType: { $in: ["loan", "insurance"] },
+              isCanonical: { $ne: false },
             },
           },
           {
@@ -391,14 +447,53 @@ export class AgencyLeadsService {
                 loanType: "$loanType",
                 insuranceType: "$insuranceType",
               },
-              disbursedCases: { $sum: 1 },
-              disbursedAmount: { $sum: { $ifNull: ["$disbursedAmount", 0] } },
-              totalCommission: { $sum: { $ifNull: ["$commissionAmount", 0] } },
+              disbursedCases: {
+                $sum: {
+                  $cond: [
+                    {
+                      $or: [
+                        { $eq: ["$accrualStage", "disbursed"] },
+                        { $in: ["$earningStatus", ["earned", "paid"]] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              disbursedAmount: {
+                $sum: {
+                  $cond: [
+                    {
+                      $or: [
+                        { $eq: ["$accrualStage", "disbursed"] },
+                        { $in: ["$earningStatus", ["earned", "paid"]] },
+                      ],
+                    },
+                    { $ifNull: ["$disbursedAmount", 0] },
+                    0,
+                  ],
+                },
+              },
+              totalCommission: {
+                $sum: {
+                  $cond: [
+                    { $in: ["$earningStatus", ["pending", "earned", "paid"]] },
+                    { $ifNull: ["$commissionAmount", 0] },
+                    0,
+                  ],
+                },
+              },
               earnedCommission: {
                 $sum: {
                   $cond: [
                     { $eq: ["$earningStatus", "earned"] },
-                    { $ifNull: ["$commissionAmount", 0] },
+                    {
+                      $subtract: [
+                        { $ifNull: ["$commissionAmount", 0] },
+                        { $ifNull: ["$paidAmount", 0] },
+                      ],
+                    },
                     0,
                   ],
                 },
@@ -406,9 +501,15 @@ export class AgencyLeadsService {
               paidCommission: {
                 $sum: {
                   $cond: [
-                    { $eq: ["$earningStatus", "paid"] },
-                    { $ifNull: ["$commissionAmount", 0] },
-                    0,
+                    { $gt: [{ $ifNull: ["$paidAmount", 0] }, 0] },
+                    "$paidAmount",
+                    {
+                      $cond: [
+                        { $eq: ["$earningStatus", "paid"] },
+                        { $ifNull: ["$commissionAmount", 0] },
+                        0,
+                      ],
+                    },
                   ],
                 },
               },
@@ -421,27 +522,58 @@ export class AgencyLeadsService {
     const insuranceStatus = insuranceStatusAgg?.[0] || {};
     const commissionMap = new Map<string, any>();
     (commissionAgg || []).forEach((row: any) => {
+      const normalizedLoanType = normalizeLoanType(row?._id?.loanType);
       const key =
         row?._id?.queryType === "insurance"
           ? `insurance:${String(row?._id?.insuranceType || "")}`
-          : `loan:${String(row?._id?.loanType || "")}`;
-      commissionMap.set(key, row);
+          : `loan:${String(normalizedLoanType || row?._id?.loanType || "")}`;
+      const current = commissionMap.get(key) || {};
+      commissionMap.set(key, {
+        disbursedCases:
+          Number(current.disbursedCases || 0) +
+          Number(row?.disbursedCases || 0),
+        disbursedAmount:
+          Number(current.disbursedAmount || 0) +
+          Number(row?.disbursedAmount || 0),
+        totalCommission:
+          Number(current.totalCommission || 0) +
+          Number(row?.totalCommission || 0),
+        earnedCommission:
+          Number(current.earnedCommission || 0) +
+          Number(row?.earnedCommission || 0),
+        paidCommission:
+          Number(current.paidCommission || 0) +
+          Number(row?.paidCommission || 0),
+      });
     });
 
-    const loanBreakdown = (loanTypeAgg || []).map((row: any) => {
-      const key = String(row?._id || "");
-      const commission = commissionMap.get(`loan:${key}`) || {};
-      return {
-        loanType: key,
-        count: Number(row?.count || 0),
-        totalAmount: Number(row?.totalAmount || 0),
-        disbursedCases: Number(commission?.disbursedCases || 0),
-        disbursedAmount: Number(commission?.disbursedAmount || 0),
-        totalCommission: Number(commission?.totalCommission || 0),
-        earnedCommission: Number(commission?.earnedCommission || 0),
-        paidCommission: Number(commission?.paidCommission || 0),
-      };
+    const loanBreakdownMap = new Map<string, any>();
+    (loanTypeAgg || []).forEach((row: any) => {
+      const rawKey = String(row?._id || "");
+      const key = normalizeLoanType(rawKey) || rawKey;
+      const current = loanBreakdownMap.get(key) || {};
+      loanBreakdownMap.set(key, {
+        count: Number(current.count || 0) + Number(row?.count || 0),
+        totalAmount:
+          Number(current.totalAmount || 0) + Number(row?.totalAmount || 0),
+      });
     });
+
+    const loanBreakdown = Array.from(loanBreakdownMap.entries()).map(
+      ([key, totals]) => {
+        const commission = commissionMap.get(`loan:${key}`) || {};
+        return {
+          loanType: key,
+          count: Number(totals?.count || 0),
+          totalAmount: Number(totals?.totalAmount || 0),
+          disbursedCases: Number(commission?.disbursedCases || 0),
+          disbursedAmount: Number(commission?.disbursedAmount || 0),
+          totalCommission: Number(commission?.totalCommission || 0),
+          earnedCommission: Number(commission?.earnedCommission || 0),
+          paidCommission: Number(commission?.paidCommission || 0),
+        };
+      },
+    );
 
     const insuranceBreakdown = (insuranceTypeAgg || []).map((row: any) => {
       const insuranceType = String(row?._id || "");
@@ -481,12 +613,18 @@ export class AgencyLeadsService {
     const stageDisbursed =
       Number(loanStatus.stageDisbursed || 0) +
       Number(insuranceStatus.stageDisbursed || 0);
+    const stageRejected =
+      Number(loanStatus.stageRejected || 0) +
+      Number(insuranceStatus.stageRejected || 0);
 
     return {
       ownerAgencyId: scope.ownerAgencyId,
       summary: {
         totalLeads,
-        activePipelineCount: totalLeads - stageDisbursed,
+        activePipelineCount: Math.max(
+          0,
+          totalLeads - stageDisbursed - stageRejected,
+        ),
         potentialValue: Number(loanStatus.potentialValue || 0),
         disbursedCases: commissionTotals.disbursedCases,
         disbursedValue: commissionTotals.disbursedValue,
@@ -507,6 +645,7 @@ export class AgencyLeadsService {
           Number(loanStatus.stageSanction || 0) +
           Number(insuranceStatus.stageSanction || 0),
         disbursed: stageDisbursed,
+        rejected: stageRejected,
       },
       loanTypeBreakdown: [...loanBreakdown, ...insuranceBreakdown].sort(
         (a, b) => Number(b.count || 0) - Number(a.count || 0),
@@ -519,6 +658,7 @@ export class AgencyLeadsService {
     stage?: LeadStage;
     productType?: string;
     loanType?: string;
+    productVariant?: string;
     status?: string;
     search?: string;
     minAmount?: number;
@@ -539,6 +679,12 @@ export class AgencyLeadsService {
     const regex = search ? new RegExp(escapeRegex(search), "i") : null;
     const normalizedLoanType = normalizeLoanType(input.loanType);
     const normalizedInsuranceType = normalizeInsuranceTypeFilter(input.loanType);
+    const productVariantFilter = buildProductVariantFilter(
+      input.productVariant,
+    );
+    if (input.loanType && !normalizedLoanType && !normalizedInsuranceType) {
+      throw new ApiError(400, "Invalid loanType");
+    }
 
     const loanFilter: Record<string, any> = this.buildLoanOwnershipFilter(
       scope.ownerObjectId,
@@ -547,12 +693,19 @@ export class AgencyLeadsService {
     if (stageFilter) appendAndFilter(loanFilter, { status: stageFilter });
     if (statusFilter) appendAndFilter(loanFilter, { status: statusFilter });
     if (productType === "credit_card") {
-      loanFilter.loanType = "credit_card";
+      loanFilter.loanType = {
+        $in: getLoanTypeMatchValues("credit_card"),
+      };
     } else if (normalizedLoanType) {
-      loanFilter.loanType = normalizedLoanType;
+      loanFilter.loanType = {
+        $in: getLoanTypeMatchValues(normalizedLoanType),
+      };
     } else if (productType === "loan") {
-      loanFilter.loanType = { $ne: "credit_card" };
+      loanFilter.loanType = {
+        $nin: getLoanTypeMatchValues("credit_card"),
+      };
     }
+    appendAndFilter(loanFilter, productVariantFilter);
     appendAndFilter(
       loanFilter,
       buildAmountFilter(
@@ -617,7 +770,7 @@ export class AgencyLeadsService {
       (productType === "all" && !normalizedInsuranceType);
     const shouldLoadInsurance =
       productType === "insurance" ||
-      (productType === "all" && !normalizedLoanType);
+      (productType === "all" && !normalizedLoanType && !productVariantFilter);
 
     const unionTarget = page * limit;
 
@@ -687,6 +840,7 @@ export class AgencyLeadsService {
     const commissionRows = commissionFilters.length
       ? await AgencyCommissionTransaction.find({
           ownerAgency: scope.ownerObjectId,
+          isCanonical: { $ne: false },
           $or: commissionFilters,
         })
           .select(
@@ -748,7 +902,7 @@ export class AgencyLeadsService {
           loanId: query.loanId || queryId,
           customerName: `${query.firstName || ""} ${query.lastName || ""}`.trim(),
           mobile: query.mobile,
-          loanType: query.loanType,
+          loanType: normalizeLoanType(query.loanType) || query.loanType,
           status: query.status,
           loanAmount: toNumber(query.loanAmount),
           createdAt: query.createdAt,

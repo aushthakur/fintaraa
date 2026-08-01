@@ -20,6 +20,9 @@ export interface INotification extends Document {
   type: string;
   title: string;
   message: string;
+  campaignId?: Types.ObjectId;
+  data?: Record<string, any>;
+  dedupeKey?: string;
   status: NotificationStatus;
   from?: {
     role: UserType;
@@ -40,6 +43,13 @@ const NotificationSchema = new Schema<INotification>(
     type: { type: String, required: true },
     title: { type: String, required: true, trim: true },
     message: { type: String, required: true, trim: true },
+    campaignId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "PushCampaign",
+      index: true,
+    },
+    data: { type: Schema.Types.Mixed, default: {} },
+    dedupeKey: { type: String, trim: true },
     status: {
       type: String,
       enum: ["unread", "read", "deleted"],
@@ -89,6 +99,20 @@ NotificationSchema.index({ type: 1 });
 
 // 📌 Filter by role (useful in multi-role systems)
 NotificationSchema.index({ "to.role": 1 });
+NotificationSchema.index(
+  { dedupeKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { dedupeKey: { $type: "string" } },
+  },
+);
+NotificationSchema.index(
+  { campaignId: 1, "to.user": 1, "to.role": 1 },
+  {
+    unique: true,
+    partialFilterExpression: { campaignId: { $exists: true } },
+  },
+);
 
 export const Notification = mongoose.model<INotification>(
   "Notification",

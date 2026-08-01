@@ -13,7 +13,6 @@ import { limiter } from "./middlewares/limiter";
 import { corsOptions } from "./middlewares/corsMiddleware";
 import { notFoundHandler } from "./middlewares/notFounHandler";
 import { globalErrorHandler } from "./middlewares/errorHandler";
-import { startCallbackReminderScheduler } from "./services/callbackReminder.service";
 import publicCallRecordPageRoutes from "./public/callRecord/callRecord.page.routes";
 
 const app = express();
@@ -104,9 +103,6 @@ app.use("/api", routes);
 
 // Handle public iframe call-record page
 app.use("/dashboard/call-records", publicCallRecordPageRoutes);
-
-// Start callback reminder scheduler
-startCallbackReminderScheduler();
 
 // Handle Get Images
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));

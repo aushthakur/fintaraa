@@ -7,6 +7,7 @@ export type KnowledgeType =
   | "testimonial"
   | "press_release"
   | "video"
+  | "award"
   | "product_info"
   | "tutorial";
 
@@ -27,6 +28,7 @@ export interface IKnowledge extends Document {
   readTime?: string;
   accent?: string;
   videoUrl?: string;
+  youtubeUrl?: string;
   buttonLabel?: string;
   coverImageUrl?: string;
   linkUrl?: string;
@@ -47,6 +49,13 @@ export interface IKnowledge extends Document {
   publishedOn?: Date;
   editedOn?: Date;
   editedBy?: string;
+  audience?: "public" | "dsa" | "all";
+  trainingType?: "pdf" | "video" | "product_guide";
+  documentUrl?: string;
+  thumbnailUrl?: string;
+  productType?: "loan" | "insurance" | "credit_card" | "all";
+  loanTypes?: string[];
+  sortOrder?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -64,6 +73,7 @@ const KnowledgeSchema: Schema<IKnowledge> = new Schema(
         "testimonial",
         "press_release",
         "video",
+        "award",
         "product_info",
         "tutorial",
       ],
@@ -82,10 +92,32 @@ const KnowledgeSchema: Schema<IKnowledge> = new Schema(
     readTime: { type: String, trim: true },
     accent: { type: String, trim: true },
     videoUrl: { type: String, trim: true },
+    youtubeUrl: { type: String, trim: true },
     buttonLabel: { type: String, trim: true },
     coverImageUrl: { type: String, trim: true, default: "" },
     linkUrl: { type: String, trim: true },
     leadSource: { type: String, trim: true },
+    audience: {
+      type: String,
+      enum: ["public", "dsa", "all"],
+      default: "public",
+      index: true,
+    },
+    trainingType: {
+      type: String,
+      enum: ["pdf", "video", "product_guide"],
+      index: true,
+    },
+    documentUrl: { type: String, trim: true },
+    thumbnailUrl: { type: String, trim: true },
+    productType: {
+      type: String,
+      enum: ["loan", "insurance", "credit_card", "all"],
+      default: "all",
+      index: true,
+    },
+    loanTypes: { type: [String], default: [], index: true },
+    sortOrder: { type: Number, default: 0, index: true },
     metaTagTitle: { type: String, trim: true },
     metaTagDescription: { type: String, trim: true },
     metaTagKeywords: { type: [String], default: [] },

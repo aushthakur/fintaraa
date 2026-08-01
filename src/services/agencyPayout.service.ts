@@ -6,6 +6,8 @@ import {
   AgencyPayoutMethod,
 } from "../modals/agencyPayoutRequest.model";
 import { AgencyCommissionTransaction } from "../modals/agencyCommissionTransaction.model";
+import { AgencyPayoutProfile } from "../modals/agencyPayoutProfile.model";
+import { agencyPayoutProfileService } from "./agencyPayoutProfile.service";
 
 const toObjectId = (value: string) =>
   Types.ObjectId.isValid(value) ? new Types.ObjectId(value) : null;
@@ -22,6 +24,34 @@ const toNumber = (value: any): number => {
   if (value === null || value === undefined) return 0;
   const parsed = Number(String(value).replace(/,/g, "").trim());
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+export const MINIMUM_DSA_PAYOUT_AMOUNT = 0.01;
+
+export const validateDsaPayoutAmount = (
+  rawAmount: unknown,
+  availableAmount?: number,
+) => {
+  const amount = Number(rawAmount);
+  if (!Number.isFinite(amount) || amount < MINIMUM_DSA_PAYOUT_AMOUNT) {
+    throw new ApiError(400, "Valid payout amount is required");
+  }
+  const rounded = Number(amount.toFixed(2));
+  if (Math.abs(amount - rounded) > Number.EPSILON) {
+    throw new ApiError(400, "Payout amount can have at most two decimal places");
+  }
+  if (
+    availableAmount !== undefined &&
+    rounded > Number(availableAmount.toFixed(2))
+  ) {
+    throw new ApiError(
+      400,
+      `Insufficient available balance. You can request up to ₹${availableAmount.toFixed(
+        2,
+      )}`,
+    );
+  }
+  return rounded;
 };
 
 export class AgencyPayoutService {
@@ -41,12 +71,47 @@ export class AgencyPayoutService {
   private async computeBalances(ownerObjectId: Types.ObjectId) {
     const [earnedAgg, paidAgg, pendingReqAgg] = await Promise.all([
       AgencyCommissionTransaction.aggregate([
-        { $match: { ownerAgency: ownerObjectId, earningStatus: "earned" } },
-        { $group: { _id: null, total: { $sum: "$commissionAmount" } } },
+        {
+          $match: {
+            ownerAgency: ownerObjectId,
+            earningStatus: "earned",
+            isCanonical: { $ne: false },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: {
+              $sum: {
+                $let: {
+                  vars: {
+                    outstanding: {
+                      $subtract: ["$commissionAmount", { $ifNull: ["$paidAmount", 0] }],
+                    },
+                  },
+                  in: { $cond: [{ $gt: ["$$outstanding", 0] }, "$$outstanding", 0] },
+                },
+              },
+            },
+          },
+        },
       ]),
       AgencyCommissionTransaction.aggregate([
-        { $match: { ownerAgency: ownerObjectId, earningStatus: "paid" } },
-        { $group: { _id: null, total: { $sum: "$commissionAmount" } } },
+        { $match: { ownerAgency: ownerObjectId, isCanonical: { $ne: false } } },
+        {
+          $group: {
+            _id: null,
+            total: {
+              $sum: {
+                $cond: [
+                  { $gt: [{ $ifNull: ["$paidAmount", 0] }, 0] },
+                  "$paidAmount",
+                  { $cond: [{ $eq: ["$earningStatus", "paid"] }, "$commissionAmount", 0] },
+                ],
+              },
+            },
+          },
+        },
       ]),
       AgencyPayoutRequest.aggregate([
         {
@@ -62,16 +127,18 @@ export class AgencyPayoutService {
     const earnedAmount = toNumber(earnedAgg?.[0]?.total);
     const paidAmount = toNumber(paidAgg?.[0]?.total);
     const pendingRequestedAmount = toNumber(pendingReqAgg?.[0]?.total);
-    const availableToRequest = Math.max(
-      0,
-      earnedAmount - paidAmount - pendingRequestedAmount,
-    );
+    // `earned` contains only unpaid ledger rows; paid rows are already excluded.
+    const availableToRequest = Math.max(0, earnedAmount - pendingRequestedAmount);
 
     return {
       earnedAmount,
       paidAmount,
       pendingRequestedAmount,
       availableToRequest,
+      minimumPayoutAmount: MINIMUM_DSA_PAYOUT_AMOUNT,
+      canRequestPayout:
+        availableToRequest >= MINIMUM_DSA_PAYOUT_AMOUNT &&
+        pendingRequestedAmount === 0,
     };
   }
 
@@ -139,6 +206,7 @@ export class AgencyPayoutService {
 
     const [result, total] = await Promise.all([
       AgencyPayoutRequest.find(filter)
+        .select("-upiId -bankDetails")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -170,57 +238,81 @@ export class AgencyPayoutService {
     };
     notes?: string;
   }) {
-    const scope = await this.getOwnerScope(input.agencyId);
-    const amount = Number(input.amount || 0);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new ApiError(400, "Valid payout amount is required");
+    const requestingAgency: any = await Agency.findById(input.agencyId)
+      .select("_id role parentAgency")
+      .lean();
+    if (!requestingAgency) throw new ApiError(404, "Agency not found");
+    if (requestingAgency.role !== "agency" || requestingAgency.parentAgency) {
+      throw new ApiError(403, "Only the primary DSA can request payouts");
     }
+    const scope = await this.getOwnerScope(input.agencyId);
+    const amount = validateDsaPayoutAmount(input.amount);
 
     if (!["upi", "bank_transfer"].includes(String(input.method || ""))) {
       throw new ApiError(400, "Invalid payout method");
     }
 
-    if (input.method === "upi" && !String(input.upiId || "").trim()) {
-      throw new ApiError(400, "UPI ID is required for UPI payouts");
+    let payoutProfile: any = await AgencyPayoutProfile.findOne({
+      agency: scope.ownerObjectId,
+    }).select("+encryptedPayload").lean();
+    // Backward-compatible secure upgrade: legacy clients may send the destination
+    // once, but it is encrypted into the profile and never copied raw to a request.
+    if (!payoutProfile && (input.upiId || input.bankDetails?.accountNumber)) {
+      await agencyPayoutProfileService.upsert({
+        agencyId: scope.ownerAgencyId,
+        method: input.method,
+        upiId: input.upiId,
+        accountNumber: input.bankDetails?.accountNumber,
+        ifsc: input.bankDetails?.ifsc,
+        accountHolder: input.bankDetails?.accountHolder,
+        bankName: input.bankDetails?.bankName,
+        updatedBy: input.agencyId,
+      });
+      payoutProfile = await AgencyPayoutProfile.findOne({
+        agency: scope.ownerObjectId,
+      }).select("+encryptedPayload").lean();
+    }
+    if (!payoutProfile) {
+      throw new ApiError(400, "Save an encrypted payout profile before requesting payout");
+    }
+    if (payoutProfile.method !== input.method) {
+      throw new ApiError(400, `Saved payout method is ${payoutProfile.method}`);
     }
 
-    if (input.method === "bank_transfer") {
-      const accountNumber = String(input.bankDetails?.accountNumber || "").trim();
-      const ifsc = String(input.bankDetails?.ifsc || "").trim();
-      if (!accountNumber || !ifsc) {
-        throw new ApiError(400, "Account number and IFSC are required");
-      }
+    const activeRequest = await AgencyPayoutRequest.exists({
+      ownerAgency: scope.ownerObjectId,
+      $or: [
+        { reservationActive: true },
+        { status: { $in: ["pending", "approved", "processing"] } },
+      ],
+    });
+    if (activeRequest) {
+      throw new ApiError(409, "An active payout request already exists");
     }
 
     const balances = await this.computeBalances(scope.ownerObjectId);
-    if (amount > balances.availableToRequest) {
-      throw new ApiError(
-        400,
-        `Insufficient available balance. You can request up to ₹${balances.availableToRequest.toFixed(
-          2,
-        )}`,
-      );
-    }
+    validateDsaPayoutAmount(amount, balances.availableToRequest);
 
-    const request = await AgencyPayoutRequest.create({
-      ownerAgency: scope.ownerObjectId,
-      requestedBy: new Types.ObjectId(input.agencyId),
-      amount: Number(amount.toFixed(2)),
-      method: input.method,
-      upiId:
-        input.method === "upi" ? String(input.upiId || "").trim() : undefined,
-      bankDetails:
-        input.method === "bank_transfer"
-          ? {
-              accountNumber: String(input.bankDetails?.accountNumber || "").trim(),
-              ifsc: String(input.bankDetails?.ifsc || "").trim().toUpperCase(),
-              accountHolder: String(input.bankDetails?.accountHolder || "").trim(),
-              bankName: String(input.bankDetails?.bankName || "").trim(),
-            }
-          : undefined,
-      notes: String(input.notes || "").trim() || undefined,
-      status: "pending",
-    });
+    let request;
+    try {
+      request = await AgencyPayoutRequest.create({
+        ownerAgency: scope.ownerObjectId,
+        requestedBy: new Types.ObjectId(input.agencyId),
+        payoutProfile: payoutProfile._id,
+        destinationEncryptedSnapshot: payoutProfile.encryptedPayload,
+        destinationMasked: payoutProfile.maskedDestination,
+        amount,
+        method: payoutProfile.method,
+        notes: String(input.notes || "").trim() || undefined,
+        status: "pending",
+        reservationActive: true,
+      });
+    } catch (error: any) {
+      if (error?.code === 11000) {
+        throw new ApiError(409, "An active payout request already exists");
+      }
+      throw error;
+    }
 
     return request;
   }

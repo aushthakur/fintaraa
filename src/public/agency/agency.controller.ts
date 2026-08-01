@@ -10,23 +10,30 @@ import { Request, Response, NextFunction } from "express";
 import { UserType } from "../../modals/notification.model";
 import { Agency, AgencyRole } from "../../modals/agency.model";
 import { CommonService } from "../../services/common.services";
-import { UserStatus, IKycProfile } from "../../modals/user.model";
+import { User, UserStatus, IKycProfile } from "../../modals/user.model";
 import { agencyEarningsService } from "../../services/agencyEarnings.service";
 import { agencyLeadsService } from "../../services/agencyLeads.service";
 import { agencyPayoutService } from "../../services/agencyPayout.service";
+import { applyEncryptedAgencyBankDetails } from "../../services/agencyBankDetails.service";
 import { sendSingleNotification } from "../../services/notification.service";
 import { generateAccessToken, generateRefreshToken } from "../../utils/token";
 import {
   consumeOtpRequest,
   releaseOtpRequest,
 } from "../../services/otpRateLimit.service";
+import {
+  assertOtpVerificationAllowed,
+  recordOtpVerificationFailure,
+  resetOtpVerificationAttempts,
+} from "../../services/otpVerificationLimit.service";
 
 const agencyService = new CommonService(Agency);
-const STATIC_OTP_MOBILE = "9354697528";
-const STATIC_OTP_CODE = "123456";
-
 const usesStaticOtp = (mobile: string) =>
-  String(mobile || "").replace(/\D/g, "").endsWith(STATIC_OTP_MOBILE);
+  config.env !== "production" &&
+  Boolean(config.otp.staticMobile && config.otp.staticCode) &&
+  String(mobile || "")
+    .replace(/\D/g, "")
+    .endsWith(config.otp.staticMobile);
 
 const parseJSONSafely = <T>(value: any, fallback: T): T => {
   if (value === undefined || value === null || value === "") return fallback;
@@ -45,6 +52,15 @@ const normalizeBoolean = (value: any, fallback: boolean) => {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") return value.toLowerCase() === "true";
   return fallback;
+};
+
+const normalizePushPlatform = (
+  value: unknown,
+): "ios" | "android" | "web" | "unknown" => {
+  const platform = String(value || "").trim().toLowerCase();
+  return platform === "ios" || platform === "android" || platform === "web"
+    ? platform
+    : "unknown";
 };
 
 const toArrayPayload = (value: any): any[] => {
@@ -312,6 +328,102 @@ const withAgencyProfileMeta = (agency: any) => {
   };
 };
 
+const maskAccountNumber = (value: any) => {
+  const normalized = String(value || "").replace(/\s+/g, "");
+  if (!normalized) return undefined;
+  return `••••${normalized.slice(-4)}`;
+};
+
+const stripDocumentSecrets = (documents: any) =>
+  (Array.isArray(documents) ? documents : []).map((document: any) => {
+    const plain = document?.toObject ? document.toObject() : { ...(document || {}) };
+    delete plain.password;
+    delete plain.raw;
+    delete plain.parsedData;
+    return plain;
+  });
+
+const sanitizeAgencyForSelf = (agency: any) => {
+  const plain = agency?.toObject ? agency.toObject() : { ...(agency || {}) };
+  const kyc = plain.kycProfile || {};
+  const vault = plain.digiLockerVault || {};
+  const bank = plain.bankDetails || {};
+  const verificationRecords = plain.verificationRecords || {};
+  const profileCompletion = evaluateAgencyProfileCompletion(plain);
+  const cleanVerification = (record: any) => {
+    if (!record) return undefined;
+    const { raw, ...safe } = record;
+    return safe;
+  };
+  return {
+    _id: plain._id,
+    agencyId: plain.agencyId,
+    referralCode: plain.referralCode,
+    name: plain.name,
+    businessName: plain.businessName,
+    gstin: plain.gstin,
+    email: plain.email,
+    mobile: plain.mobile,
+    role: plain.role,
+    parentAgency: plain.parentAgency,
+    status: plain.status,
+    onboardingStatus:
+      plain.status === UserStatus.ACTIVE &&
+      plain.approvalReview?.status !== "rejected"
+        ? "approved"
+        : plain.approvalReview?.status || "pending",
+    rejectionReason: plain.approvalReview?.rejectionReason,
+    reviewNotes: plain.approvalReview?.notes,
+    avatar: plain.avatar,
+    profilePictureUrl: plain.profilePictureUrl,
+    agreedToTerms: plain.agreedToTerms,
+    privacyPolicyAccepted: plain.privacyPolicyAccepted,
+    isEmailVerified: plain.isEmailVerified,
+    isMobileVerified: plain.isMobileVerified,
+    gender: plain.gender,
+    notification: plain.notification,
+    rmName: plain.rmName,
+    rmMobile: plain.rmMobile,
+    addresses: plain.addresses,
+    bankDetails: Object.keys(bank).length
+      ? {
+          bankName: bank.bankName,
+          branchName: bank.branchName,
+          branchCity: bank.branchCity,
+          accountType: bank.accountType,
+          accountNumber: maskAccountNumber(bank.accountNumber),
+          accountHolderName: bank.accountHolderName,
+          ifscCode: bank.ifscCode,
+          cancelledChequeUrl: bank.cancelledChequeUrl,
+          verified: Boolean(bank.verified),
+          verificationStatus: bank.verificationStatus,
+          verificationMessage: bank.verificationMessage,
+          verifiedAt: bank.verifiedAt,
+        }
+      : undefined,
+    verificationRecords: {
+      pan: cleanVerification(verificationRecords.pan),
+      aadhaar: cleanVerification(verificationRecords.aadhaar),
+      gst: cleanVerification(verificationRecords.gst),
+    },
+    kycProfile: {
+      ...kyc,
+      documents: stripDocumentSecrets(kyc.documents),
+    },
+    digiLockerVault: {
+      ...vault,
+      documents: stripDocumentSecrets(vault.documents),
+    },
+    agentProfileCompleted: profileCompletion.isComplete,
+    requiresKycCompletion: !profileCompletion.isComplete,
+    profileCompletion,
+    onboardingSubmittedAt: plain.onboardingSubmittedAt,
+    lastLoginAt: plain.lastLoginAt,
+    createdAt: plain.createdAt,
+    updatedAt: plain.updatedAt,
+  };
+};
+
 export class AgencyController {
   static async sendOtp(req: Request, res: Response, next: NextFunction) {
     try {
@@ -320,6 +432,10 @@ export class AgencyController {
         name,
         email,
         parentAgencyId,
+        businessName,
+        gstin: rawGstin,
+        acceptedTerms,
+        intent: rawIntent,
       } = req.body;
       if (!rawMobile) {
         return res.status(400).json({
@@ -328,30 +444,99 @@ export class AgencyController {
         });
       }
       const mobile = await consumeOtpRequest(rawMobile, "agency");
+      const isDsaAuth = String(req.originalUrl || "").includes("/dsa/");
+      const intent = String(rawIntent || (isDsaAuth ? "login" : "register"))
+        .trim()
+        .toLowerCase();
+      if (isDsaAuth && !["login", "register"].includes(intent)) {
+        await releaseOtpRequest(mobile, "agency");
+        return res.status(400).json({ success: false, message: "Intent must be login or register" });
+      }
 
       let agency: any = await Agency.findOne({ mobile });
-      if (!agency) {
-        const placeholderEmail = email || `${mobile}@agency.fintara`;
-        const role: AgencyRole = parentAgencyId ? "agency_member" : "agency";
-        agency = await Agency.create({
-          mobile,
-          role,
-          parentAgency: parentAgencyId || undefined,
-          agreedToTerms: true,
-          privacyPolicyAccepted: true,
-          name: name || `Agency ${mobile.slice(-4)}`,
-          email: placeholderEmail,
-          status: UserStatus.PENDING_VERIFICATION,
-          password: crypto.randomBytes(10).toString("hex"),
+      const isNew = !agency;
+      if (isDsaAuth && intent === "login" && !agency) {
+        await releaseOtpRequest(mobile, "agency");
+        return res.status(404).json({ success: false, message: "DSA account not found. Please register first." });
+      }
+      const isDsaRegistrationResend = Boolean(
+        isDsaAuth &&
+          intent === "register" &&
+          agency &&
+          !agency.isMobileVerified &&
+          agency.status === UserStatus.PENDING_VERIFICATION,
+      );
+      if (isDsaAuth && intent === "register" && agency && !isDsaRegistrationResend) {
+        await releaseOtpRequest(mobile, "agency");
+        return res.status(409).json({
+          success: false,
+          message: "A DSA account already exists for this mobile. Please log in.",
         });
+      }
+      const gstin = String(rawGstin || "").trim().toUpperCase();
+      if (isDsaAuth && intent === "register" && !agency) {
+        const normalizedEmail = String(email || "").trim().toLowerCase();
+        if (!String(name || "").trim() || !/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
+          await releaseOtpRequest(mobile, "agency");
+          return res.status(400).json({ success: false, message: "Name and valid email are required for registration" });
+        }
+        if (![true, "true", "1", "yes"].includes(acceptedTerms)) {
+          await releaseOtpRequest(mobile, "agency");
+          return res.status(400).json({ success: false, message: "Terms and privacy consent are required" });
+        }
+        if (gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin)) {
+          await releaseOtpRequest(mobile, "agency");
+          return res.status(400).json({ success: false, message: "Invalid GSTIN" });
+        }
+        const duplicateEmail = await Agency.exists({ email: normalizedEmail });
+        if (duplicateEmail) {
+          await releaseOtpRequest(mobile, "agency");
+          return res.status(409).json({ success: false, message: "Email already in use" });
+        }
+      }
+      if (!agency) {
+        const placeholderEmail = String(email || `${mobile}@agency.fintara`).trim().toLowerCase();
+        const role: AgencyRole = parentAgencyId ? "agency_member" : "agency";
+        try {
+          agency = await Agency.create({
+            mobile,
+            role,
+            parentAgency: parentAgencyId || undefined,
+            agreedToTerms: true,
+            privacyPolicyAccepted: true,
+            name: name || `Agency ${mobile.slice(-4)}`,
+            email: placeholderEmail,
+            businessName: String(businessName || "").trim() || undefined,
+            gstin: gstin || undefined,
+            ...(gstin ? { verificationRecords: { gst: { number: gstin } } } : {}),
+            status: UserStatus.PENDING_VERIFICATION,
+            password: crypto.randomBytes(10).toString("hex"),
+          });
+        } catch (error: any) {
+          if (error?.code === 11000) {
+            await releaseOtpRequest(mobile, "agency");
+            const duplicateField = error?.keyPattern?.email ? "Email" : "Mobile";
+            return res.status(409).json({ success: false, message: `${duplicateField} already in use` });
+          }
+          throw error;
+        }
       } else {
         const updates: Record<string, any> = {};
 
-        if (name && (!agency.name || agency.status === UserStatus.PENDING_VERIFICATION)) {
+        if (
+          !isDsaRegistrationResend &&
+          name &&
+          (!isDsaAuth || intent === "register") &&
+          (!agency.name || agency.status === UserStatus.PENDING_VERIFICATION)
+        ) {
           updates.name = name;
         }
 
-        if (email) {
+        if (
+          !isDsaRegistrationResend &&
+          email &&
+          (!isDsaAuth || intent === "register")
+        ) {
           const normalizedEmail = String(email).trim().toLowerCase();
           if (normalizedEmail && normalizedEmail !== agency.email) {
             const duplicateEmail = await Agency.findOne({
@@ -367,9 +552,24 @@ export class AgencyController {
           }
         }
 
-        if (parentAgencyId !== undefined) {
+        if (!isDsaAuth && parentAgencyId !== undefined) {
           updates.parentAgency = parentAgencyId || undefined;
           updates.role = parentAgencyId ? "agency_member" : "agency";
+        }
+        if (
+          !isDsaRegistrationResend &&
+          (!isDsaAuth || intent === "register") &&
+          businessName !== undefined
+        ) {
+          updates.businessName = String(businessName || "").trim() || undefined;
+        }
+        if (
+          !isDsaRegistrationResend &&
+          (!isDsaAuth || intent === "register") &&
+          gstin
+        ) {
+          updates.gstin = gstin;
+          updates["verificationRecords.gst.number"] = gstin;
         }
 
         if (Object.keys(updates).length > 0) {
@@ -381,7 +581,7 @@ export class AgencyController {
 
       const isStaticOtpUser = usesStaticOtp(mobile);
       const otpCode = isStaticOtpUser
-        ? STATIC_OTP_CODE
+        ? config.otp.staticCode
         : crypto.randomInt(100000, 1000000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
@@ -390,6 +590,9 @@ export class AgencyController {
         { mobile, expiresAt, otp: otpCode, verified: false },
         { upsert: true, new: true, setDefaultsOnInsert: true },
       );
+      await resetOtpVerificationAttempts(mobile, "agency", req.ip, {
+        includeIp: false,
+      });
 
       const maskedMobile = maskMobileForLogs(mobile);
       if (isStaticOtpUser) {
@@ -424,8 +627,17 @@ export class AgencyController {
       }
 
       return res.status(200).json({
+        statusCode: 200,
         success: true,
         message: "OTP has been sent successfully",
+        expiresInSeconds: 5 * 60,
+        data: {
+          expiresInSeconds: 5 * 60,
+          isNew,
+          onboardingStatus:
+            agency.approvalReview?.status ||
+            (agency.status === UserStatus.ACTIVE ? "approved" : "pending"),
+        },
       });
     } catch (error) {
       next(error);
@@ -442,22 +654,48 @@ export class AgencyController {
         });
       }
       const mobile = String(rawMobile).replace(/\D/g, "");
+      if (mobile.length < 10 || mobile.length > 15) {
+        return res.status(400).json({ success: false, message: "Enter a valid mobile number" });
+      }
+      await assertOtpVerificationAllowed(mobile, "agency", req.ip);
+      const now = new Date();
+      const otpDoc: any = await Otp.findOne({ mobile }).sort({ updatedAt: -1 });
+      const suppliedOtp = String(otp).trim();
+      const storedOtp = String(otpDoc?.otp || "");
+      const suppliedBuffer = Buffer.from(suppliedOtp);
+      const storedBuffer = Buffer.from(storedOtp);
+      const otpMatches =
+        Boolean(otpDoc) &&
+        !otpDoc.verified &&
+        otpDoc.expiresAt > now &&
+        suppliedBuffer.length === storedBuffer.length &&
+        crypto.timingSafeEqual(suppliedBuffer, storedBuffer);
 
-      const otpDoc = await Otp.findOne({ mobile, otp });
-      if (!otpDoc || otpDoc.expiresAt < new Date()) {
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid or expired OTP" });
+      if (!otpMatches) {
+        const locked = await recordOtpVerificationFailure(mobile, "agency", req.ip);
+        return res.status(locked ? 429 : 400).json({
+          success: false,
+          message: locked
+            ? "Too many invalid OTP attempts. Request a new OTP or try again later."
+            : "Invalid or expired OTP",
+        });
       }
 
-      if (otpDoc.verified) {
-        return res
-          .status(400)
-          .json({ success: false, message: "OTP already used" });
+      const claimedOtp = await Otp.findOneAndUpdate(
+        { _id: otpDoc._id, verified: false, expiresAt: { $gt: now } },
+        { $set: { verified: true } },
+        { new: true },
+      );
+      if (!claimedOtp) {
+        const locked = await recordOtpVerificationFailure(mobile, "agency", req.ip);
+        return res.status(locked ? 429 : 400).json({
+          success: false,
+          message: locked
+            ? "Too many invalid OTP attempts. Request a new OTP or try again later."
+            : "Invalid or expired OTP",
+        });
       }
-
-      otpDoc.verified = true;
-      await otpDoc.save();
+      await resetOtpVerificationAttempts(mobile, "agency", req.ip);
 
       const agency: any = await Agency.findOne({ mobile });
       if (!agency) {
@@ -477,10 +715,7 @@ export class AgencyController {
       }
 
       agency.isMobileVerified = true;
-      const autoActivated = agency.status === UserStatus.PENDING_VERIFICATION;
-      if (autoActivated) {
-        agency.status = UserStatus.ACTIVE;
-      }
+      agency.lastLoginAt = new Date();
       await agency.save();
 
       const payload = {
@@ -508,10 +743,9 @@ export class AgencyController {
       });
 
       return res.status(200).json({
+        statusCode: 200,
         success: true,
-        message: autoActivated
-          ? "OTP verified successfully. Account activated."
-          : "OTP verified successfully. Login complete.",
+        message: "OTP verified successfully. Login complete.",
         token: accessToken,
         agency: {
           _id: agency._id,
@@ -520,9 +754,41 @@ export class AgencyController {
           name: agency.name,
           mobile: agency.mobile,
           parentAgency: agency.parentAgency,
+          agencyId: agency.agencyId,
+          referralCode: agency.referralCode,
+          status: agency.status,
+          onboardingStatus:
+            agency.status === UserStatus.ACTIVE &&
+            agency.approvalReview?.status !== "rejected"
+              ? "approved"
+              : agency.approvalReview?.status || "pending",
+          rejectionReason: agency.approvalReview?.rejectionReason,
           agentProfileCompleted: completion.isComplete,
           requiresKycCompletion: !completion.isComplete,
           profileCompletion: completion,
+        },
+        data: {
+          token: accessToken,
+          agency: {
+            _id: agency._id,
+            role: agency.role || "agency",
+            agencyId: agency.agencyId,
+            referralCode: agency.referralCode,
+            email: agency.email,
+            name: agency.name,
+            mobile: agency.mobile,
+            parentAgency: agency.parentAgency,
+            status: agency.status,
+            onboardingStatus:
+              agency.status === UserStatus.ACTIVE &&
+              agency.approvalReview?.status !== "rejected"
+                ? "approved"
+                : agency.approvalReview?.status || "pending",
+            rejectionReason: agency.approvalReview?.rejectionReason,
+            agentProfileCompleted: completion.isComplete,
+            requiresKycCompletion: !completion.isComplete,
+            profileCompletion: completion,
+          },
         },
       });
     } catch (error) {
@@ -537,11 +803,11 @@ export class AgencyController {
   ) {
     try {
       const { _id } = req.user;
-      const agency = await agencyService.getById(_id);
+      const agency = await Agency.findById(_id);
       if (!agency)
         return res.status(404).json(new ApiError(404, "Agency not found"));
 
-      const payload = withAgencyProfileMeta(agency);
+      const payload = sanitizeAgencyForSelf(agency);
       if (agency?.agentProfileCompleted !== payload.agentProfileCompleted) {
         await Agency.findByIdAndUpdate(_id, {
           agentProfileCompleted: payload.agentProfileCompleted,
@@ -635,6 +901,166 @@ export class AgencyController {
     }
   }
 
+  static async registerPushToken(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const agencyId = req.user?._id || req.user?.id;
+      const token = String(req.body?.token || req.body?.fcmToken || "").trim();
+      if (!agencyId) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+      if (!token) {
+        return res.status(400).json(new ApiError(400, "FCM token is required"));
+      }
+
+      const platform = normalizePushPlatform(req.body?.platform);
+      const deviceId = String(req.body?.deviceId || "").trim();
+      const appVersion = String(req.body?.appVersion || "").trim();
+      const now = new Date();
+
+      await Promise.all([
+        Agency.updateMany(
+          {
+            _id: { $ne: agencyId },
+            $or: [{ fcmToken: token }, { "fcmTokens.token": token }],
+          },
+          {
+            $unset: { fcmToken: "" },
+            $pull: { fcmTokens: { token } },
+          },
+        ),
+        User.updateMany(
+          {
+            $or: [{ fcmToken: token }, { "fcmTokens.token": token }],
+          },
+          {
+            $unset: { fcmToken: "" },
+            $pull: { fcmTokens: { token } },
+          },
+        ),
+      ]);
+
+      const agency: any = await Agency.findById(agencyId);
+      if (!agency) {
+        return res.status(404).json(new ApiError(404, "Agency not found"));
+      }
+
+      const existingTokens = Array.isArray(agency.fcmTokens)
+        ? agency.fcmTokens
+        : [];
+      const tokenIndex = existingTokens.findIndex(
+        (item: any) => item?.token === token,
+      );
+      const tokenRecord = {
+        token,
+        active: true,
+        platform,
+        deviceId,
+        appVersion,
+        lastRegisteredAt: now,
+        lastUsedAt: now,
+      };
+
+      if (tokenIndex >= 0) {
+        existingTokens[tokenIndex] = {
+          ...existingTokens[tokenIndex].toObject?.(),
+          ...existingTokens[tokenIndex],
+          ...tokenRecord,
+          deviceId: deviceId || existingTokens[tokenIndex]?.deviceId,
+          appVersion: appVersion || existingTokens[tokenIndex]?.appVersion,
+        };
+      } else {
+        existingTokens.push(tokenRecord);
+      }
+
+      agency.fcmToken = token;
+      agency.fcmTokens = existingTokens
+        .filter((item: any) => item?.token)
+        .sort(
+          (first: any, second: any) =>
+            new Date(second?.lastRegisteredAt || 0).getTime() -
+            new Date(first?.lastRegisteredAt || 0).getTime(),
+        )
+        .slice(0, 10);
+      agency.notification = {
+        sms: agency.notification?.sms ?? true,
+        email: agency.notification?.email ?? true,
+        whatsapp: agency.notification?.whatsapp ?? true,
+        push: agency.notification?.push ?? true,
+      };
+      await agency.save();
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            registered: true,
+            platform,
+            activeTokens: agency.fcmTokens.filter(
+              (item: any) => item?.active !== false,
+            ).length,
+          },
+          "B2B push token registered successfully",
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async unregisterPushToken(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const agencyId = req.user?._id || req.user?.id;
+      const token = String(req.body?.token || req.body?.fcmToken || "").trim();
+      if (!agencyId) {
+        return res.status(401).json(new ApiError(401, "Unauthorized"));
+      }
+      if (!token) {
+        return res.status(400).json(new ApiError(400, "FCM token is required"));
+      }
+
+      const agency: any = await Agency.findById(agencyId);
+      if (!agency) {
+        return res.status(404).json(new ApiError(404, "Agency not found"));
+      }
+
+      agency.fcmTokens = (
+        Array.isArray(agency.fcmTokens) ? agency.fcmTokens : []
+      ).map((item: any) =>
+        item?.token === token
+          ? { ...item.toObject?.(), ...item, active: false }
+          : item,
+      );
+      if (agency.fcmToken === token) {
+        agency.fcmToken =
+          agency.fcmTokens.find(
+            (item: any) =>
+              item?.active !== false && item?.token && item.token !== token,
+          )?.token || undefined;
+      }
+      await agency.save();
+
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            { unregistered: true },
+            "B2B push token unregistered successfully",
+          ),
+        );
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async getTeamMembers(
     req: Request | any,
     res: Response,
@@ -657,7 +1083,11 @@ export class AgencyController {
       return res
         .status(200)
         .json(
-          new ApiResponse(200, members, "Team members fetched successfully"),
+          new ApiResponse(
+            200,
+            members.map((member: any) => sanitizeAgencyForSelf(member)),
+            "Team members fetched successfully",
+          ),
         );
     } catch (error) {
       next(error);
@@ -690,7 +1120,13 @@ export class AgencyController {
       }
       return res
         .status(200)
-        .json(new ApiResponse(200, member, "Team member fetched successfully"));
+        .json(
+          new ApiResponse(
+            200,
+            sanitizeAgencyForSelf(member),
+            "Team member fetched successfully",
+          ),
+        );
     } catch (error) {
       next(error);
     }
@@ -724,7 +1160,53 @@ export class AgencyController {
       const employmentDetails = parseJSONSafely(req.body.employmentDetails, {});
       const financialDetails = parseJSONSafely(req.body.financialDetails, {});
       const bankDetails = parseJSONSafely(req.body.bankDetails, {});
+      const hasDocumentSubmission =
+        req.body.documents !== undefined ||
+        req.body.kycDocuments !== undefined ||
+        req.body.addressProof !== undefined ||
+        req.body.incomeProof !== undefined;
       const documents = parseJSONSafely(req.body.documents, []);
+
+      delete personalDetails.mobile;
+      delete (personalDetails as any).isMobileVerified;
+      const sanitizeAddress = (value: any) => {
+        const source = value && typeof value === "object" ? value : {};
+        return {
+          city: source.city,
+          state: source.state,
+          street: source.street || source.address,
+          country: source.country,
+          postalCode: source.postalCode || source.pinCode || source.pincode,
+          label: source.label,
+          isDefault: Boolean(source.isDefault),
+        };
+      };
+      const submittedDocuments = [
+        ...normalizeDocumentEntries(documents),
+        ...mapUploadsToDocuments(req.body.kycDocuments, "kyc_document"),
+        ...mapUploadsToDocuments(req.body.addressProof, "address_proof"),
+        ...mapUploadsToDocuments(req.body.incomeProof, "income_proof"),
+      ].map((document: any) => ({ ...document, verified: false }));
+      const submittedAddressDetails: Record<string, any> = {};
+      if (addressDetails.currentAddress) {
+        submittedAddressDetails.currentAddress = sanitizeAddress(
+          addressDetails.currentAddress,
+        );
+      }
+      if (addressDetails.permanentAddress) {
+        submittedAddressDetails.permanentAddress = sanitizeAddress(
+          addressDetails.permanentAddress,
+        );
+      }
+      if (addressDetails.proofOfAddress) {
+        submittedAddressDetails.proofOfAddress = {
+          ...normalizeDocumentEntries(
+            addressDetails.proofOfAddress,
+            "address_proof",
+          )[0],
+          verified: false,
+        };
+      }
 
       const name = personalDetails.fullName || req.body.name;
       const email = personalDetails.email || req.body.email;
@@ -768,20 +1250,27 @@ export class AgencyController {
             req.body.reusableAcrossApplications,
             true,
           ),
-          personalDetails,
-          addressDetails,
+          personalDetails: { ...personalDetails, mobile },
+          addressDetails: submittedAddressDetails,
           employmentDetails,
           financialDetails,
-          documents: Array.isArray(documents) ? documents : [],
+          documents: hasDocumentSubmission ? submittedDocuments : [],
         },
-        ...(bankDetails && Object.keys(bankDetails).length
-          ? { bankDetails }
-          : {}),
       });
+      if (bankDetails && Object.keys(bankDetails).length) {
+        await applyEncryptedAgencyBankDetails(member, bankDetails);
+        await member.save();
+      }
 
       return res
         .status(201)
-        .json(new ApiResponse(201, member, "Team member created successfully"));
+        .json(
+          new ApiResponse(
+            201,
+            sanitizeAgencyForSelf(member),
+            "Team member created successfully",
+          ),
+        );
     } catch (error) {
       next(error);
     }
@@ -823,8 +1312,57 @@ export class AgencyController {
       ) as Record<string, any>;
       const employmentDetails = parseJSONSafely(req.body.employmentDetails, {});
       const financialDetails = parseJSONSafely(req.body.financialDetails, {});
-      const bankDetails = parseJSONSafely(req.body.bankDetails, {});
+      const bankDetails = parseJSONSafely<Record<string, any>>(
+        req.body.bankDetails,
+        {},
+      );
       const documents = parseJSONSafely(req.body.documents, []);
+
+      const hasDocumentSubmission =
+        req.body.documents !== undefined ||
+        req.body.kycDocuments !== undefined ||
+        req.body.addressProof !== undefined ||
+        req.body.incomeProof !== undefined;
+      delete personalDetails.mobile;
+      delete (personalDetails as any).isMobileVerified;
+      const sanitizeAddress = (value: any) => {
+        const source = value && typeof value === "object" ? value : {};
+        return {
+          city: source.city,
+          state: source.state,
+          street: source.street || source.address,
+          country: source.country,
+          postalCode: source.postalCode || source.pinCode || source.pincode,
+          label: source.label,
+          isDefault: Boolean(source.isDefault),
+        };
+      };
+      const submittedDocuments = [
+        ...normalizeDocumentEntries(documents),
+        ...mapUploadsToDocuments(req.body.kycDocuments, "kyc_document"),
+        ...mapUploadsToDocuments(req.body.addressProof, "address_proof"),
+        ...mapUploadsToDocuments(req.body.incomeProof, "income_proof"),
+      ].map((document: any) => ({ ...document, verified: false }));
+      const submittedAddressDetails: Record<string, any> = {};
+      if (addressDetails.currentAddress) {
+        submittedAddressDetails.currentAddress = sanitizeAddress(
+          addressDetails.currentAddress,
+        );
+      }
+      if (addressDetails.permanentAddress) {
+        submittedAddressDetails.permanentAddress = sanitizeAddress(
+          addressDetails.permanentAddress,
+        );
+      }
+      if (addressDetails.proofOfAddress) {
+        submittedAddressDetails.proofOfAddress = {
+          ...normalizeDocumentEntries(
+            addressDetails.proofOfAddress,
+            "address_proof",
+          )[0],
+          verified: false,
+        };
+      }
 
       const existingKyc = member.kycProfile?.toObject
         ? member.kycProfile.toObject()
@@ -839,6 +1377,7 @@ export class AgencyController {
         personalDetails: {
           ...(existingKyc.personalDetails || {}),
           ...personalDetails,
+          mobile: personalDetails.mobile || member.mobile,
         },
         addressDetails: {
           ...(existingKyc.addressDetails || {}),
@@ -852,7 +1391,17 @@ export class AgencyController {
           ...(existingKyc.financialDetails || {}),
           ...financialDetails,
         },
-        documents: Array.isArray(documents) ? documents : existingKyc.documents,
+        documents:
+          req.body.documents !== undefined
+            ? mergeDocuments(
+                existingKyc.documents || [],
+                normalizeDocumentEntries(documents).map((document: any) => ({
+                  ...document,
+                  verified: false,
+                })),
+              )
+            : existingKyc.documents,
+        verification: existingKyc.verification,
       };
 
       if (personalDetails?.fullName) member.name = personalDetails.fullName;
@@ -887,19 +1436,20 @@ export class AgencyController {
       }
 
       if (bankDetails && Object.keys(bankDetails).length > 0) {
-        member.bankDetails = {
-          ...(member.bankDetails?.toObject
-            ? member.bankDetails.toObject()
-            : member.bankDetails || {}),
-          ...bankDetails,
-        };
+        await applyEncryptedAgencyBankDetails(member, bankDetails);
       }
 
       await member.save();
 
       return res
         .status(200)
-        .json(new ApiResponse(200, member, "Team member updated successfully"));
+        .json(
+          new ApiResponse(
+            200,
+            sanitizeAgencyForSelf(member),
+            "Team member updated successfully",
+          ),
+        );
     } catch (error) {
       next(error);
     }
@@ -1247,6 +1797,10 @@ export class AgencyController {
           : "all";
       const loanType =
         typeof req.query?.loanType === "string" ? req.query.loanType : undefined;
+      const productVariant =
+        typeof req.query?.productVariant === "string"
+          ? req.query.productVariant
+          : undefined;
       const search =
         typeof req.query?.search === "string" ? req.query.search : undefined;
       const status =
@@ -1270,6 +1824,7 @@ export class AgencyController {
             ? req.query.productType
             : undefined,
         loanType,
+        productVariant,
         status,
         search,
         minAmount,
@@ -1369,8 +1924,7 @@ export class AgencyController {
   ) {
     try {
       const { _id } = req.user;
-      const { id } = req.params;
-      const existing = await agencyService.getById(id || _id);
+      const existing = await Agency.findById(_id);
       if (!existing)
         return res.status(404).json(new ApiError(404, "Agency not found"));
 
@@ -1389,11 +1943,72 @@ export class AgencyController {
         );
       }
 
-      const data: any = { ...req.body, avatar: avatar || profilePicture };
-      const result = await agencyService.updateById(id || _id, data);
-      const enriched = withAgencyProfileMeta(result);
+      const data: Record<string, any> = {};
+      for (const key of [
+        "name",
+        "businessName",
+        "gender",
+        "rmName",
+        "rmMobile",
+      ]) {
+        if (req.body?.[key] !== undefined) data[key] = req.body[key];
+      }
+      if (req.body?.email !== undefined) {
+        const email = String(req.body.email || "").trim().toLowerCase();
+        if (!/^\S+@\S+\.\S+$/.test(email)) {
+          throw new ApiError(400, "Valid email is required");
+        }
+        const duplicate = await Agency.exists({ email, _id: { $ne: _id } });
+        if (duplicate) throw new ApiError(409, "Email already in use");
+        data.email = email;
+        if (email !== existing.email) data.isEmailVerified = false;
+      }
+      if (req.body?.notification && typeof req.body.notification === "object") {
+        data.notification = {
+          sms: normalizeBoolean(req.body.notification.sms, existing.notification?.sms ?? true),
+          push: normalizeBoolean(req.body.notification.push, existing.notification?.push ?? true),
+          email: normalizeBoolean(req.body.notification.email, existing.notification?.email ?? true),
+          whatsapp: normalizeBoolean(req.body.notification.whatsapp, existing.notification?.whatsapp ?? true),
+        };
+      }
+      if (req.body?.agreedToTerms === true || req.body?.agreedToTerms === "true") {
+        data.agreedToTerms = true;
+      }
+      if (
+        req.body?.privacyPolicyAccepted === true ||
+        req.body?.privacyPolicyAccepted === "true"
+      ) {
+        data.privacyPolicyAccepted = true;
+      }
+      if (avatar || profilePicture) data.avatar = avatar || profilePicture;
+      const reviewedProfileChanged = ["name", "businessName", "email"].some(
+        (key) =>
+          Object.prototype.hasOwnProperty.call(data, key) &&
+          String(data[key] || "").trim().toLowerCase() !==
+            String((existing as any)[key] || "").trim().toLowerCase(),
+      );
+      if (
+        existing.role === "agency" &&
+        !existing.parentAgency &&
+        existing.status === UserStatus.ACTIVE &&
+        reviewedProfileChanged
+      ) {
+        data.status = UserStatus.PENDING_VERIFICATION;
+        data.approvalReview = {
+          ...((existing.approvalReview as any)?.toObject?.() || existing.approvalReview || {}),
+          status: "pending",
+          resubmittedAt: new Date(),
+          notes: "Reviewed profile details changed by DSA; admin re-approval required",
+        };
+      }
+      const result = await Agency.findByIdAndUpdate(
+        _id,
+        { $set: data },
+        { new: true, runValidators: true },
+      );
+      const enriched = sanitizeAgencyForSelf(result);
       if (result?.agentProfileCompleted !== enriched.agentProfileCompleted) {
-        await Agency.findByIdAndUpdate(id || _id, {
+        await Agency.findByIdAndUpdate(_id, {
           agentProfileCompleted: enriched.agentProfileCompleted,
         });
       }
@@ -1427,8 +2042,66 @@ export class AgencyController {
       ) as Record<string, any>;
       const employmentDetails = parseJSONSafely(req.body.employmentDetails, {});
       const financialDetails = parseJSONSafely(req.body.financialDetails, {});
-      const bankDetails = parseJSONSafely(req.body.bankDetails, {});
+      const bankDetails = parseJSONSafely<Record<string, any>>(
+        req.body.bankDetails,
+        {},
+      );
       const documents = parseJSONSafely(req.body.documents, []);
+      const reviewedKycSubmitted = [
+        "personalDetails",
+        "addressDetails",
+        "bankDetails",
+        "documents",
+        "kycDocuments",
+        "addressProof",
+        "incomeProof",
+      ].some((key) => req.body?.[key] !== undefined);
+
+      const hasDocumentSubmission =
+        req.body.documents !== undefined ||
+        req.body.kycDocuments !== undefined ||
+        req.body.addressProof !== undefined ||
+        req.body.incomeProof !== undefined;
+      delete personalDetails.mobile;
+      delete (personalDetails as any).isMobileVerified;
+      const sanitizeAddress = (value: any) => {
+        const source = value && typeof value === "object" ? value : {};
+        return {
+          city: source.city,
+          state: source.state,
+          street: source.street || source.address,
+          country: source.country,
+          postalCode: source.postalCode || source.pinCode || source.pincode,
+          label: source.label,
+          isDefault: Boolean(source.isDefault),
+        };
+      };
+      const submittedDocuments = [
+        ...normalizeDocumentEntries(documents),
+        ...mapUploadsToDocuments(req.body.kycDocuments, "kyc_document"),
+        ...mapUploadsToDocuments(req.body.addressProof, "address_proof"),
+        ...mapUploadsToDocuments(req.body.incomeProof, "income_proof"),
+      ].map((document: any) => ({ ...document, verified: false }));
+      const submittedAddressDetails: Record<string, any> = {};
+      if (addressDetails.currentAddress) {
+        submittedAddressDetails.currentAddress = sanitizeAddress(
+          addressDetails.currentAddress,
+        );
+      }
+      if (addressDetails.permanentAddress) {
+        submittedAddressDetails.permanentAddress = sanitizeAddress(
+          addressDetails.permanentAddress,
+        );
+      }
+      if (addressDetails.proofOfAddress) {
+        submittedAddressDetails.proofOfAddress = {
+          ...normalizeDocumentEntries(
+            addressDetails.proofOfAddress,
+            "address_proof",
+          )[0],
+          verified: false,
+        };
+      }
 
       const existingKyc = agency.kycProfile?.toObject
         ? agency.kycProfile.toObject()
@@ -1443,10 +2116,11 @@ export class AgencyController {
         personalDetails: {
           ...(existingKyc.personalDetails || {}),
           ...personalDetails,
+          mobile: agency.mobile,
         },
         addressDetails: {
           ...(existingKyc.addressDetails || {}),
-          ...addressDetails,
+          ...submittedAddressDetails,
         },
         employmentDetails: {
           ...(existingKyc.employmentDetails || {}),
@@ -1456,7 +2130,10 @@ export class AgencyController {
           ...(existingKyc.financialDetails || {}),
           ...financialDetails,
         },
-        documents: Array.isArray(documents) ? documents : existingKyc.documents,
+        documents: hasDocumentSubmission
+          ? mergeDocuments(existingKyc.documents || [], submittedDocuments)
+          : existingKyc.documents,
+        verification: existingKyc.verification,
       };
 
       agency.kycProfile = kycProfile;
@@ -1464,27 +2141,46 @@ export class AgencyController {
         agency.name = personalDetails.fullName;
       }
       if (personalDetails?.email) {
-        agency.email = personalDetails.email;
-      }
-      if (personalDetails?.mobile) {
-        agency.mobile = personalDetails.mobile;
+        const email = String(personalDetails.email).trim().toLowerCase();
+        if (!/^\S+@\S+\.\S+$/.test(email)) {
+          throw new ApiError(400, "Valid email is required");
+        }
+        const duplicate = await Agency.exists({ email, _id: { $ne: agency._id } });
+        if (duplicate) throw new ApiError(409, "Email already in use");
+        if (email !== agency.email) agency.isEmailVerified = false;
+        agency.email = email;
       }
       if (bankDetails && Object.keys(bankDetails).length > 0) {
-        agency.bankDetails = {
-          ...(agency.bankDetails?.toObject
-            ? agency.bankDetails.toObject()
-            : agency.bankDetails || {}),
-          ...bankDetails,
-        };
+        await applyEncryptedAgencyBankDetails(agency, bankDetails);
       }
       agency.agentProfileCompleted = evaluateAgencyProfileCompletion(
         agency,
       ).isComplete;
+      if (
+        agency.role === "agency" &&
+        !agency.parentAgency &&
+        agency.status === UserStatus.ACTIVE &&
+        reviewedKycSubmitted
+      ) {
+        agency.status = UserStatus.PENDING_VERIFICATION;
+        agency.approvalReview = {
+          ...(agency.approvalReview?.toObject?.() || agency.approvalReview || {}),
+          status: "pending",
+          resubmittedAt: new Date(),
+          notes: "Reviewed KYC details changed by DSA; admin re-approval required",
+        };
+      }
       await agency.save();
 
       return res
         .status(200)
-        .json(new ApiResponse(200, agency, "KYC profile updated successfully"));
+        .json(
+          new ApiResponse(
+            200,
+            sanitizeAgencyForSelf(agency),
+            "KYC profile updated successfully",
+          ),
+        );
     } catch (error) {
       next(error);
     }

@@ -5,10 +5,27 @@ import { ApplicationStatus } from "../modals/insurancequery.model";
 const completedLoanApplicationStatuses = new Set<string>([
   ApplicationStatus.COMPLETED,
   ApplicationStatus.COMPLETED_SUCCESS,
+  ApplicationStatus.DISBURSED,
+  ApplicationStatus.DISBURSED_PARTIAL_FULL,
+]);
+
+const terminalLoanApplicationStatuses = new Set<string>([
+  ...completedLoanApplicationStatuses,
+  ApplicationStatus.REJECTED,
+  ApplicationStatus.REJECTED_BY_BANK,
+  ApplicationStatus.CANCELLED,
+  ApplicationStatus.CANCELLED_BY_CUSTOMER,
+  ApplicationStatus.EXPIRED,
+  ApplicationStatus.NOT_INTERESTED,
+  ApplicationStatus.DROPPED_LOST,
+  ApplicationStatus.DUPLICATE,
 ]);
 
 export const isLoanApplicationCompleted = (status?: unknown) =>
   completedLoanApplicationStatuses.has(String(status || "").trim());
+
+export const isLoanApplicationTerminal = (status?: unknown) =>
+  terminalLoanApplicationStatuses.has(String(status || "").trim());
 
 export const syncLinkedCallRecordFollowUp = async ({
   loanQueryId,
@@ -19,14 +36,14 @@ export const syncLinkedCallRecordFollowUp = async ({
   status?: unknown;
   session?: ClientSession | null;
 }) => {
-  const completed = isLoanApplicationCompleted(status);
+  const terminal = isLoanApplicationTerminal(status);
   const update: Record<string, any> = {
     $set: {
-      followUp: !completed,
+      followUp: !terminal,
     },
   };
 
-  if (completed) {
+  if (terminal) {
     update.$unset = {
       callbackAt: "",
       callbackNotifiedAt: "",

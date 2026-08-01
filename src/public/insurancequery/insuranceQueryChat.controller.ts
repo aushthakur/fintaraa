@@ -12,6 +12,7 @@ import {
   decryptQueryMessageText,
   encryptQueryMessageText,
 } from "../../utils/queryChatCrypto";
+import { resolveChatActorRole } from "../../utils/chatStaffRole";
 
 // Helper to determine file type from mimetype
 const getFileType = (
@@ -40,7 +41,29 @@ const toObjectId = (value: any): Types.ObjectId | null => {
   }
 };
 
-const sameId = (a: any, b: any) => String(a || "") === String(b || "");
+const normalizeId = (value: any) => String(value?._id || value || "");
+const sameId = (a: any, b: any) => normalizeId(a) === normalizeId(b);
+
+const assertInsuranceChatAccess = (query: any, role: string, actorId: any) => {
+  const isStaff = ["admin", "lander", "agent"].includes(role);
+  if (!isStaff && !sameId(query.customerId, actorId)) {
+    throw new ApiError(403, "Access denied");
+  }
+  if (
+    role === "lander" &&
+    query.assignedLander &&
+    !sameId(query.assignedLander, actorId)
+  ) {
+    throw new ApiError(403, "Access denied");
+  }
+  if (
+    role === "agent" &&
+    query.assignedAgent &&
+    !sameId(query.assignedAgent, actorId)
+  ) {
+    throw new ApiError(403, "Access denied");
+  }
+};
 
 const resolveSenderModel = async (role: string, senderId: any) => {
   if (role === "admin") return "Admin";
@@ -105,7 +128,8 @@ export class InsuranceQueryChatController {
   static async getMessages(req: Request, res: Response, next: NextFunction) {
     try {
       const queryId = req.params.id;
-      const { role, _id: actorId } = (req as any).user || {};
+      const { role: tokenRole, _id: actorId } = (req as any).user || {};
+      const role = await resolveChatActorRole(actorId, tokenRole);
 
       // Verify insurance query exists
       const query = await InsuranceQuery.findById(queryId);
@@ -113,24 +137,7 @@ export class InsuranceQueryChatController {
         throw new ApiError(404, "Insurance query not found");
       }
 
-      const isStaff = ["admin", "lander", "agent"].includes(role);
-      if (!isStaff && !sameId(query.customerId, actorId)) {
-        throw new ApiError(403, "Access denied");
-      }
-      if (
-        role === "lander" &&
-        query.assignedLander &&
-        !sameId(query.assignedLander, actorId)
-      ) {
-        throw new ApiError(403, "Access denied");
-      }
-      if (
-        role === "agent" &&
-        query.assignedAgent &&
-        !sameId(query.assignedAgent, actorId)
-      ) {
-        throw new ApiError(403, "Access denied");
-      }
+      assertInsuranceChatAccess(query, role, actorId);
 
       // Get messages for this insurance query
       const messages = await Message.find({ insuranceQueryId: queryId })
@@ -196,7 +203,10 @@ export class InsuranceQueryChatController {
       const queryId = req.params.id;
       const { text, receiverId } = req.body;
       const senderId = (req as any).user?._id;
-      const { role } = (req as any).user || {};
+      const role = await resolveChatActorRole(
+        senderId,
+        (req as any).user?.role,
+      );
 
       // Transform uploaded media from S3 middleware
       let attachments: any[] = [];
@@ -229,6 +239,7 @@ export class InsuranceQueryChatController {
       if (!query) {
         throw new ApiError(404, "Insurance query not found");
       }
+      assertInsuranceChatAccess(query, role, senderId);
 
       const senderModel = await resolveSenderModel(role, senderId);
       const customerId = (query.customerId as any)?._id || query.customerId;

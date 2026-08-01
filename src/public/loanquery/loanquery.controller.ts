@@ -10,13 +10,17 @@ import {
   LoanFollowUpStatus,
   LoanFollowUpType,
   allowedFieldsByFormType,
+  isLoanPolicyFieldAllowed,
 } from "../../modals/loanquery.model";
 import { ApplicationStatus } from "../../modals/insurancequery.model";
 import LanderAssignmentEngine from "../../services/landerAssignment.service";
 import mongoose, { Types } from "mongoose";
 import Admin from "../../modals/admin.model";
 import Lander from "../../modals/lander.model";
-import { normalizeLoanType } from "../../utils/loanType";
+import {
+  getLoanTypeMatchValues,
+  normalizeLoanType,
+} from "../../utils/loanType";
 import {
   fetchSurepassRcDetails,
   fetchSurepassCibilReport,
@@ -42,6 +46,19 @@ import {
 } from "../../utils/helper";
 import { syncLinkedCallRecordFollowUp } from "../../services/callRecordFollowUp.service";
 import { leadManagementService } from "../../services/leadManagement.service";
+import { syncApplicationDocumentReviews } from "../../services/applicationDocumentReview.service";
+import { applyDsaAttribution } from "../../services/dsaAttribution.service";
+import {
+  extractStoredCibilPdf,
+  persistCibilPdfReport,
+} from "../../services/cibilPdfStorage.service";
+import { downloadFromS3 } from "../../config/s3Uploader";
+import { syncReferralFromLoanStage } from "../../services/referral.service";
+import {
+  normalizeApplicationCommunicationConsent,
+  recordCommunicationConsentAudit,
+  requiresApplicationWhatsappConsent,
+} from "../../services/communicationConsent.service";
 
 const RC_CACHE_TTL_DAYS = 365;
 const normalizeRcNumber = (value: string) =>
@@ -152,6 +169,42 @@ const attachRcLookupToLoanQuery = async ({
 
 const loanQueryService = new CommonService(LoanQuery);
 const ACTIVE_QUERY_MATCH = { isDeleted: { $ne: true } };
+const CONSTRUCTION_VARIANT_FIELDS = [
+  "policyDetails.productVariant",
+  "policyDetails.metaFlowKey",
+  "policyDetails.requestedProductName",
+  "policyDetails.requestedProductSlug",
+  "policyDetails.productLabel",
+];
+
+const buildLoanProductVariantMatch = (value?: unknown) => {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const key = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const constructionPattern = /construction[\s_-]*loan/i;
+  const constructionConditions = CONSTRUCTION_VARIANT_FIELDS.map((field) => ({
+    [field]: constructionPattern,
+  }));
+
+  if (key === "construction" || key === "constructionloan") {
+    return { $or: constructionConditions };
+  }
+  if (key === "home" || key === "homeloan") {
+    return { $nor: constructionConditions };
+  }
+  throw new ApiError(400, "Invalid productVariant");
+};
+
+const appendLoanProductVariantMatch = (
+  target: Record<string, any>,
+  variantMatch: Record<string, any> | null,
+) => {
+  if (!variantMatch) return;
+  target.$and = [
+    ...(Array.isArray(target.$and) ? target.$and : []),
+    variantMatch,
+  ];
+};
 
 const resolveDateRange = (startRaw: any, endRaw: any, days: number = 7) => {
   return buildDateRangeInTimeZone(
@@ -304,6 +357,7 @@ const sanitizeLoanQueryListItem = (item: any) => {
   const { documents, activities, rcLookup, ...rest } = item;
   return {
     ...rest,
+    loanType: normalizeLoanType(item.loanType) || item.loanType,
     fileStatus: item.fileStatus || item.status,
     policyDetails,
   };
@@ -396,12 +450,12 @@ const resolveActorDisplayName = async (actorId: any, role?: string) => {
 };
 
 const terminalLoanFollowUpStatuses = new Set<string>([
-  ApplicationStatus.APPROVED,
   ApplicationStatus.REJECTED,
   ApplicationStatus.CANCELLED,
   ApplicationStatus.EXPIRED,
   ApplicationStatus.COMPLETED,
   ApplicationStatus.DISBURSED,
+  ApplicationStatus.DISBURSED_PARTIAL_FULL,
   ApplicationStatus.NOT_INTERESTED,
   ApplicationStatus.DROPPED_LOST,
   ApplicationStatus.DUPLICATE,
@@ -993,6 +1047,7 @@ const normalizeUploadedAttachment = (value: any): Record<string, any> | null => 
 
   const url =
     parsed.url ||
+    parsed.uri ||
     parsed.fileUrl ||
     parsed.dataUrl ||
     parsed.preview ||
@@ -1022,6 +1077,30 @@ const normalizeUploadedAttachments = (value: any): Record<string, any>[] => {
   return list
     .map((item) => normalizeUploadedAttachment(item))
     .filter(Boolean) as Record<string, any>[];
+};
+
+const mergeUploadedAttachments = (...values: any[]) => {
+  const merged: Record<string, any>[] = [];
+  values
+    .flatMap((value) => normalizeUploadedAttachments(value))
+    .forEach((attachment) => {
+      const url = String(attachment.url || "").trim();
+      const key = String(attachment.key || attachment.fileKey || "").trim();
+      const existingIndex = merged.findIndex((existing) => {
+        const existingUrl = String(existing.url || "").trim();
+        const existingKey = String(existing.key || existing.fileKey || "").trim();
+        return Boolean(
+          (url && existingUrl === url) || (key && existingKey === key),
+        );
+      });
+
+      if (existingIndex >= 0) {
+        merged[existingIndex] = { ...merged[existingIndex], ...attachment };
+      } else {
+        merged.push(attachment);
+      }
+    });
+  return merged;
 };
 
 const reusableLoanDocumentTypes = new Set([
@@ -1063,15 +1142,21 @@ const reusableLoanPolicyDocumentTypes = new Set([
 const applySavedProfileDocuments = async (
   body: Record<string, any>,
   customerId: any,
+  role?: string,
 ) => {
   const rawSelections = parseMaybeJson(body.profileDocumentSelections);
   delete body.profileDocumentSelections;
   if (!Array.isArray(rawSelections) || rawSelections.length === 0) return;
 
-  const user = await User.findById(customerId)
-    .select("digiLockerVault.documents")
-    .lean();
-  const profileDocuments = (user as any)?.digiLockerVault?.documents || [];
+  const isAgencyActor = role === "agency" || role === "agency_member";
+  const profile = isAgencyActor
+    ? await Agency.findById(customerId)
+        .select("digiLockerVault.documents")
+        .lean()
+    : await User.findById(customerId)
+        .select("digiLockerVault.documents")
+        .lean();
+  const profileDocuments = (profile as any)?.digiLockerVault?.documents || [];
   if (!profileDocuments.length) return;
 
   body.documents =
@@ -1193,22 +1278,32 @@ const collectReusableLoanDocuments = (query: any) => {
 const syncLoanDocumentsToCustomerProfile = async ({
   customerId,
   query,
+  role,
   session,
 }: {
   customerId: any;
   query: any;
+  role?: string;
   session?: any;
 }) => {
   const incomingDocuments = collectReusableLoanDocuments(query);
   if (!incomingDocuments.length) return;
 
-  const userQuery = User.findById(customerId);
-  if (session) userQuery.session(session);
-  const user: any = await userQuery;
-  if (!user) return;
+  const isAgencyActor = role === "agency" || role === "agency_member";
+  let profile: any;
+  if (isAgencyActor) {
+    const agencyQuery = Agency.findById(customerId);
+    if (session) agencyQuery.session(session);
+    profile = await agencyQuery;
+  } else {
+    const userQuery = User.findById(customerId);
+    if (session) userQuery.session(session);
+    profile = await userQuery;
+  }
+  if (!profile) return;
 
   const currentVaultDocuments =
-    JSON.parse(JSON.stringify(user.digiLockerVault?.documents || [])) || [];
+    JSON.parse(JSON.stringify(profile.digiLockerVault?.documents || [])) || [];
   const vaultByType = new Map<string, any>();
   currentVaultDocuments.forEach((document: any) => {
     if (document?.docType) vaultByType.set(document.docType, document);
@@ -1221,7 +1316,7 @@ const syncLoanDocumentsToCustomerProfile = async ({
   });
 
   const currentKycDocuments =
-    JSON.parse(JSON.stringify(user.kycProfile?.documents || [])) || [];
+    JSON.parse(JSON.stringify(profile.kycProfile?.documents || [])) || [];
   const kycByIdentity = new Map<string, any>();
   currentKycDocuments.forEach((document: any) => {
     if (!document?.docType) return;
@@ -1234,13 +1329,13 @@ const syncLoanDocumentsToCustomerProfile = async ({
     kycByIdentity.set(`${document.docType}:${document.fileUrl}`, document);
   });
 
-  user.set("digiLockerVault", {
-    storageProvider: user.digiLockerVault?.storageProvider || "internal",
+  profile.set("digiLockerVault", {
+    storageProvider: profile.digiLockerVault?.storageProvider || "internal",
     syncedAt: new Date(),
     documents: Array.from(vaultByType.values()),
   });
-  user.set("kycProfile.documents", Array.from(kycByIdentity.values()));
-  await user.save({ ...(session ? { session } : {}) });
+  profile.set("kycProfile.documents", Array.from(kycByIdentity.values()));
+  await profile.save({ ...(session ? { session } : {}) });
 };
 
 const normalizeCoApplicants = (value: any) => {
@@ -1325,6 +1420,7 @@ const processFileUploads = (req: Request) => {
   if (!req.body.documents) {
     req.body.documents = {};
   }
+  req.body.attribution = parseMaybeJson(req.body.attribution) || {};
 
   if (req.body.policyDetails?.coApplicants) {
     req.body.policyDetails.coApplicants = normalizeCoApplicants(
@@ -1379,7 +1475,7 @@ const processFileUploads = (req: Request) => {
           ...existing,
           key: existing.key || `extra_${documentIndex + 1}`,
           label: existing.label || existing.key || `Extra Document ${documentIndex + 1}`,
-          files: attachments,
+          files: mergeUploadedAttachments(existing.files, attachments),
         };
         coApplicants[index].documents = documents;
       }
@@ -1400,7 +1496,6 @@ const processFileUploads = (req: Request) => {
 
   // Get allowed fields for this loan type (if loanType is provided)
   const loanType = req.body.loanType;
-  const allowedFields = loanType ? allowedFieldsByFormType[loanType] || [] : [];
 
   // Process policyDetails document fields (uploaded files/images)
   // These are URL fields that go into policyDetails
@@ -1431,8 +1526,11 @@ const processFileUploads = (req: Request) => {
   ]);
 
   policyDetailsDocumentFields.forEach((field) => {
-    // Only process if field is allowed for this loan type (or if loanType is not set yet)
-    if (req.body[field] && (!loanType || allowedFields.includes(field))) {
+    // Empty field lists are intentionally permissive for dynamic product forms.
+    if (
+      req.body[field] &&
+      isLoanPolicyFieldAllowed(loanType, field)
+    ) {
       const urls = extractFileUrls(req.body[field]);
       if (urls.length) {
         req.body.policyDetails[field] = multiFilePolicyDocumentFields.has(field)
@@ -1526,6 +1624,48 @@ const normalizeAccountType = (value?: string) => {
 };
 
 export class LoanQueryController {
+  static async getPublicTrackingStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const applicationId = String(req.query?.applicationId || "")
+        .trim()
+        .toUpperCase();
+      const mobile = String(req.query?.mobile || "").replace(/\D/g, "");
+
+      if (!applicationId || mobile.length !== 10) {
+        return res.status(400).json(
+          new ApiError(
+            400,
+            "Application number and a valid 10-digit registered mobile number are required",
+          ),
+        );
+      }
+
+      const query = await LoanQuery.findOne({
+        loanId: applicationId,
+        mobile,
+        isDeleted: { $ne: true },
+      })
+        .select(
+          "_id loanId loanType status loanAmount approved createdAt updatedAt",
+        )
+        .lean();
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          query || null,
+          query ? "Loan application found" : "No matching loan application found",
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async fetchRcDetails(req: Request, res: Response, next: NextFunction) {
     let idNumber = "";
     try {
@@ -1723,6 +1863,10 @@ export class LoanQueryController {
       user.cibilLastFetchedAt = now;
       (user as any).cibilReport = report.data;
       (user as any).cibilRequestPayload = payload;
+      if (extractStoredCibilPdf(report.data)) {
+        user.cibilPdfLastFetchedAt = now;
+        (user as any).cibilPdfReport = report.data;
+      }
       await user.save();
 
       return res.status(200).json(
@@ -1816,13 +1960,13 @@ export class LoanQueryController {
     }
   }
 
-  static async fetchCibilPdfByMobile(
+  static async fetchCibilPdfForPerson(
     req: Request,
     res: Response,
     next: NextFunction,
   ) {
     try {
-      const { role } = (req as any).user || {};
+      const { role, _id } = (req as any).user || {};
       if (!["admin", "agent", "lander"].includes(role)) {
         return res
           .status(403)
@@ -1831,12 +1975,182 @@ export class LoanQueryController {
           );
       }
 
-      const { mobile } = req.body || {};
+      const query = await LoanQuery.findById(req.params.id).lean();
+      if (!query) {
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
+      }
+
+      if (!(await canAccessLoanQuery(query, _id, role))) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(
+              403,
+              "You can only fetch CIBIL PDF for queries created or assigned to you",
+            ),
+          );
+      }
+
+      const payload = prepareSurepassCibilPayload({
+        name: req.body?.name,
+        panNumber: req.body?.panNumber,
+        mobile: req.body?.mobile,
+        gender: req.body?.gender,
+        consent: req.body?.consent || "Y",
+      });
+      const environment =
+        req.body?.environment === "production"
+          ? "production"
+          : req.body?.environment === "sandbox"
+            ? "sandbox"
+            : undefined;
+      const report = await fetchSurepassCibilPdfReport(payload, {
+        environment,
+      });
+      const storage = extractStoredCibilPdf(report.data);
+
+      return res.status(200).json(
+        new ApiResponse(200, {
+          payload,
+          cached: false,
+          report: report.data,
+          pdfUrl: storage?.url,
+          environment: report.environment,
+          lastFetchedAt: new Date(),
+        }),
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async downloadCoApplicantCibilPdf(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { role, _id } = (req as any).user || {};
+      const queryId = req.params.id;
+      const applicantIndex = Number(req.params.index);
+      if (!Types.ObjectId.isValid(queryId)) {
+        return res.status(400).json(new ApiError(400, "Invalid query id"));
+      }
+      if (!Number.isInteger(applicantIndex) || applicantIndex < 0 || applicantIndex >= 10) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid co-applicant index"));
+      }
+
+      const query = await LoanQuery.findById(queryId).lean();
+      if (!query) {
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
+      }
+      if (!(await canAccessLoanQuery(query, _id, role))) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(
+              403,
+              "You can only access CIBIL PDFs for your own or assigned queries",
+            ),
+          );
+      }
+
+      const coApplicants = Array.isArray(query.policyDetails?.coApplicants)
+        ? query.policyDetails.coApplicants
+        : [];
+      const coApplicant = coApplicants[applicantIndex];
+      if (!coApplicant) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Co-applicant not found"));
+      }
+
+      let report = coApplicant.cibilPdfReport;
+      if (!report) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Co-applicant CIBIL PDF is not available"));
+      }
+      let storage = extractStoredCibilPdf(report);
+      if (!storage) {
+        const migrated = await persistCibilPdfReport(report, {
+          environment: "production",
+        });
+        report = migrated.report;
+        storage = migrated.storage;
+        await LoanQuery.updateOne(
+          { _id: queryId },
+          {
+            $set: {
+              [`policyDetails.coApplicants.${applicantIndex}.cibilPdfReport`]:
+                report,
+            },
+          },
+        );
+      }
+
+      const storedFile = await downloadFromS3(storage.key);
+      if (storedFile.body.subarray(0, 5).toString() !== "%PDF-") {
+        throw new ApiError(502, "Stored co-applicant CIBIL file is invalid");
+      }
+
+      const disposition = req.query.download === "1" ? "attachment" : "inline";
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader(
+        "Content-Disposition",
+        `${disposition}; filename="co-applicant-${applicantIndex + 1}-cibil.pdf"`,
+      );
+      res.setHeader("Content-Length", String(storedFile.body.length));
+      return res.status(200).send(storedFile.body);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async fetchCibilPdfByMobile(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { role, _id } = (req as any).user || {};
+      if (!["admin", "agent", "lander"].includes(role)) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(403, "You are not allowed to fetch CIBIL PDF here"),
+          );
+      }
+
+      const { mobile, queryId } = req.body || {};
 
       if (!mobile) {
         return res
           .status(400)
           .json(new ApiError(400, "Mobile number is required"));
+      }
+      if (!Types.ObjectId.isValid(String(queryId || ""))) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "A valid loan query id is required"));
+      }
+
+      const query = await LoanQuery.findById(queryId).lean();
+      if (!query) {
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
+      }
+      if (!(await canAccessLoanQuery(query, _id, role))) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(
+              403,
+              "You can only fetch CIBIL PDF for queries created or assigned to you",
+            ),
+          );
       }
 
       // Normalize mobile number
@@ -1849,34 +2163,59 @@ export class LoanQueryController {
           .status(404)
           .json(new ApiError(404, "User not found with this mobile number"));
       }
+      if (String(query.customerId) !== String(user._id)) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(403, "The mobile number does not belong to this query"),
+          );
+      }
 
       const { forceRefresh = false } = req.body || {};
       const now = new Date();
-      const lastFetched = user.cibilPdfLastFetchedAt
-        ? new Date(user.cibilPdfLastFetchedAt)
+      const scoreReport = (user as any)?.cibilReport || null;
+      const scoreReportHasStoredPdf = Boolean(
+        extractStoredCibilPdf(scoreReport),
+      );
+      let cachedReport =
+        (user as any)?.cibilPdfReport ||
+        (scoreReportHasStoredPdf ? scoreReport : null);
+      const effectiveLastFetchedAt =
+        user.cibilPdfLastFetchedAt ||
+        (scoreReportHasStoredPdf ? user.cibilLastFetchedAt : null);
+      const lastFetched = effectiveLastFetchedAt
+        ? new Date(effectiveLastFetchedAt)
         : null;
       const msDiff = lastFetched ? now.getTime() - lastFetched.getTime() : null;
       const daysSinceFetch = msDiff ? msDiff / (1000 * 60 * 60 * 24) : null;
       const refreshLocked = daysSinceFetch !== null && daysSinceFetch < 30;
       const daysRemaining = Math.max(0, Math.ceil(30 - (daysSinceFetch || 0)));
-      const cachedReport = (user as any)?.cibilPdfReport || null;
-      const cachedLink =
-        cachedReport?.data?.credit_report_link ||
-        cachedReport?.data?.creditReportLink ||
-        cachedReport?.credit_report_link ||
-        cachedReport?.creditReportLink ||
-        null;
+      if (!forceRefresh && cachedReport && refreshLocked) {
+        try {
+          const storedCachedReport = await persistCibilPdfReport(cachedReport, {
+            environment: "production",
+          });
+          cachedReport = storedCachedReport.report;
+          if (storedCachedReport.uploaded || !(user as any)?.cibilPdfReport) {
+            (user as any).cibilPdfReport = cachedReport;
+            user.cibilPdfLastFetchedAt =
+              user.cibilPdfLastFetchedAt || effectiveLastFetchedAt || now;
+            await user.save();
+          }
 
-      if (!forceRefresh && cachedLink && refreshLocked) {
-        return res.status(200).json(
-          new ApiResponse(200, {
-            cached: true,
-            report: cachedReport,
-            refreshAvailableInDays: daysRemaining,
-            lastFetchedAt: user.cibilPdfLastFetchedAt,
-            message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
-          }),
-        );
+          return res.status(200).json(
+            new ApiResponse(200, {
+              cached: true,
+              report: cachedReport,
+              pdfUrl: storedCachedReport.storage.url,
+              refreshAvailableInDays: daysRemaining,
+              lastFetchedAt: effectiveLastFetchedAt,
+              message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
+            }),
+          );
+        } catch {
+          // Migrate expired legacy URLs by fetching a fresh provider copy below.
+        }
       }
 
       const payload = prepareSurepassCibilPayload({
@@ -1890,6 +2229,7 @@ export class LoanQueryController {
       const report = await fetchSurepassCibilPdfReport(payload, {
         environment: "production",
       });
+      const storage = extractStoredCibilPdf(report.data);
 
       user.cibilPdfLastFetchedAt = now;
       (user as any).cibilPdfReport = report.data;
@@ -1900,12 +2240,145 @@ export class LoanQueryController {
           payload,
           cached: false,
           report: report.data,
+          pdfUrl: storage?.url,
           environment: report.environment,
           refreshAvailableInDays: daysRemaining,
           lastFetchedAt: user.cibilPdfLastFetchedAt,
           message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
         }),
       );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async downloadCibilPdfByMobile(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { role, _id } = (req as any).user || {};
+      if (!["admin", "agent", "lander"].includes(role)) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(403, "You are not allowed to download CIBIL PDF here"),
+          );
+      }
+
+      const normalizedMobile = String(req.body?.mobile || "")
+        .replace(/\D/g, "")
+        .slice(-10);
+      if (!normalizedMobile) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Mobile number is required"));
+      }
+
+      const queryId = req.body?.queryId;
+      if (!Types.ObjectId.isValid(String(queryId || ""))) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "A valid loan query id is required"));
+      }
+      const query = await LoanQuery.findById(queryId).lean();
+      if (!query) {
+        return res.status(404).json(new ApiError(404, "Loan query not found"));
+      }
+      if (!(await canAccessLoanQuery(query, _id, role))) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(
+              403,
+              "You can only download CIBIL PDF for queries created or assigned to you",
+            ),
+          );
+      }
+
+      const user = await User.findOne({ mobile: normalizedMobile });
+      if (!user) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "User not found with this mobile number"));
+      }
+      if (String(query.customerId) !== String(user._id)) {
+        return res
+          .status(403)
+          .json(
+            new ApiError(403, "The mobile number does not belong to this query"),
+          );
+      }
+
+      const scoreReport = (user as any)?.cibilReport || null;
+      let report =
+        (user as any)?.cibilPdfReport ||
+        (extractStoredCibilPdf(scoreReport) ? scoreReport : null);
+      let storage = extractStoredCibilPdf(report);
+
+      if (!storage && report) {
+        try {
+          const migratedReport = await persistCibilPdfReport(report, {
+            environment: "production",
+          });
+          report = migratedReport.report;
+          storage = migratedReport.storage;
+          (user as any).cibilPdfReport = report;
+          user.cibilPdfLastFetchedAt =
+            user.cibilPdfLastFetchedAt || user.cibilLastFetchedAt || new Date();
+          await user.save();
+        } catch {
+          // A legacy provider link may already be expired. Refresh it below.
+        }
+      }
+
+      const fetchFreshStoredReport = async () => {
+        const payload = prepareSurepassCibilPayload({
+          name: user.name,
+          mobile: user.mobile,
+          panCard: user.panCard,
+          gender: resolveCibilGender(user.gender),
+          consent: "Y",
+        });
+        const freshReport = await fetchSurepassCibilPdfReport(payload, {
+          environment: "production",
+        });
+        report = freshReport.data;
+        const freshStorage = extractStoredCibilPdf(report);
+        if (!freshStorage) {
+          throw new ApiError(502, "CIBIL PDF storage is unavailable");
+        }
+        user.cibilPdfLastFetchedAt = new Date();
+        (user as any).cibilPdfReport = report;
+        await user.save();
+        return freshStorage;
+      };
+
+      if (!storage) storage = await fetchFreshStoredReport();
+
+      let storedFile;
+      try {
+        storedFile = await downloadFromS3(storage.key);
+        if (storedFile.body.subarray(0, 5).toString() !== "%PDF-") {
+          throw new Error("Stored CIBIL file is not a valid PDF");
+        }
+      } catch {
+        storage = await fetchFreshStoredReport();
+        storedFile = await downloadFromS3(storage.key);
+        if (storedFile.body.subarray(0, 5).toString() !== "%PDF-") {
+          throw new ApiError(502, "CIBIL provider did not return a valid PDF");
+        }
+      }
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="fintaraa-cibil-${normalizedMobile}.pdf"`,
+      );
+      res.setHeader("Content-Length", String(storedFile.body.length));
+      return res.status(200).send(storedFile.body);
     } catch (err) {
       next(err);
     }
@@ -1927,11 +2400,19 @@ export class LoanQueryController {
           .json(new ApiError(401, "User authentication required"));
       }
 
-      const normalizedLoanType = normalizeLoanType(req.body.loanType);
-      if (normalizedLoanType) req.body.loanType = normalizedLoanType;
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "loanType")) {
+        const normalizedLoanType = normalizeLoanType(req.body.loanType);
+        if (!normalizedLoanType) {
+          return res.status(400).json(new ApiError(400, "Invalid loanType"));
+        }
+        req.body.loanType = normalizedLoanType;
+      }
 
       processFileUploads(req);
-      await applySavedProfileDocuments(req.body, customerId);
+      if (role !== "agency" && role !== "agency_member") {
+        await applyDsaAttribution(req.body);
+      }
+      await applySavedProfileDocuments(req.body, customerId, role);
       if (req.body.rcLookup !== undefined) {
         req.body.rcLookup = parseMaybeJson(req.body.rcLookup);
       }
@@ -1946,13 +2427,33 @@ export class LoanQueryController {
       req.body.formSource =
         String(req.body.formSource || req.body.dataSource).trim() ||
         req.body.dataSource;
-      req.body.whatsappConsent =
-        req.body.whatsappConsent === true ||
-        ["true", "1", "yes"].includes(
-          String(req.body.whatsappConsent || "").toLowerCase(),
-        );
-      req.body.communicationConsent =
-        parseMaybeJson(req.body.communicationConsent) || {};
+      const isDraft = req.body.status === ApplicationStatus.DRAFT;
+      const normalizedConsent = normalizeApplicationCommunicationConsent({
+        whatsappConsent: req.body.whatsappConsent,
+        communicationConsent: parseMaybeJson(req.body.communicationConsent),
+        source: req.body.dataSource,
+        formSource: req.body.formSource,
+      });
+      req.body.whatsappConsent = normalizedConsent.whatsapp;
+      req.body.communicationConsent = normalizedConsent.details;
+      if (
+        requiresApplicationWhatsappConsent({
+          status: req.body.status,
+          source: req.body.dataSource,
+          formSource: req.body.formSource,
+          role,
+        }) &&
+        !normalizedConsent.whatsapp
+      ) {
+        return res
+          .status(400)
+          .json(
+            new ApiError(
+              400,
+              "WhatsApp communication consent is required to submit this application",
+            ),
+          );
+      }
 
       const [agency, updatedByName] = await Promise.all([
         role === "agency_member"
@@ -1995,8 +2496,6 @@ export class LoanQueryController {
         );
       }
 
-      const isDraft = req.body.status === ApplicationStatus.DRAFT;
-
       if (
         !isDraft &&
         req.body.loanType &&
@@ -2028,7 +2527,7 @@ export class LoanQueryController {
       if (req.body.loanType) {
         const existingQuery = await LoanQuery.exists({
           customerId,
-          loanType: req.body.loanType,
+          loanType: { $in: getLoanTypeMatchValues(req.body.loanType) },
           status: {
             $nin: [
               ApplicationStatus.COMPLETED,
@@ -2117,10 +2616,31 @@ export class LoanQueryController {
           .json(new ApiError(400, "Failed to create loan query"));
       }
 
+      if (!isDraft && result.whatsappConsent) {
+        await recordCommunicationConsentAudit({
+          actorId: String(customerId),
+          actorRole: role,
+          referenceId: `loan:${String(result._id)}`,
+          purpose: "loan_application_communications",
+          source: result.dataSource,
+          formSource: result.formSource,
+          communicationConsent: result.communicationConsent || {},
+          ipAddress: req.ip,
+          userAgent: String(req.headers["user-agent"] || ""),
+          session,
+          metadata: {
+            applicationId: result.loanId,
+            applicationType: "loan",
+            loanType: result.loanType,
+          },
+        });
+      }
+
       try {
         await syncLoanDocumentsToCustomerProfile({
           customerId,
           query: result,
+          role,
           session,
         });
       } catch (profileDocumentError: any) {
@@ -2131,8 +2651,15 @@ export class LoanQueryController {
       }
 
       if (!isDraft) {
-        await notifyLoanApplicationCreated(result);
-        if (["b2c_app", "b2b_app"].includes(String(result.dataSource || ""))) {
+        await Promise.all([
+          notifyLoanApplicationCreated(result),
+          syncApplicationDocumentReviews(result, { notifyAdmins: true }),
+        ]);
+        if (
+          ["b2c_app", "b2b_app", "website"].includes(
+            String(result.dataSource || ""),
+          )
+        ) {
           try {
             await leadManagementService.captureLead(
               {
@@ -2146,7 +2673,26 @@ export class LoanQueryController {
                 state: result.state,
                 pincode: result.pincode,
                 whatsappOptIn: result.whatsappConsent,
-                tags: ["app_loan_application"],
+                tags: [
+                  result.dataSource === "website"
+                    ? "website_loan_application"
+                    : "app_loan_application",
+                ],
+                utmSource: result.attribution?.source,
+                utmMedium: result.attribution?.medium,
+                utmCampaign: result.attribution?.campaign,
+                utmTerm: result.attribution?.term,
+                utmContent: result.attribution?.content,
+                landingPage: result.attribution?.landingPage,
+                campaignId: result.attribution?.campaign,
+                attribution: result.attribution,
+                queryParams: result.attribution?.queryParams,
+                lastTouchPage: result.attribution?.lastTouchPage,
+                lastTouchQueryParams:
+                  result.attribution?.lastTouchQueryParams,
+                gclid: result.attribution?.gclid,
+                fbclid: result.attribution?.fbclid,
+                dsaReferralCode: result.attribution?.dsaReferralCode,
               },
               {
                 source: result.dataSource,
@@ -2201,6 +2747,10 @@ export class LoanQueryController {
     try {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
+      const productVariantMatch = buildLoanProductVariantMatch(
+        req.query.productVariant,
+      );
+      delete req.query.productVariant;
 
       const requiresStatus =
         role === "admin" || role === "agent" || role === "lander";
@@ -2217,11 +2767,18 @@ export class LoanQueryController {
 
       if (req.query.loanType) {
         const normalized = normalizeLoanType(String(req.query.loanType));
-        if (normalized) req.query.loanType = normalized;
+        if (!normalized) {
+          return res.status(400).json(new ApiError(400, "Invalid loanType"));
+        }
+        delete req.query.loanType;
+        req.query.loanType__in = getLoanTypeMatchValues(normalized) as any;
       }
 
       const prependStages: any[] = [];
       prependStages.push({ $match: ACTIVE_QUERY_MATCH });
+      if (productVariantMatch) {
+        prependStages.push({ $match: productVariantMatch });
+      }
 
       // For agents, show queries assigned to them either as primary or secondary assignee
       if (role === "agent" && userId) {
@@ -2441,10 +2998,9 @@ export class LoanQueryController {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
 
-      const { startDate, endDate, rangePreset, loanType } = req.query as Record<
-        string,
-        string
-      >;
+      const { startDate, endDate, rangePreset, loanType, productVariant } =
+        req.query as Record<string, string>;
+      const productVariantMatch = buildLoanProductVariantMatch(productVariant);
 
       const toDate = (v?: string): Date | null => {
         if (!v) return null;
@@ -2535,7 +3091,13 @@ export class LoanQueryController {
 
       const normalizedLoanType = loanType
         ? normalizeLoanType(String(loanType))
-        : "";
+        : undefined;
+      if (loanType && !normalizedLoanType) {
+        return res.status(400).json(new ApiError(400, "Invalid loanType"));
+      }
+      const loanTypeMatchValues = normalizedLoanType
+        ? getLoanTypeMatchValues(normalizedLoanType)
+        : [];
 
       const scopeForRole = (extra: Record<string, any>) => {
         Object.assign(extra, buildLoanScopeMatch(userId, role));
@@ -2569,11 +3131,14 @@ export class LoanQueryController {
         };
       }
 
-      if (normalizedLoanType) {
-        completedMatch.loanType = normalizedLoanType;
-        currentMatch.loanType = normalizedLoanType;
-        previousMatch.loanType = normalizedLoanType;
+      if (loanTypeMatchValues.length) {
+        completedMatch.loanType = { $in: loanTypeMatchValues };
+        currentMatch.loanType = { $in: loanTypeMatchValues };
+        previousMatch.loanType = { $in: loanTypeMatchValues };
       }
+      appendLoanProductVariantMatch(completedMatch, productVariantMatch);
+      appendLoanProductVariantMatch(currentMatch, productVariantMatch);
+      appendLoanProductVariantMatch(previousMatch, productVariantMatch);
 
       scopeForRole(completedMatch);
       scopeForRole(currentMatch);
@@ -2734,14 +3299,13 @@ export class LoanQueryController {
     try {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
-      const { loanType, startDate, endDate } = req.query as Record<
-        string,
-        string
-      >;
+      const { loanType, startDate, endDate, productVariant } =
+        req.query as Record<string, string>;
+      const productVariantMatch = buildLoanProductVariantMatch(productVariant);
 
       const normalizedLoanType = loanType
         ? normalizeLoanType(String(loanType))
-        : "";
+        : undefined;
       if (loanType && !normalizedLoanType) {
         return res.status(400).json(new ApiError(400, "Invalid loanType"));
       }
@@ -2771,9 +3335,14 @@ export class LoanQueryController {
         match.createdAt = { $gte: start, $lte: end };
       }
 
-      if (normalizedLoanType) {
-        match.loanType = normalizedLoanType;
+      const loanTypeMatchValues = normalizedLoanType
+        ? getLoanTypeMatchValues(normalizedLoanType)
+        : [];
+
+      if (loanTypeMatchValues.length) {
+        match.loanType = { $in: loanTypeMatchValues };
       }
+      appendLoanProductVariantMatch(match, productVariantMatch);
 
       Object.assign(match, buildLoanScopeMatch(userId, role));
 
@@ -2786,9 +3355,10 @@ export class LoanQueryController {
         disbursedMatch.disbursedDate = { $gte: start, $lte: end };
       }
 
-      if (normalizedLoanType) {
-        disbursedMatch.loanType = normalizedLoanType;
+      if (loanTypeMatchValues.length) {
+        disbursedMatch.loanType = { $in: loanTypeMatchValues };
       }
+      appendLoanProductVariantMatch(disbursedMatch, productVariantMatch);
 
       Object.assign(disbursedMatch, buildLoanScopeMatch(userId, role));
 
@@ -3036,7 +3606,16 @@ export class LoanQueryController {
       }
       return res
         .status(200)
-        .json(new ApiResponse(200, result, "Loan query fetched successfully"));
+        .json(
+          new ApiResponse(
+            200,
+            {
+              ...result,
+              loanType: normalizeLoanType(result.loanType) || result.loanType,
+            },
+            "Loan query fetched successfully",
+          ),
+        );
     } catch (err) {
       next(err);
     }
@@ -3057,9 +3636,12 @@ export class LoanQueryController {
         return res.status(400).json(new ApiError(400, "Invalid query id"));
       }
 
-      if (req.body.loanType) {
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "loanType")) {
         const normalized = normalizeLoanType(req.body.loanType);
-        if (normalized) req.body.loanType = normalized;
+        if (!normalized) {
+          return res.status(400).json(new ApiError(400, "Invalid loanType"));
+        }
+        req.body.loanType = normalized;
       }
 
       if (req.body.employmentType) {
@@ -3100,16 +3682,15 @@ export class LoanQueryController {
       }
 
       delete req.body.customerId;
-      if (req.body.whatsappConsent !== undefined) {
-        req.body.whatsappConsent =
-          req.body.whatsappConsent === true ||
-          ["true", "1", "yes"].includes(
-            String(req.body.whatsappConsent || "").toLowerCase(),
-          );
-      }
+      delete req.body.channelAgency;
+      delete req.body.ownerAgency;
+      delete req.body.dsaReferralCode;
+      delete req.body.dsaCode;
+      req.body.attribution = existingResult.attribution || {};
       if (req.body.communicationConsent !== undefined) {
-        req.body.communicationConsent =
-          parseMaybeJson(req.body.communicationConsent) || {};
+        req.body.communicationConsent = parseMaybeJson(
+          req.body.communicationConsent,
+        );
       }
 
       if (req.body.accountType) {
@@ -3153,6 +3734,38 @@ export class LoanQueryController {
       }
 
       const nextStatus = req.body.status || existingResult.status;
+      const normalizedConsent = normalizeApplicationCommunicationConsent({
+        whatsappConsent:
+          req.body.whatsappConsent !== undefined
+            ? req.body.whatsappConsent
+            : existingResult.whatsappConsent,
+        communicationConsent:
+          req.body.communicationConsent !== undefined
+            ? req.body.communicationConsent
+            : existingResult.communicationConsent,
+        source: req.body.dataSource || existingResult.dataSource,
+        formSource: req.body.formSource || existingResult.formSource,
+      });
+      req.body.whatsappConsent = normalizedConsent.whatsapp;
+      req.body.communicationConsent = normalizedConsent.details;
+      if (
+        requiresApplicationWhatsappConsent({
+          status: nextStatus,
+          source: req.body.dataSource || existingResult.dataSource,
+          formSource: req.body.formSource || existingResult.formSource,
+          role,
+        }) &&
+        !normalizedConsent.whatsapp
+      ) {
+        return res
+          .status(400)
+          .json(
+            new ApiError(
+              400,
+              "WhatsApp communication consent is required to submit this application",
+            ),
+          );
+      }
       const explicitFollowUpMutation = buildLoanFollowUpMutation({
         rawBody: rawFollowUpBody,
         existing: existingResult,
@@ -3272,6 +3885,26 @@ export class LoanQueryController {
         existingResult.status === ApplicationStatus.DRAFT &&
         updatedResult.status !== ApplicationStatus.DRAFT;
 
+      if (isDraftSubmitted && updatedResult.whatsappConsent) {
+        await recordCommunicationConsentAudit({
+          actorId: String(customerId),
+          actorRole: role,
+          referenceId: `loan:${String(updatedResult._id)}`,
+          purpose: "loan_application_communications",
+          source: updatedResult.dataSource,
+          formSource: updatedResult.formSource,
+          communicationConsent: updatedResult.communicationConsent || {},
+          ipAddress: req.ip,
+          userAgent: String(req.headers["user-agent"] || ""),
+          session,
+          metadata: {
+            applicationId: updatedResult.loanId,
+            applicationType: "loan",
+            loanType: updatedResult.loanType,
+          },
+        });
+      }
+
       if (isDraftSubmitted && !updatedResult.assignedAgent) {
         updatedResult =
           await EmployeeAssignmentEngine.ensureAssignmentForLoanQuery(
@@ -3301,7 +3934,12 @@ export class LoanQueryController {
       }
 
       if (isDraftSubmitted) {
-        await notifyLoanApplicationCreated(updatedResult);
+        await Promise.all([
+          notifyLoanApplicationCreated(updatedResult),
+          syncApplicationDocumentReviews(updatedResult, {
+            notifyAdmins: true,
+          }),
+        ]);
         if (
           ["b2c_app", "b2b_app"].includes(
             String(updatedResult.dataSource || ""),
@@ -3345,13 +3983,11 @@ export class LoanQueryController {
         }
       }
 
-      if (
-        existingResult.status !== updatedResult.status &&
-        updatedResult.status === ApplicationStatus.DISBURSED
-      ) {
-        await agencyEarningsService.recordLoanDisbursalCommission(
+      if (existingResult.status !== updatedResult.status) {
+        await agencyEarningsService.recordLoanCommissionLifecycle(
           updatedResult,
           customerId?.toString(),
+          session,
         );
       }
 
@@ -3364,6 +4000,12 @@ export class LoanQueryController {
         await notifyLoanStageUpdated(updatedResult, {
           remarks: req.body?.remarks,
         });
+      } else if (
+        Object.prototype.hasOwnProperty.call(req.body, "disbursedAmount")
+      ) {
+        // A disbursed status may be saved before the lender confirms the final
+        // amount. Retry referral eligibility when that explicit evidence lands.
+        await syncReferralFromLoanStage(updatedResult);
       }
 
       return res
@@ -3729,6 +4371,7 @@ export class LoanQueryController {
       // Ensure commission fields are always present (for backward compatibility with old documents)
       const responseData = {
         ...query,
+        loanType: normalizeLoanType(query.loanType) || query.loanType,
         commissionRecorded: query.commissionRecorded ?? false,
         commissionRecordedAt: query.commissionRecordedAt ?? null,
         commissionTransactionId: query.commissionTransactionId ?? null,
@@ -3974,6 +4617,7 @@ export class LoanQueryController {
     try {
       const actorId = (req as any).user?._id;
       const { role } = (req as any).user || {};
+      const session = (req as any).mongoSession;
       const { status, remarks } = req.body;
       const queryId = req.params.id;
 
@@ -3989,6 +4633,7 @@ export class LoanQueryController {
         .select(
           "status customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency createdBy followUpEnabled nextFollowUp",
         )
+        .session(session || null)
         .lean()
         .exec();
 
@@ -4073,23 +4718,20 @@ export class LoanQueryController {
         {
           new: true,
           runValidators: true,
+          session,
         },
       )
         .select(
-          "status updatedByName activities customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency loanId loanType email mobile firstName lastName bankName loanAmount disbursedAmount policyDetails whatsappConsent communicationConsent",
+          "status updatedByName activities customerId assignedAgent assignedAgents assignedLander ownerAgency channelAgency loanId loanType email mobile firstName lastName bankName loanAmount disbursedAmount policyDetails whatsappConsent communicationConsent updatedAt",
         )
-        .populate("customerId", "name email mobile")
         .lean()
         .exec();
 
-      if (
-        oldStatus !== status &&
-        status === ApplicationStatus.DISBURSED &&
-        updatedQuery
-      ) {
-        await agencyEarningsService.recordLoanDisbursalCommission(
+      if (oldStatus !== status && updatedQuery) {
+        await agencyEarningsService.recordLoanCommissionLifecycle(
           updatedQuery,
           actorId?.toString(),
+          session,
         );
       }
 
@@ -4097,6 +4739,7 @@ export class LoanQueryController {
         await syncLinkedCallRecordFollowUp({
           loanQueryId: queryId,
           status: updatedQuery.status,
+          session,
         });
         await notifyLoanStageUpdated(updatedQuery, { remarks });
       }
@@ -4232,7 +4875,13 @@ export class LoanQueryController {
         .exec();
 
       if (updatedQuery) {
-        await notifyLoanDocumentsUploaded(updatedQuery, uploadedDocumentKeys);
+        await Promise.all([
+          notifyLoanDocumentsUploaded(updatedQuery, uploadedDocumentKeys),
+          syncApplicationDocumentReviews(updatedQuery, {
+            onlyKeys: uploadedDocumentKeys,
+            notifyAdmins: true,
+          }),
+        ]);
       }
 
       return res
@@ -4385,6 +5034,13 @@ export class LoanQueryController {
         )
         .lean()
         .exec();
+
+      if (updatedQuery) {
+        await syncApplicationDocumentReviews(updatedQuery, {
+          onlyKeys: uploadedFields,
+          notifyAdmins: true,
+        });
+      }
 
       return res
         .status(200)
@@ -4714,6 +5370,7 @@ export class LoanQueryController {
         loanQueryId: queryId,
         status: updatedQuery.status,
       });
+      await notifyLoanStageUpdated(queryId, { remarks });
 
       const assignedAgentIds = collectAssignedAgentIds(updatedQuery);
 

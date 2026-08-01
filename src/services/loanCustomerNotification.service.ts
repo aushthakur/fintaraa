@@ -14,6 +14,17 @@ import {
   renderLoanEmail,
   type LoanEmailTemplateKey,
 } from "./loanEmailTemplates.service";
+import {
+  syncReferralFromLoanStage,
+  trackReferralApplication,
+} from "./referral.service";
+import {
+  getCustomerDocumentUploadUrl,
+  queueCustomerApplicationCommunications,
+} from "./customerApplicationNotification.service";
+import { getLoanTypeDisplayLabel } from "../utils/loanType";
+import { Agency } from "../modals/agency.model";
+import { User } from "../modals/user.model";
 
 const stageLabels: Record<string, string> = {
   [ApplicationStatus.LOGIN_DONE]: "Login",
@@ -28,18 +39,56 @@ const stageLabels: Record<string, string> = {
 
 const getLoanNotificationContext = (query: any) => ({
   loanId: query?.loanId || query?._id?.toString?.() || "",
-  loanType: String(query?.loanType || "loan").replace(/_/g, " "),
+  loanType: getLoanTypeDisplayLabel(query?.loanType, query?.policyDetails),
   stage: stageLabels[query?.status] || String(query?.status || "").replace(/_/g, " "),
 });
 
-const getCustomerContact = (query: any) => ({
-  email: query?.email || query?.customerId?.email || "",
-  mobile: query?.mobile || query?.customerId?.mobile || "",
+const getCustomerContact = (query: any, recipient?: any) => ({
+  email: query?.email || recipient?.email || query?.customerId?.email || "",
+  mobile: query?.mobile || recipient?.mobile || query?.customerId?.mobile || "",
   name:
     `${query?.firstName || ""} ${query?.lastName || ""}`.trim() ||
+    recipient?.name ||
     query?.customerId?.name ||
     "Customer",
 });
+
+const isAgencyLoanApplication = (query: any) =>
+  Boolean(query?.channelAgency || query?.ownerAgency) ||
+  String(query?.dataSource || "").trim().toLowerCase() === "b2b_app";
+
+export const resolveLoanNotificationRecipient = async (query: any) => {
+  if (!query) return null;
+  if (isAgencyLoanApplication(query)) {
+    const agencyId =
+      query?.channelAgency?._id ||
+      query?.channelAgency ||
+      query?.customerId?._id ||
+      query?.customerId;
+    if (!agencyId) return null;
+    const agency = await Agency.findById(agencyId)
+      .select("name email mobile role")
+      .lean();
+    if (!agency) return null;
+    return {
+      id: String(agency._id),
+      role:
+        agency.role === UserType.AGENCY_MEMBER
+          ? UserType.AGENCY_MEMBER
+          : UserType.AGENCY,
+      profile: agency,
+    };
+  }
+
+  const userId = query?.customerId?._id || query?.customerId;
+  if (!userId) return null;
+  const profile =
+    query?.customerId?.email || query?.customerId?.mobile
+      ? query.customerId
+      : await User.findById(userId).select("name email mobile").lean();
+  if (!profile) return null;
+  return { id: String(userId), role: UserType.USER, profile };
+};
 
 const getApplicationId = (query: any) =>
   String(query?.loanId || query?._id?.toString?.() || "").trim();
@@ -74,7 +123,7 @@ const getTrackApplicationUrl = (query: any) => {
   return `${getPublicWebsiteBaseUrl()}/application-status${params}`;
 };
 
-const getDocumentUploadUrl = (query: any) => getTrackApplicationUrl(query);
+const getDocumentUploadUrl = () => getCustomerDocumentUploadUrl();
 
 const getContactAdvisorUrl = (query: any) => {
   const applicationId = getApplicationId(query);
@@ -84,18 +133,19 @@ const getContactAdvisorUrl = (query: any) => {
   return `https://wa.me/918448282679?text=${text}`;
 };
 
-const getLoanEmailContext = (query: any, remarks?: string) => {
-  const contact = getCustomerContact(query);
+const getLoanEmailContext = (query: any, remarks?: string, recipient?: any) => {
+  const contact = getCustomerContact(query, recipient);
   return {
     name: contact.name,
     applicationId: getApplicationId(query) || "-",
+    loanType: getLoanNotificationContext(query).loanType,
     bankName: getLenderName(query),
     loanAmount: formatAmount(query?.loanAmount) || "—",
     disburseAmount:
       formatAmount(query?.disbursedAmount ?? query?.loanAmount) || "—",
     documentName: getRequestedDocuments(remarks),
     trackApplicationLink: getTrackApplicationUrl(query),
-    websiteUrl: getDocumentUploadUrl(query),
+    websiteUrl: getDocumentUploadUrl(),
     contactAdvisorLink: getContactAdvisorUrl(query),
   };
 };
@@ -104,12 +154,13 @@ const queueLoanEmail = async (
   query: any,
   templateKey: LoanEmailTemplateKey,
   remarks?: string,
+  recipient?: any,
 ) => {
-  const contact = getCustomerContact(query);
+  const contact = getCustomerContact(query, recipient);
   if (!contact.email) return;
   const email = renderLoanEmail(
     templateKey,
-    getLoanEmailContext(query, remarks),
+    getLoanEmailContext(query, remarks, recipient),
   );
   const applicationId = getApplicationId(query);
   await enqueueCommunication({
@@ -132,8 +183,9 @@ const queueLoanWhatsapp = async (
   query: any,
   templateKey: LoanWhatsappTemplateKey,
   values: unknown[],
+  recipient?: any,
 ) => {
-  const contact = getCustomerContact(query);
+  const contact = getCustomerContact(query, recipient);
   const hasWhatsappConsent =
     query?.whatsappConsent === true ||
     query?.communicationConsent?.whatsapp === true;
@@ -174,28 +226,51 @@ export const notifyLoanApplicationCreated = async (queryOrId: any) => {
     typeof queryOrId === "string" || queryOrId?._bsontype
       ? await LoanQuery.findById(queryOrId)
           .select(
-            "customerId loanId loanType email mobile firstName lastName whatsappConsent communicationConsent",
+            "customerId channelAgency ownerAgency dataSource loanId loanType policyDetails.productVariant policyDetails.metaFlowKey policyDetails.requestedProductName policyDetails.requestedProductSlug policyDetails.productLabel email mobile firstName lastName whatsappConsent communicationConsent",
           )
-          .populate("customerId", "name email mobile")
           .lean()
       : queryOrId;
-  const customerId = query?.customerId?._id || query?.customerId;
-  if (!customerId) return;
+  const recipient = await resolveLoanNotificationRecipient(query);
 
-  await sendSingleNotification({
-    type: "loan-application-created",
-    toUserId: String(customerId),
-    toRole: UserType.USER,
-    context: getLoanNotificationContext(query),
-  }).catch((error) =>
-    console.log("Failed to send loan created notification:", error),
-  );
+  if (recipient?.role === UserType.USER) {
+    await trackReferralApplication(recipient.id, query).catch((error) =>
+      console.log("Referral application tracking failed:", error),
+    );
+  }
 
-  await queueLoanEmail(query, "applicationCreated");
+  if (recipient) {
+    await sendSingleNotification({
+      type: "loan-application-created",
+      toUserId: recipient.id,
+      toRole: recipient.role,
+      context: getLoanNotificationContext(query),
+      dedupeKey: `loan:${getApplicationId(query)}:application-created:app:${recipient.role}:${recipient.id}`,
+    }).catch((error) =>
+      console.log("Failed to send loan created notification:", error),
+    );
+  }
+
+  await queueLoanEmail(query, "applicationCreated", undefined, recipient?.profile);
   await queueLoanWhatsapp(query, "applicationCreated", [
-    getCustomerContact(query).name,
+    getCustomerContact(query, recipient?.profile).name,
     getApplicationId(query),
-  ]);
+  ], recipient?.profile);
+  const contact = getCustomerContact(query, recipient?.profile);
+  await queueCustomerApplicationCommunications({
+    kind: "loan",
+    applicationId: getApplicationId(query),
+    customerId: recipient?.id,
+    customerName: contact.name,
+    email: contact.email,
+    mobile: contact.mobile,
+    whatsappConsent:
+      query?.whatsappConsent === true ||
+      query?.communicationConsent?.whatsapp === true,
+    productName: getLoanNotificationContext(query).loanType,
+    status: "submitted",
+    eventKey: "application-created",
+    channels: { email: false, whatsapp: false, sms: true },
+  });
 };
 
 export const notifyLoanStageUpdated = async (
@@ -206,34 +281,65 @@ export const notifyLoanStageUpdated = async (
     typeof queryOrId === "string" || queryOrId?._bsontype
       ? await LoanQuery.findById(queryOrId)
           .select(
-            "customerId loanId loanType status email mobile firstName lastName bankName loanAmount disbursedAmount policyDetails whatsappConsent communicationConsent",
+            "customerId channelAgency ownerAgency dataSource loanId loanType status email mobile firstName lastName bankName loanAmount disbursedAmount policyDetails whatsappConsent communicationConsent updatedAt",
           )
-          .populate("customerId", "name email mobile")
           .lean()
       : queryOrId;
-  const customerId = query?.customerId?._id || query?.customerId;
-  if (!customerId || !stageLabels[query?.status]) return;
+  const recipient = await resolveLoanNotificationRecipient(query);
 
-  await sendSingleNotification({
-    type: "loan-stage-updated",
-    toUserId: String(customerId),
-    toRole: UserType.USER,
-    context: getLoanNotificationContext(query),
-  }).catch((error) =>
-    console.log("Failed to send loan stage notification:", error),
-  );
+  if (recipient?.role === UserType.USER) {
+    await syncReferralFromLoanStage(query).catch((error) =>
+      console.log("Referral stage tracking failed:", error),
+    );
+  }
+  if (recipient) {
+    await sendSingleNotification({
+      type: "loan-stage-updated",
+      toUserId: recipient.id,
+      toRole: recipient.role,
+      context: getLoanNotificationContext(query),
+      dedupeKey: `loan:${getApplicationId(query)}:stage:${query?.status}:app:${recipient.role}:${recipient.id}`,
+    }).catch((error) =>
+      console.log("Failed to send loan stage notification:", error),
+    );
+  }
 
   const templateKey = loanWhatsappTemplateForStatus(query.status);
+  const contact = getCustomerContact(query, recipient?.profile);
+  const documentsRequested =
+    query.status === ApplicationStatus.DOCUMENTS_REQUESTED
+      ? getRequestedDocuments(options.remarks)
+      : undefined;
+  await queueCustomerApplicationCommunications({
+    kind: "loan",
+    applicationId: getApplicationId(query),
+    customerId: recipient?.id,
+    customerName: contact.name,
+    email: contact.email,
+    mobile: contact.mobile,
+    whatsappConsent:
+      query?.whatsappConsent === true ||
+      query?.communicationConsent?.whatsapp === true,
+    productName: getLoanNotificationContext(query).loanType,
+    status: query.status,
+    remarks: options.remarks,
+    documentName: documentsRequested,
+    actionUrl: documentsRequested ? getDocumentUploadUrl() : undefined,
+    eventKey: `${query.status}:${query?.updatedAt?.getTime?.() || query?.updatedAt || "latest"}`,
+    channels: {
+      email: !templateKey,
+      whatsapp: !templateKey,
+      sms: true,
+    },
+  });
   if (!templateKey) return;
-  await queueLoanEmail(query, templateKey, options.remarks);
 
-  const contact = getCustomerContact(query);
   const valuesByTemplate: Record<LoanWhatsappTemplateKey, unknown[]> = {
     applicationCreated: [contact.name, getApplicationId(query)],
     documentsRequired: [
       contact.name,
       getRequestedDocuments(options.remarks),
-      getDocumentUploadUrl(query),
+      getDocumentUploadUrl(),
     ],
     bankLoginSuccess: [contact.name, getLenderName(query), getApplicationId(query)],
     loanSanctioned: [
@@ -248,7 +354,53 @@ export const notifyLoanStageUpdated = async (
     ],
     applicationRejected: [contact.name, getLenderName(query)],
   };
-  await queueLoanWhatsapp(query, templateKey, valuesByTemplate[templateKey]);
+  await Promise.all([
+    queueLoanEmail(query, templateKey, options.remarks, recipient?.profile),
+    queueLoanWhatsapp(
+      query,
+      templateKey,
+      valuesByTemplate[templateKey],
+      recipient?.profile,
+    ),
+  ]);
+};
+
+export const notifyLoanDocumentReuploadRequested = async (
+  queryOrId: any,
+  documentName: string,
+  remarks?: string,
+  eventKey?: string,
+) => {
+  const query =
+    typeof queryOrId === "string" || queryOrId?._bsontype
+      ? await LoanQuery.findById(queryOrId)
+          .select(
+            "customerId channelAgency ownerAgency dataSource loanId loanType policyDetails.productVariant policyDetails.metaFlowKey policyDetails.requestedProductName policyDetails.requestedProductSlug policyDetails.productLabel status email mobile firstName lastName whatsappConsent communicationConsent updatedAt",
+          )
+          .lean()
+      : queryOrId;
+  const recipient = await resolveLoanNotificationRecipient(query);
+  if (!recipient) return;
+  const contact = getCustomerContact(query, recipient.profile);
+  await queueCustomerApplicationCommunications({
+    kind: "loan",
+    applicationId: getApplicationId(query),
+    customerId: recipient.id,
+    customerName: contact.name,
+    email: contact.email,
+    mobile: contact.mobile,
+    whatsappConsent:
+      query?.whatsappConsent === true ||
+      query?.communicationConsent?.whatsapp === true,
+    productName: getLoanNotificationContext(query).loanType,
+    status: "documents_requested",
+    documentName,
+    remarks,
+    actionUrl: getDocumentUploadUrl(),
+    eventKey:
+      eventKey ||
+      `reupload:${documentName}:${query?.updatedAt?.getTime?.() || Date.now()}`,
+  });
 };
 
 export const notifyLoanDocumentsUploaded = async (
@@ -258,16 +410,18 @@ export const notifyLoanDocumentsUploaded = async (
   const query =
     typeof queryOrId === "string" || queryOrId?._bsontype
       ? await LoanQuery.findById(queryOrId)
-          .select("customerId loanId loanType firstName lastName")
+          .select(
+            "customerId channelAgency ownerAgency dataSource loanId loanType policyDetails.productVariant policyDetails.metaFlowKey policyDetails.requestedProductName policyDetails.requestedProductSlug policyDetails.productLabel firstName lastName",
+          )
           .lean()
       : queryOrId;
-  const customerId = query?.customerId?._id || query?.customerId;
-  if (!customerId) return;
+  const recipient = await resolveLoanNotificationRecipient(query);
+  if (!recipient) return;
 
   await sendSingleNotification({
     type: "loan-documents-uploaded",
-    toUserId: String(customerId),
-    toRole: UserType.USER,
+    toUserId: recipient.id,
+    toRole: recipient.role,
     context: {
       ...getLoanNotificationContext(query),
       name: `${query?.firstName || ""} ${query?.lastName || ""}`.trim(),

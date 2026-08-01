@@ -4,6 +4,7 @@ import {
   S3Client,
   PutObjectCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommandInput,
 } from "@aws-sdk/client-s3";
 import { config } from "../config/config";
@@ -22,7 +23,18 @@ const s3 = new S3Client({
     : {}),
 });
 
-export const uploadToS3 = async (
+export interface S3UploadResult {
+  key: string;
+  url: string;
+}
+
+export interface S3DownloadResult {
+  body: Buffer;
+  contentType?: string;
+  contentLength?: number;
+}
+
+export const uploadObjectToS3 = async (
   fileBuffer: Buffer,
   originalname: string,
   folder: string,
@@ -31,8 +43,9 @@ export const uploadToS3 = async (
     contentDisposition?: string;
     acl?: "private" | "public-read";
     metadata?: Record<string, string>;
+    serverSideEncryption?: boolean;
   },
-): Promise<string> => {
+): Promise<S3UploadResult> => {
   if (!config.s3.enabled) {
     throw new Error("S3 is disabled or not configured correctly.");
   }
@@ -48,6 +61,11 @@ export const uploadToS3 = async (
     ContentType: contentType,
     ContentDisposition: opts?.contentDisposition ?? "inline",
     CacheControl: opts?.cacheControl ?? "public, max-age=31536000",
+    ...((opts?.serverSideEncryption ?? config.s3.serverSideEncryptionEnabled)
+      ? { ServerSideEncryption: "AES256" as const }
+      : {}),
+    ...(opts?.acl ? { ACL: opts.acl } : {}),
+    ...(opts?.metadata ? { Metadata: opts.metadata } : {}),
   };
 
   try {
@@ -56,7 +74,7 @@ export const uploadToS3 = async (
     await s3.send(command);
 
     if (config.env !== "production") console.log(`✅ Uploaded to S3 → ${url}`);
-    return url;
+    return { key, url };
   } catch (error: any) {
     console.log("❌ S3 upload failed:", {
       code: error?.code,
@@ -64,6 +82,53 @@ export const uploadToS3 = async (
       statusCode: error?.$metadata?.httpStatusCode,
     });
     throw new Error("Failed to upload file to S3.");
+  }
+};
+
+export const uploadToS3 = async (
+  fileBuffer: Buffer,
+  originalname: string,
+  folder: string,
+  opts?: {
+    cacheControl?: string;
+    contentDisposition?: string;
+    acl?: "private" | "public-read";
+    metadata?: Record<string, string>;
+    serverSideEncryption?: boolean;
+  },
+): Promise<string> =>
+  (await uploadObjectToS3(fileBuffer, originalname, folder, opts)).url;
+
+export const downloadFromS3 = async (
+  key: string,
+): Promise<S3DownloadResult> => {
+  if (!config.s3.enabled) {
+    throw new Error("S3 is disabled or not configured.");
+  }
+
+  try {
+    const response = await s3.send(
+      new GetObjectCommand({
+        Key: key,
+        Bucket: config.s3.bucket,
+      }),
+    );
+    if (!response.Body) throw new Error("S3 object body is empty.");
+
+    const bytes = await response.Body.transformToByteArray();
+    return {
+      body: Buffer.from(bytes),
+      contentType: response.ContentType,
+      contentLength: response.ContentLength,
+    };
+  } catch (error: any) {
+    console.log("❌ S3 download failed:", {
+      key,
+      code: error?.code,
+      message: error?.message,
+      statusCode: error?.$metadata?.httpStatusCode,
+    });
+    throw new Error("Failed to download file from S3.");
   }
 };
 

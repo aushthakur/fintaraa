@@ -34,6 +34,9 @@ const normalizePayload = (payload: Record<string, any>) => {
   if (typeof next.isActive === "string") next.isActive = next.isActive === "true";
   if (typeof next.robotsIndex === "string") next.robotsIndex = next.robotsIndex === "true";
   if (typeof next.robotsFollow === "string") next.robotsFollow = next.robotsFollow === "true";
+  if (typeof next.schemaEnabled === "string") {
+    next.schemaEnabled = next.schemaEnabled === "true";
+  }
   return next;
 };
 

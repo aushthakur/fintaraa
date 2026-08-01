@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
+import { normalizeReferralCode } from "../utils/referral";
 
 export interface IReferralVisit extends Document {
   recordType: "referral_visit";
@@ -23,7 +24,13 @@ const ReferralVisitSchema = new Schema<IReferralVisit>(
       index: true,
       immutable: true,
     },
-    referralCode: { type: String, trim: true, required: true, index: true },
+    referralCode: {
+      type: String,
+      trim: true,
+      required: true,
+      index: true,
+      set: normalizeReferralCode,
+    },
     referrer: { type: Schema.Types.ObjectId, ref: "User", index: true },
     visitorId: { type: String, trim: true, index: true },
     landingPath: { type: String, trim: true },

@@ -3,15 +3,21 @@ import Ticket from "../../modals/ticket.model";
 import { Request, Response, NextFunction } from "express";
 import { User } from "../../modals/user.model";
 import { LoanQuery } from "../../modals/loanquery.model";
-import { InsuranceQuery } from "../../modals/insurancequery.model";
+import {
+  ApplicationStatus,
+  InsuranceQuery,
+} from "../../modals/insurancequery.model";
+import { CallRecord } from "../../modals/callRecord.model";
 import { Offer } from "../../modals/offer.model";
 import { Knowledge } from "../../modals/knowledge.model";
 import { Banker } from "../../modals/banker.model";
 import { DocumentCatalog } from "../../modals/documentCatalog.model";
 import { Contest } from "../../modals/contest.model";
 import { BankProduct } from "../../modals/bankProduct.model";
+import { config } from "../../config/config";
 import type {
   AmountSeriesPoint,
+  DashboardCommandCentreResponse,
   DashboardOverviewResponse,
   TimeSeriesPoint,
 } from "./dashboard.types";
@@ -21,6 +27,7 @@ import {
   formatDateInTimeZone,
   DEFAULT_QUERY_TIMEZONE,
 } from "../../utils/helper";
+import { normalizeLoanType } from "../../utils/loanType";
 
 const SUPPORT_TICKET_STATUSES = [
   "open",
@@ -82,6 +89,265 @@ const eachDayKey = (start: Date, end: Date, timeZone: string) => {
 };
 
 export class DashboardController {
+  static async getCommandCentre(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const timeZone =
+        typeof req.query.timezone === "string" && req.query.timezone.trim()
+          ? req.query.timezone.trim()
+          : DEFAULT_QUERY_TIMEZONE;
+      const now = new Date();
+      const todayKey = formatDateInTimeZone(now, timeZone);
+      const monthStartKey = `${todayKey.slice(0, 7)}-01`;
+      const todayRange = buildDateRangeInTimeZone(
+        todayKey,
+        todayKey,
+        1,
+        timeZone,
+      );
+      const weekRange = buildDateRangeInTimeZone(
+        undefined,
+        todayKey,
+        7,
+        timeZone,
+      );
+      const monthRange = buildDateRangeInTimeZone(
+        monthStartKey,
+        todayKey,
+        31,
+        timeZone,
+      );
+      const funnelRange = buildDateRangeInTimeZone(
+        undefined,
+        todayKey,
+        30,
+        timeZone,
+      );
+
+      const activeStatuses = [
+        ApplicationStatus.PENDING,
+        ApplicationStatus.SUBMITTED,
+        ApplicationStatus.UNDER_REVIEW,
+        ApplicationStatus.APPROVED,
+        ApplicationStatus.ACTIVE,
+        ApplicationStatus.IN_PROGRESS,
+        ApplicationStatus.DOCUMENT_VERIFICATION,
+        ApplicationStatus.CONNECTED,
+        ApplicationStatus.INTERESTED,
+        ApplicationStatus.QUALIFIED,
+      ];
+      const approvedStatuses = [
+        ApplicationStatus.APPROVED,
+        ApplicationStatus.DISBURSED,
+        ApplicationStatus.COMPLETED,
+        ApplicationStatus.ACTIVE,
+      ];
+
+      const [
+        usersToday,
+        loansToday,
+        insuranceToday,
+        activeLoans,
+        activeInsurance,
+        approvedLoansThisWeek,
+        approvedInsuranceThisWeek,
+        monthlyDisbursement,
+        pendingCallbacks,
+        loanFunnelByStatus,
+        insuranceFunnelByStatus,
+      ] = await Promise.all([
+        User.countDocuments({
+          createdAt: { $gte: todayRange.start, $lte: todayRange.end },
+        }),
+        LoanQuery.countDocuments({
+          createdAt: { $gte: todayRange.start, $lte: todayRange.end },
+        }),
+        InsuranceQuery.countDocuments({
+          createdAt: { $gte: todayRange.start, $lte: todayRange.end },
+        }),
+        LoanQuery.countDocuments({ status: { $in: activeStatuses } }),
+        InsuranceQuery.countDocuments({ status: { $in: activeStatuses } }),
+        LoanQuery.countDocuments({
+          status: { $in: approvedStatuses },
+          updatedAt: { $gte: weekRange.start, $lte: weekRange.end },
+        }),
+        InsuranceQuery.countDocuments({
+          status: { $in: approvedStatuses },
+          updatedAt: { $gte: weekRange.start, $lte: weekRange.end },
+        }),
+        LoanQuery.aggregate([
+          {
+            $match: {
+              $or: [
+                {
+                  disbursedDate: {
+                    $gte: monthRange.start,
+                    $lte: monthRange.end,
+                  },
+                },
+                {
+                  status: ApplicationStatus.DISBURSED,
+                  updatedAt: {
+                    $gte: monthRange.start,
+                    $lte: monthRange.end,
+                  },
+                  $or: [
+                    { disbursedDate: { $exists: false } },
+                    { disbursedDate: null },
+                  ],
+                },
+              ],
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              amount: {
+                $sum: {
+                  $ifNull: ["$disbursedAmount", "$loanAmount"],
+                },
+              },
+            },
+          },
+        ]),
+        CallRecord.countDocuments({
+          followUp: true,
+          callbackAt: { $exists: true, $ne: null },
+        }),
+        LoanQuery.aggregate([
+          {
+            $match: {
+              createdAt: {
+                $gte: funnelRange.start,
+                $lte: funnelRange.end,
+              },
+            },
+          },
+          { $group: { _id: "$status", count: { $sum: 1 } } },
+        ]),
+        InsuranceQuery.aggregate([
+          {
+            $match: {
+              createdAt: {
+                $gte: funnelRange.start,
+                $lte: funnelRange.end,
+              },
+            },
+          },
+          { $group: { _id: "$status", count: { $sum: 1 } } },
+        ]),
+      ]);
+
+      const funnelCounts = [
+        ...(loanFunnelByStatus as Array<{ _id: string; count: number }>),
+        ...(insuranceFunnelByStatus as Array<{ _id: string; count: number }>),
+      ].reduce<Record<string, number>>((acc, row) => {
+        const status = String(row?._id || "");
+        if (status) acc[status] = (acc[status] || 0) + Number(row.count || 0);
+        return acc;
+      }, {});
+      const started = Object.values(funnelCounts).reduce(
+        (sum, count) => sum + count,
+        0,
+      );
+      const submitted = Object.entries(funnelCounts).reduce(
+        (sum, [status, count]) =>
+          status === ApplicationStatus.DRAFT ? sum : sum + count,
+        0,
+      );
+      const approved = approvedStatuses.reduce(
+        (sum, status) => sum + (funnelCounts[status] || 0),
+        0,
+      );
+
+      const surepassEnvironment =
+        config.surepass.environment === "production"
+          ? config.surepass.production
+          : config.surepass.sandbox;
+      const cibilReady = Boolean(
+        surepassEnvironment?.baseUrl && surepassEnvironment?.token,
+      );
+      const partnerBanksReady = Boolean(
+        process.env.PARTNER_BANK_API_URL?.trim() &&
+          process.env.PARTNER_BANK_API_KEY?.trim(),
+      );
+      const smsReady = Boolean(
+        config.sms.enabled &&
+          config.sms.airtelIq?.baseUrl &&
+          config.sms.airtelIq?.customerId &&
+          config.sms.airtelIq?.senderId &&
+          config.sms.airtelIq?.entityId &&
+          config.sms.airtelIq?.templateId,
+      );
+      const whatsappReady = Boolean(
+        config.integrations.interakt.enabled &&
+          config.integrations.interakt.baseUrl &&
+          config.integrations.interakt.authToken,
+      );
+
+      const payload: DashboardCommandCentreResponse = {
+        timezone: timeZone,
+        generatedAt: now.toISOString(),
+        kpis: {
+          totalUsersToday: Number(usersToday) || 0,
+          newApplicationsToday:
+            (Number(loansToday) || 0) + (Number(insuranceToday) || 0),
+          totalActiveApplications:
+            (Number(activeLoans) || 0) + (Number(activeInsurance) || 0),
+          approvalsThisWeek:
+            (Number(approvedLoansThisWeek) || 0) +
+            (Number(approvedInsuranceThisWeek) || 0),
+          revenueThisMonth:
+            Number((monthlyDisbursement as Array<{ amount?: number }>)[0]?.amount) ||
+            0,
+          pendingCallbacks: Number(pendingCallbacks) || 0,
+        },
+        conversionFunnel: {
+          started,
+          submitted,
+          approved,
+        },
+        apiHealth: [
+          {
+            key: "cibil",
+            label: "CIBIL API",
+            status: cibilReady ? "operational" : "down",
+            detail: cibilReady ? "Configured" : "Credentials missing",
+          },
+          {
+            key: "partner_banks",
+            label: "Partner Bank APIs",
+            status: partnerBanksReady ? "operational" : "down",
+            detail: partnerBanksReady ? "Configured" : "Configuration missing",
+          },
+          {
+            key: "sms",
+            label: "SMS Gateway",
+            status: smsReady ? "operational" : "down",
+            detail: smsReady ? "Configured" : "Configuration missing",
+          },
+          {
+            key: "whatsapp",
+            label: "WhatsApp API",
+            status: whatsappReady ? "operational" : "down",
+            detail: whatsappReady ? "Configured" : "Configuration missing",
+          },
+        ],
+      };
+
+      return res.status(200).json({
+        success: true,
+        message: "Dashboard command centre",
+        data: payload,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async getOverview(req: Request, res: Response, next: NextFunction) {
     try {
       const { startDate, endDate, timezone, loanStatus, insuranceStatus, status } =
@@ -399,6 +665,16 @@ export class DashboardController {
           if (r?._id != null) acc[String(r._id)] = r.count ?? 0;
           return acc;
         }, {});
+      const toLoanTypeBreakdownMap = (
+        rows: Array<{ _id: any; count: number }>,
+      ) =>
+        (rows || []).reduce<Record<string, number>>((acc, row) => {
+          if (row?._id == null) return acc;
+          const raw = String(row._id);
+          const key = normalizeLoanType(raw) || raw;
+          acc[key] = (acc[key] || 0) + Number(row.count || 0);
+          return acc;
+        }, {});
 
       const totalsOfferApps =
         Array.isArray(totalsOfferApplications) && totalsOfferApplications[0]?.total
@@ -420,7 +696,7 @@ export class DashboardController {
         },
         breakdowns: {
           loansByStatus: toBreakdownMap(loansByStatusAgg as any),
-          loansByType: toBreakdownMap(loansByTypeAgg as any),
+          loansByType: toLoanTypeBreakdownMap(loansByTypeAgg as any),
           insuranceByStatus: toBreakdownMap(insuranceByStatusAgg as any),
           insuranceByType: toBreakdownMap(insuranceByTypeAgg as any),
           offersByStatus: toBreakdownMap(offersByStatusAgg as any),
@@ -476,7 +752,7 @@ export class DashboardController {
             name: `${l.firstName ?? ""} ${l.lastName ?? ""}`.trim(),
             email: l.email,
             mobile: l.mobile,
-            loanType: l.loanType,
+            loanType: normalizeLoanType(l.loanType) || l.loanType,
             loanAmount: l.loanAmount,
             fileStatus: l.fileStatus || l.status,
             dataSource: l.dataSource || "",

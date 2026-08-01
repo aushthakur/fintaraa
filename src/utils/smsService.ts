@@ -55,6 +55,7 @@ const buildAirtelPayload = (
   to: string,
   message: string,
   variables?: Record<string, string | number>,
+  templateIdOverride?: string,
 ) => {
   const airtel = config.sms?.airtelIq;
 
@@ -70,7 +71,8 @@ const buildAirtelPayload = (
     throw new Error("Airtel IQ senderId missing");
   }
 
-  if (!airtel.templateId) {
+  const templateId = String(templateIdOverride || airtel.templateId || "").trim();
+  if (!templateId) {
     throw new Error("Airtel IQ templateId missing");
   }
 
@@ -94,7 +96,7 @@ const buildAirtelPayload = (
   const payload: Record<string, unknown> = {
     customerId: airtel.customerId,
     destinationAddress: [mobile],
-    dltTemplateId: airtel.templateId,
+    dltTemplateId: templateId,
     entityId: airtel.entityId,
     message: processedMessage.trim(),
     messageType,
@@ -111,6 +113,7 @@ const sendAirtelIqSMS = async (
   to: string,
   message: string,
   variables?: Record<string, string | number>,
+  templateIdOverride?: string,
 ): Promise<unknown> => {
   const airtel = config.sms?.airtelIq;
 
@@ -118,7 +121,12 @@ const sendAirtelIqSMS = async (
     throw new Error("Airtel IQ baseUrl missing");
   }
 
-  const payload = buildAirtelPayload(to, message, variables);
+  const payload = buildAirtelPayload(
+    to,
+    message,
+    variables,
+    templateIdOverride,
+  );
   logger.info(
     `[SMS][AirtelIQ] Sending SMS to=${maskMobileForLogs(to)} templateId=${airtel.templateId}`,
   );
@@ -197,4 +205,28 @@ export async function sendSMS({
     );
     throw err instanceof Error ? err : new Error("Failed to send OTP SMS");
   }
+}
+
+export async function sendSMSMessage({
+  to,
+  message,
+  templateId,
+  variables,
+}: {
+  to: string;
+  message: string;
+  templateId: string;
+  variables?: Record<string, string | number>;
+}): Promise<SmsDispatchResult> {
+  if (!to || !message || !templateId) {
+    throw new Error("SMS message, recipient and DLT template ID are required");
+  }
+  if (!config.sms?.enabled) {
+    throw new Error("SMS service is disabled");
+  }
+  if (config.sms.provider !== "airtel_iq") {
+    throw new Error("Invalid SMS provider");
+  }
+  const response = await sendAirtelIqSMS(to, message, variables, templateId);
+  return { success: true, provider: "airtel_iq", response };
 }

@@ -6,6 +6,7 @@ import { FormSubmitClick, IFormSubmitClick } from "../../modals/formSubmitClick.
 import { Agency } from "../../modals/agency.model";
 import { User } from "../../modals/user.model";
 import { CommonService } from "../../services/common.services";
+import { scheduleApplicationDrip } from "../../services/applicationDrip.service";
 import {
   DEFAULT_QUERY_TIMEZONE,
   buildDateRangeInTimeZone,
@@ -250,13 +251,23 @@ export class FormSubmitClickController {
       const payload = {
         ...req.body,
         user: userId,
+        actorModel: isAgencyRole(req.user?.role) ? "Agency" : "User",
         meta: {
           ...meta,
+          actorRole: meta.actorRole || req.user?.role,
+          actorKind: meta.actorKind || req.user?.role || "user",
+          actorId: meta.actorId || String(userId),
           source,
           platform,
         },
       };
       const result = await FormSubmitClickService.create(payload as any);
+      void scheduleApplicationDrip(result as any).catch((error) => {
+        console.error(
+          "[ApplicationDrip] Could not schedule recovery sequence:",
+          error?.message || error,
+        );
+      });
       return res
         .status(201)
         .json(new ApiResponse(201, result, "Form submit click recorded"));

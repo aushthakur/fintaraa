@@ -8,6 +8,7 @@ import {
   checkEligibilityMailAccess,
   getEligibilityMailPermissionOptions,
   normalizeEnumArray,
+  normalizeLoanTypeArray,
 } from "./eligibilityMailPermission.utils";
 
 const EligibilityMailPermissionService = new CommonService(
@@ -29,7 +30,7 @@ const sanitizePayload = (payload: any = {}, userId?: string) => {
 
   return {
     agent: payload.agent,
-    loanTypes: normalizeEnumArray(payload.loanTypes, options.loanTypes),
+    loanTypes: normalizeLoanTypeArray(payload.loanTypes),
     insuranceTypes: normalizeEnumArray(
       payload.insuranceTypes,
       options.insuranceTypes,

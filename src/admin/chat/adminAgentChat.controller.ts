@@ -11,6 +11,8 @@ import Agent from "../../modals/agent.model";
 import Lander from "../../modals/lander.model";
 import { Types } from "mongoose";
 import { decryptQueryMessageText } from "../../utils/queryChatCrypto";
+import { getLoanTypeDisplayLabel } from "../../utils/loanType";
+import { resolveChatStaffRole } from "../../utils/chatStaffRole";
 
 const buildUnreadChatMatch = (userId: any, role?: string) => {
   const objectId = userId ? new Types.ObjectId(String(userId)) : null;
@@ -18,10 +20,24 @@ const buildUnreadChatMatch = (userId: any, role?: string) => {
 
   if (role === "admin") {
     return {
-      receiver: objectId,
       status: { $ne: "read" },
-      senderModel: { $in: ["Agent", "Lander", "User"] },
-      receiverModel: { $in: ["Admin", "User"] },
+      $or: [
+        {
+          receiver: objectId,
+          leadId: null,
+          loanQueryId: null,
+          insuranceQueryId: null,
+        },
+        {
+          senderModel: "User",
+          receiverModel: { $in: ["Admin", "Agent", "Lander"] },
+          $or: [
+            { leadId: { $exists: true, $ne: null } },
+            { loanQueryId: { $exists: true, $ne: null } },
+            { insuranceQueryId: { $exists: true, $ne: null } },
+          ],
+        },
+      ],
     };
   }
 
@@ -54,70 +70,187 @@ export class AdminAgentChatController {
   ) {
     try {
       const currentUserId = (req as any).user?._id;
-      const { role } = (req as any).user || {};
+      const role = await resolveChatStaffRole(
+        currentUserId,
+        (req as any).user?.role,
+      );
 
       if (!role || (role !== "admin" && role !== "agent" && role !== "lander")) {
         throw new ApiError(403, "Access denied. Only admins, agents, and landers can access this chat.");
       }
 
       const currentObjectId = new Types.ObjectId(String(currentUserId));
+      const applicationThreadMatch = {
+        $and: [
+          {
+            $or: [
+              { leadId: { $exists: true, $ne: null } },
+              { loanQueryId: { $exists: true, $ne: null } },
+              { insuranceQueryId: { $exists: true, $ne: null } },
+            ],
+          },
+          {
+            $or: [
+              {
+                senderModel: "User",
+                receiverModel: { $in: ["Admin", "Agent", "Lander"] },
+              },
+              {
+                senderModel: { $in: ["Admin", "Agent", "Lander"] },
+                receiverModel: "User",
+              },
+            ],
+          },
+        ],
+      };
+      const currentUserMatch = {
+        $or: [{ sender: currentObjectId }, { receiver: currentObjectId }],
+      };
+      const conversationMatch =
+        role === "admin"
+          ? {
+              $or: [
+                applicationThreadMatch,
+                {
+                  $and: [
+                    currentUserMatch,
+                    { leadId: null },
+                    { loanQueryId: null },
+                    { insuranceQueryId: null },
+                  ],
+                },
+              ],
+            }
+          : currentUserMatch;
 
       const rows = await Message.aggregate([
-        {
-          $match: {
-            $or: [{ sender: currentObjectId }, { receiver: currentObjectId }],
-          },
-        },
+        { $match: conversationMatch },
         { $sort: { createdAt: -1 } },
         {
           $addFields: {
             threadKind: {
               $switch: {
                 branches: [
-                  { case: { $ne: ["$leadId", null] }, then: "lead" },
-                  { case: { $ne: ["$loanQueryId", null] }, then: "loan" },
-                  { case: { $ne: ["$insuranceQueryId", null] }, then: "insurance" },
+                  {
+                    case: { $ne: [{ $ifNull: ["$leadId", null] }, null] },
+                    then: "lead",
+                  },
+                  {
+                    case: {
+                      $ne: [{ $ifNull: ["$loanQueryId", null] }, null],
+                    },
+                    then: "loan",
+                  },
+                  {
+                    case: {
+                      $ne: [{ $ifNull: ["$insuranceQueryId", null] }, null],
+                    },
+                    then: "insurance",
+                  },
                 ],
                 default: "internal",
               },
             },
-            otherParticipantId: {
+            directParticipantId: {
               $cond: [{ $eq: ["$sender", currentObjectId] }, "$receiver", "$sender"],
             },
-            otherParticipantModel: {
+            directParticipantModel: {
               $cond: [{ $eq: ["$sender", currentObjectId] }, "$receiverModel", "$senderModel"],
             },
+            applicationCustomerId: {
+              $switch: {
+                branches: [
+                  { case: { $eq: ["$senderModel", "User"] }, then: "$sender" },
+                  { case: { $eq: ["$receiverModel", "User"] }, then: "$receiver" },
+                ],
+                default: null,
+              },
+            },
+            applicationStaffId: {
+              $switch: {
+                branches: [
+                  { case: { $eq: ["$senderModel", "User"] }, then: "$receiver" },
+                  { case: { $eq: ["$receiverModel", "User"] }, then: "$sender" },
+                ],
+                default: null,
+              },
+            },
+          },
+        },
+        {
+          $addFields: {
             threadId: {
               $switch: {
                 branches: [
                   {
-                    case: { $ne: ["$leadId", null] },
+                    case: { $ne: [{ $ifNull: ["$leadId", null] }, null] },
                     then: { $toString: "$leadId" },
                   },
                   {
-                    case: { $ne: ["$loanQueryId", null] },
+                    case: {
+                      $ne: [{ $ifNull: ["$loanQueryId", null] }, null],
+                    },
                     then: { $toString: "$loanQueryId" },
                   },
                   {
-                    case: { $ne: ["$insuranceQueryId", null] },
+                    case: {
+                      $ne: [{ $ifNull: ["$insuranceQueryId", null] }, null],
+                    },
                     then: { $toString: "$insuranceQueryId" },
                   },
                 ],
                 default: {
                   $concat: [
-                    { $toString: "$otherParticipantId" },
+                    { $toString: "$directParticipantId" },
                     ":",
-                    { $ifNull: ["$otherParticipantModel", "Unknown"] },
+                    { $ifNull: ["$directParticipantModel", "Unknown"] },
                   ],
                 },
               },
+            },
+            groupParticipantId: {
+              $cond: [
+                { $eq: ["$threadKind", "internal"] },
+                "$directParticipantId",
+                null,
+              ],
+            },
+            groupParticipantModel: {
+              $cond: [
+                { $eq: ["$threadKind", "internal"] },
+                "$directParticipantModel",
+                "User",
+              ],
             },
             isUnread: {
               $cond: [
                 {
                   $and: [
-                    { $eq: ["$receiver", currentObjectId] },
                     { $ne: ["$status", "read"] },
+                    role === "admin"
+                      ? {
+                          $or: [
+                            {
+                              $and: [
+                                { $eq: ["$threadKind", "internal"] },
+                                { $eq: ["$receiver", currentObjectId] },
+                              ],
+                            },
+                            {
+                              $and: [
+                                { $ne: ["$threadKind", "internal"] },
+                                { $eq: ["$senderModel", "User"] },
+                                {
+                                  $in: [
+                                    "$receiverModel",
+                                    ["Admin", "Agent", "Lander"],
+                                  ],
+                                },
+                              ],
+                            },
+                          ],
+                        }
+                      : { $eq: ["$receiver", currentObjectId] },
                   ],
                 },
                 1,
@@ -131,11 +264,13 @@ export class AdminAgentChatController {
             _id: {
               kind: "$threadKind",
               threadId: "$threadId",
-              participantId: "$otherParticipantId",
-              participantModel: "$otherParticipantModel",
+              participantId: "$groupParticipantId",
+              participantModel: "$groupParticipantModel",
             },
             lastMessage: { $first: "$$ROOT" },
             unreadCount: { $sum: "$isUnread" },
+            customerParticipantIds: { $addToSet: "$applicationCustomerId" },
+            staffParticipantIds: { $addToSet: "$applicationStaffId" },
           },
         },
         { $sort: { "lastMessage.createdAt": -1 } },
@@ -150,6 +285,14 @@ export class AdminAgentChatController {
           Types.ObjectId.isValid(normalized)
         );
       };
+      const firstValidObjectId = (values: any[] = []) =>
+        values
+          .map((value) => String(value || "").trim())
+          .find(isValidObjectIdString) || "";
+      const getApplicationParticipantId = (row: any) =>
+        firstValidObjectId(row?.customerParticipantIds);
+      const getApplicationStaffId = (row: any) =>
+        firstValidObjectId(row?.staffParticipantIds);
 
       const leadIds = [...new Set(
         rows
@@ -172,35 +315,43 @@ export class AdminAgentChatController {
       const leadParticipantIds = [...new Set(
         rows
           .filter((r: any) => r?._id?.kind === "lead")
-          .map((r: any) => String(r?._id?.participantId || "").trim())
+          .map(getApplicationParticipantId)
           .filter(isValidObjectIdString),
       )];
       const loanParticipantIds = [...new Set(
         rows
           .filter((r: any) => r?._id?.kind === "loan")
-          .map((r: any) => String(r?._id?.participantId || "").trim())
+          .map(getApplicationParticipantId)
           .filter(isValidObjectIdString),
       )];
       const insuranceParticipantIds = [...new Set(
         rows
           .filter((r: any) => r?._id?.kind === "insurance")
-          .map((r: any) => String(r?._id?.participantId || "").trim())
+          .map(getApplicationParticipantId)
           .filter(isValidObjectIdString),
       )];
       const leadCustomerIds: string[] = [];
       const loanCustomerIds: string[] = [];
       const insuranceCustomerIds: string[] = [];
       const internalParticipantIds = [...new Set(rows.filter((r: any) => r?._id?.kind === "internal").map((r: any) => String(r?._id?.participantId)).filter(Boolean))];
+      const messageStaffParticipantIds = [...new Set(
+        rows
+          .filter((r: any) => r?._id?.kind !== "internal")
+          .map(getApplicationStaffId)
+          .filter(isValidObjectIdString),
+      )];
 
       const [leads, loanQueries, insuranceQueries] = await Promise.all([
         Lead.find({ _id: { $in: leadIds } })
-          .select("_id leadRef fullName mobile borrowerProfile")
+          .select("_id leadRef fullName mobile borrowerProfile assignment.current.agent")
           .lean(),
         LoanQuery.find({ _id: { $in: loanIds } })
-          .select("_id loanId firstName lastName mobile loanType customerId")
+          .select(
+            "_id loanId firstName lastName mobile loanType policyDetails.productVariant policyDetails.metaFlowKey policyDetails.requestedProductName policyDetails.requestedProductSlug policyDetails.productLabel customerId assignedAgent assignedAgents",
+          )
           .lean(),
         InsuranceQuery.find({ _id: { $in: insuranceIds } })
-          .select("_id firstName lastName mobile typeOfInsurance customerId")
+          .select("_id firstName lastName mobile typeOfInsurance customerId assignedAgent")
           .lean(),
       ]);
 
@@ -225,18 +376,34 @@ export class AdminAgentChatController {
         ...loanParticipantIds,
         ...insuranceParticipantIds,
       ].filter(Boolean))];
+      const assignedStaffIds = [
+        ...(leads as any[]).map((item: any) => item?.assignment?.current?.agent),
+        ...(loanQueries as any[]).flatMap((item: any) => [
+          item?.assignedAgent,
+          ...(Array.isArray(item?.assignedAgents) ? item.assignedAgents : []),
+        ]),
+        ...(insuranceQueries as any[]).map((item: any) => item?.assignedAgent),
+      ]
+        .map((value) => String(value || "").trim())
+        .filter(isValidObjectIdString);
+      const staffParticipantIds = [...new Set([
+        ...internalParticipantIds,
+        ...messageStaffParticipantIds,
+        ...assignedStaffIds,
+      ])];
 
       const [users, admins, agents, landers] = await Promise.all([
         User.find({ _id: { $in: customerIds } })
           .select("_id name firstName lastName email mobile profilePictureUrl")
           .lean(),
-        Admin.find({ _id: { $in: internalParticipantIds } })
-          .select("_id username name email profilePictureUrl")
+        Admin.find({ _id: { $in: staffParticipantIds } })
+          .select("_id username name email mobile profilePictureUrl role")
+          .populate("role", "name")
           .lean(),
-        Agent.find({ _id: { $in: internalParticipantIds } })
+        Agent.find({ _id: { $in: staffParticipantIds } })
           .select("_id name email profilePictureUrl availability")
           .lean(),
-        Lander.find({ _id: { $in: internalParticipantIds } })
+        Lander.find({ _id: { $in: staffParticipantIds } })
           .select("_id name email profilePictureUrl availability")
           .lean(),
       ]);
@@ -254,16 +421,52 @@ export class AdminAgentChatController {
         (users as any[]).map((item: any) => [String(item._id), item] as [string, any]),
       );
       const staffEntries: [string, any][] = [
-        ...(admins as any[]).map((item: any) => [String(item._id), { ...item, role: "Admin" }] as [string, any]),
+        ...(admins as any[]).map((item: any) => [String(item._id), {
+          ...item,
+          role: String(item?.role?.name || "Admin"),
+          model: "Admin",
+        }] as [string, any]),
         ...(agents as any[]).map((item: any) => [String(item._id), { ...item, role: "Agent" }] as [string, any]),
         ...(landers as any[]).map((item: any) => [String(item._id), { ...item, role: "Lander" }] as [string, any]),
       ];
       const staffMap = new Map<string, any>(staffEntries);
+      const buildThreadStaff = (row: any, assignedId?: any) => {
+        const preferredId = String(assignedId || "").trim();
+        const staffId =
+          (isValidObjectIdString(preferredId) && preferredId) ||
+          getApplicationStaffId(row) ||
+          String(currentUserId);
+        const staff = staffMap.get(staffId) as any;
+        const resolvedRole = String(
+          staff?.role || (staffId === String(currentUserId)
+            ? role === "lander"
+              ? "Lander"
+              : role === "agent"
+                ? "Agent"
+                : "Admin"
+            : "Staff"),
+        );
+        return {
+          _id: staffId,
+          name: String(
+            staff?.name ||
+              staff?.username ||
+              (staffId === String(currentUserId) ? "You" : "Assigned staff"),
+          ),
+          email: staff?.email,
+          mobile: staff?.mobile,
+          profilePictureUrl: staff?.profilePictureUrl,
+          role: resolvedRole,
+        };
+      };
 
       const conversations = rows.map((row: any) => {
         const kind = String(row?._id?.kind || "internal");
         const threadId = String(row?._id?.threadId || "");
-        const participantId = String(row?._id?.participantId || "");
+        const participantId =
+          kind === "internal"
+            ? String(row?._id?.participantId || "")
+            : getApplicationParticipantId(row);
         const participantModel = String(row?._id?.participantModel || "");
         const msg = row?.lastMessage || {};
         const unreadCount = Number(row?.unreadCount) || 0;
@@ -304,11 +507,7 @@ export class AdminAgentChatController {
                   role: "User",
                 }
               : undefined,
-            agent: {
-              _id: String(currentUserId),
-              name: "You",
-              role: role === "admin" ? "Admin" : role === "lander" ? "Lander" : "Agent",
-            },
+            agent: buildThreadStaff(row, lead?.assignment?.current?.agent),
             lastMessage: {
               _id: String(msg?._id || ""),
               text: decodedText,
@@ -328,14 +527,18 @@ export class AdminAgentChatController {
             "Customer",
           ).trim();
           const loanId = String(query?.loanId || "").trim();
+          const loanTypeLabel = getLoanTypeDisplayLabel(
+            query?.loanType,
+            query?.policyDetails,
+          );
 
           return {
             _id: `loan:${threadId}:${participantId}`,
             kind: "loan",
             title: customerName,
             subtitle: loanId
-              ? `Loan #${loanId} · ${query?.loanType || "Loan"}`
-              : `${query?.loanType || "Loan"}`,
+              ? `Loan #${loanId} · ${loanTypeLabel}`
+              : loanTypeLabel,
             unreadCount,
             loanQueryId: threadId,
             receiverId: String(customer?._id || participantId || ""),
@@ -350,11 +553,10 @@ export class AdminAgentChatController {
                   role: "User",
                 }
               : undefined,
-            agent: {
-              _id: String(currentUserId),
-              name: "You",
-              role: role === "admin" ? "Admin" : role === "lander" ? "Lander" : "Agent",
-            },
+            agent: buildThreadStaff(
+              row,
+              query?.assignedAgent || query?.assignedAgents?.[0],
+            ),
             lastMessage: {
               _id: String(msg?._id || ""),
               text: decodedText,
@@ -396,11 +598,7 @@ export class AdminAgentChatController {
                   role: "User",
                 }
               : undefined,
-            agent: {
-              _id: String(currentUserId),
-              name: "You",
-              role: role === "admin" ? "Admin" : role === "lander" ? "Lander" : "Agent",
-            },
+            agent: buildThreadStaff(row, query?.assignedAgent),
             lastMessage: {
               _id: String(msg?._id || ""),
               text: decodedText,
@@ -476,16 +674,18 @@ export class AdminAgentChatController {
   ) {
     try {
       const currentUserId = (req as any).user?._id;
-      const { role } = (req as any).user || {};
+      const role = await resolveChatStaffRole(
+        currentUserId,
+        (req as any).user?.role,
+      );
 
       if (!role || (role !== "admin" && role !== "agent" && role !== "lander")) {
         throw new ApiError(403, "Access denied. Only admins, agents, and landers can access this chat.");
       }
 
-      const unread = await Message.countDocuments({
-        receiver: new Types.ObjectId(String(currentUserId)),
-        status: { $ne: "read" },
-      });
+      const unread = await Message.countDocuments(
+        buildUnreadChatMatch(currentUserId, role),
+      );
 
       res
         .status(200)
@@ -505,7 +705,10 @@ export class AdminAgentChatController {
   ) {
     try {
       const currentUserId = (req as any).user?._id;
-      const { role } = (req as any).user || {};
+      const role = await resolveChatStaffRole(
+        currentUserId,
+        (req as any).user?.role,
+      );
       const { receiverId } = req.params;
 
       if (!role || (role !== "admin" && role !== "agent" && role !== "lander")) {
@@ -515,19 +718,30 @@ export class AdminAgentChatController {
       if (!receiverId) {
         throw new ApiError(400, "Receiver ID is required");
       }
+      if (!Types.ObjectId.isValid(String(receiverId))) {
+        throw new ApiError(400, "Invalid receiver ID");
+      }
+      if (String(receiverId) === String(currentUserId)) {
+        throw new ApiError(400, "Sender and receiver cannot be the same");
+      }
 
       // Verify receiver exists and is valid
       let receiver: any = null;
       if (role === "admin") {
-        // Admin can chat with agents, landers, or users
-        receiver = await Agent.findById(receiverId).select("_id name email profilePictureUrl").lean();
+        // Admin can chat with other admins, agents, landers, or users.
+        receiver = await Admin.findById(receiverId)
+          .select("_id name username email profilePictureUrl")
+          .lean();
+        if (!receiver) {
+          receiver = await Agent.findById(receiverId).select("_id name email profilePictureUrl").lean();
+        }
         if (!receiver) {
           receiver = await Lander.findById(receiverId).select("_id name email profilePictureUrl").lean();
           if (!receiver) {
             receiver = await User.findById(receiverId).select("_id name email avatar").lean();
           }
           if (!receiver) {
-            throw new ApiError(404, "Agent, Lander, or User not found");
+            throw new ApiError(404, "Admin, Agent, Lander, or User not found");
           }
         }
       } else if (role === "lander") {
@@ -555,6 +769,9 @@ export class AdminAgentChatController {
         ],
         senderModel: { $in: ["Admin", "Agent", "Lander", "User"] },
         receiverModel: { $in: ["Admin", "Agent", "Lander", "User"] },
+        leadId: null,
+        loanQueryId: null,
+        insuranceQueryId: null,
       })
         .sort({ createdAt: 1 })
         .lean();
@@ -565,6 +782,9 @@ export class AdminAgentChatController {
           sender: receiverId,
           receiver: currentUserId,
           status: { $ne: "read" },
+          leadId: null,
+          loanQueryId: null,
+          insuranceQueryId: null,
         },
         {
           status: "read",
@@ -606,6 +826,18 @@ export class AdminAgentChatController {
                 name: lander.name,
                 email: lander.email,
                 profilePictureUrl: lander.profilePictureUrl,
+              };
+            }
+          } else if (msg.senderModel === "User") {
+            const user = await User.findById(msg.sender)
+              .select("_id name email avatar")
+              .lean();
+            if (user) {
+              senderData = {
+                _id: user._id.toString(),
+                name: user.name,
+                email: user.email,
+                profilePictureUrl: (user as any).avatar,
               };
             }
           }
@@ -678,7 +910,9 @@ export class AdminAgentChatController {
               _id: receiver._id.toString(),
               name: receiver.name || receiver.username,
               email: receiver.email,
-              profilePictureUrl: (receiver as any).avatar,
+              profilePictureUrl:
+                (receiver as any).profilePictureUrl ||
+                (receiver as any).avatar,
             },
           }, "Messages fetched successfully")
         );
@@ -697,7 +931,10 @@ export class AdminAgentChatController {
   ) {
     try {
       const currentUserId = (req as any).user?._id;
-      const { role } = (req as any).user || {};
+      const role = await resolveChatStaffRole(
+        currentUserId,
+        (req as any).user?.role,
+      );
       const { text, receiverId, media } = req.body;
 
       if (!role || (role !== "admin" && role !== "agent" && role !== "lander")) {
@@ -712,24 +949,35 @@ export class AdminAgentChatController {
       if (!receiverId) {
         throw new ApiError(400, "Receiver ID is required");
       }
+      if (!Types.ObjectId.isValid(String(receiverId))) {
+        throw new ApiError(400, "Invalid receiver ID");
+      }
+      if (String(receiverId) === String(currentUserId)) {
+        throw new ApiError(400, "Sender and receiver cannot be the same");
+      }
 
       // Verify receiver exists and is valid
       let receiverModel: "Admin" | "Agent" | "Lander" | "User" = "Admin";
       if (role === "admin") {
-        // Admin can send to agents, landers, or users
-        const agent = await Agent.findById(receiverId);
-        if (agent) {
-          receiverModel = "Agent";
+        // Admin can send to other admins, agents, landers, or users.
+        const admin = await Admin.findById(receiverId);
+        if (admin) {
+          receiverModel = "Admin";
         } else {
-          const lander = await Lander.findById(receiverId);
-          if (lander) {
-            receiverModel = "Lander";
+          const agent = await Agent.findById(receiverId);
+          if (agent) {
+            receiverModel = "Agent";
           } else {
-            const customer = await User.findById(receiverId);
-            if (customer) {
-              receiverModel = "User";
+            const lander = await Lander.findById(receiverId);
+            if (lander) {
+              receiverModel = "Lander";
             } else {
-              throw new ApiError(404, "Agent, Lander, or User not found");
+              const customer = await User.findById(receiverId);
+              if (customer) {
+                receiverModel = "User";
+              } else {
+                throw new ApiError(404, "Admin, Agent, Lander, or User not found");
+              }
             }
           }
         }
@@ -754,7 +1002,14 @@ export class AdminAgentChatController {
         }
       }
 
-      const senderModel = role === "admin" ? "Admin" : role === "lander" ? "Lander" : "Agent";
+      const senderModel =
+        role === "admin"
+          ? "Admin"
+          : role === "lander"
+            ? "Lander"
+            : (await Admin.exists({ _id: currentUserId }))
+              ? "Admin"
+              : "Agent";
 
       // Helper function to determine media type from mimetype
       const getMediaType = (mimetype: string): "image" | "video" | "audio" | "document" | "other" => {
@@ -918,7 +1173,10 @@ export class AdminAgentChatController {
   ) {
     try {
       const currentUserId = (req as any).user?._id;
-      const { role } = (req as any).user || {};
+      const role = await resolveChatStaffRole(
+        currentUserId,
+        (req as any).user?.role,
+      );
       const { receiverId } = req.params;
 
       if (!role || (role !== "admin" && role !== "agent" && role !== "lander")) {
@@ -936,6 +1194,9 @@ export class AdminAgentChatController {
           status: { $ne: "read" },
           senderModel: { $in: ["Admin", "Agent", "Lander", "User"] },
           receiverModel: { $in: ["Admin", "Agent", "Lander", "User"] },
+          leadId: null,
+          loanQueryId: null,
+          insuranceQueryId: null,
         },
         {
           status: "read",

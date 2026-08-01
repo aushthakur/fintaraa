@@ -33,12 +33,14 @@ router.post(
   authorize("admin"),
   dynamicUpload([
     { name: "coverImageUrl", maxCount: 1 },
+    { name: "authorAvatarUrl", maxCount: 1 },
     { name: "videoUrl", maxCount: 1 },
   ]),
   s3UploaderMiddleware("knowledge"),
   asyncHandler(
     mediaUrlMiddleware(Knowledge, [
       { key: "coverImageUrl", type: "single" },
+      { key: "authorAvatarUrl", type: "single" },
       { key: "videoUrl", type: "single" },
     ])
   ),
@@ -50,12 +52,14 @@ router.post(
   authorize("admin"),
   dynamicUpload([
     { name: "coverImageUrl", maxCount: 1 },
+    { name: "authorAvatarUrl", maxCount: 1 },
     { name: "videoUrl", maxCount: 1 },
   ]),
   s3UploaderMiddleware("knowledge"),
   asyncHandler(
     mediaUrlMiddleware(Knowledge, [
       { key: "coverImageUrl", type: "single" },
+      { key: "authorAvatarUrl", type: "single" },
       { key: "videoUrl", type: "single" },
     ])
   ),
@@ -67,12 +71,14 @@ router.put(
   authorize("admin"),
   dynamicUpload([
     { name: "coverImageUrl", maxCount: 1 },
+    { name: "authorAvatarUrl", maxCount: 1 },
     { name: "videoUrl", maxCount: 1 },
   ]),
   s3UploaderMiddleware("knowledge"),
   asyncHandler(
     mediaUrlMiddleware(Knowledge, [
       { key: "coverImageUrl", type: "single", useExtractOnUpdate: true },
+      { key: "authorAvatarUrl", type: "single", useExtractOnUpdate: true },
       { key: "videoUrl", type: "single", useExtractOnUpdate: true },
     ])
   ),
@@ -84,12 +90,14 @@ router.put(
   authorize("admin"),
   dynamicUpload([
     { name: "coverImageUrl", maxCount: 1 },
+    { name: "authorAvatarUrl", maxCount: 1 },
     { name: "videoUrl", maxCount: 1 },
   ]),
   s3UploaderMiddleware("knowledge"),
   asyncHandler(
     mediaUrlMiddleware(Knowledge, [
       { key: "coverImageUrl", type: "single", useExtractOnUpdate: true },
+      { key: "authorAvatarUrl", type: "single", useExtractOnUpdate: true },
       { key: "videoUrl", type: "single", useExtractOnUpdate: true },
     ])
   ),

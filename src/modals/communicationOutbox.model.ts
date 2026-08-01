@@ -2,6 +2,7 @@ import mongoose, { Document, Schema } from "mongoose";
 
 export enum CommunicationChannel {
   EMAIL = "email",
+  SMS = "sms",
   WHATSAPP = "whatsapp",
 }
 
@@ -12,6 +13,7 @@ export enum CommunicationOutboxStatus {
   DELIVERED = "delivered",
   READ = "read",
   FAILED = "failed",
+  CANCELLED = "cancelled",
 }
 
 export interface ICommunicationOutbox extends Document {

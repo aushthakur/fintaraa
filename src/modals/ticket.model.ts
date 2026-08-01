@@ -49,6 +49,9 @@ export const HIGH_PRIORITY_TAGS = [
 
 // 🟠 MEDIUM: Service quality issues, feedback, moderate support requests
 export const MEDIUM_PRIORITY_TAGS = [
+  "document_verification_support",
+  "payment_emi_support",
+  "grievance_support",
   "product_condition_mismatch",
   "price_negotiation_dispute",
   "meetup_time_conflict",
@@ -76,6 +79,9 @@ export const MEDIUM_PRIORITY_TAGS = [
 // 🟡 LOW: Informational updates, feature requests, minor actions
 export const LOW_PRIORITY_TAGS = [
   "app_support",
+  "credit_score_support",
+  "insurance_support",
+  "account_access_support",
   "callback_request",
   "successful_sale",
   "successful_purchase",
@@ -203,9 +209,9 @@ interface IInteraction {
   content?: string;
   timestamp?: Date;
   action: ActionType;
-  receiverType: UserType;
+  receiverType?: UserType;
   initiatorType: UserType;
-  receiver: Types.ObjectId;
+  receiver?: Types.ObjectId;
   initiator: Types.ObjectId;
   attachments?: IAttachment[];
 }
@@ -224,6 +230,7 @@ export interface ITicket extends Document {
   requester: Types.ObjectId;
   requesterRole: UserType;
   assignee?: Types.ObjectId;
+  assigneeModel?: "Agent" | "Admin";
   closedBy?: Types.ObjectId;
   closedAt?: Date;
   closingRemark?: string;
@@ -249,7 +256,7 @@ const InteractionSchema = new Schema<IInteraction>(
     receiver: {
       type: Schema.Types.ObjectId,
       refPath: "receiverType",
-      required: true,
+      required: false,
     },
     initiatorType: {
       type: String,
@@ -259,7 +266,7 @@ const InteractionSchema = new Schema<IInteraction>(
     receiverType: {
       type: String,
       enum: ["User", "Agent", "Agency", "Admin"],
-      required: true,
+      required: false,
     },
     action: {
       type: String,
@@ -308,7 +315,12 @@ const TicketSchema = new Schema<ITicket>(
       default: "User",
       required: true,
     },
-    assignee: { type: Schema.Types.ObjectId, ref: "Agent" },
+    assignee: { type: Schema.Types.ObjectId, refPath: "assigneeModel" },
+    assigneeModel: {
+      type: String,
+      enum: ["Agent", "Admin"],
+      default: "Agent",
+    },
     closedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
     closedAt: { type: Date },
     closingRemark: { type: String, trim: true },

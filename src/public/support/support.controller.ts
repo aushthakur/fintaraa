@@ -1,8 +1,12 @@
 import {
+  BARTER_SPECIFIC_TAGS,
+  CHAT_SOCIAL_TAGS,
+  ESCALATED_TAGS,
   LOW_PRIORITY_TAGS,
   HIGH_PRIORITY_TAGS,
   MEDIUM_PRIORITY_TAGS,
   CRITICAL_PRIORITY_TAGS,
+  SYSTEM_PRIORITY_TAGS,
 } from "../../modals/ticket.model";
 import ApiError from "../../utils/ApiError";
 import Agent from "../../modals/agent.model";
@@ -27,6 +31,8 @@ import {
 } from "../../utils/helper";
 import { sendSingleNotification } from "../../services/notification.service";
 import { Types } from "mongoose";
+import { CallRecord } from "../../modals/callRecord.model";
+import { resolveChatStaffRole } from "../../utils/chatStaffRole";
 
 const agentService = new CommonService(Agent);
 const ticketService = new CommonService(Ticket);
@@ -37,7 +43,8 @@ const resolveRequesterModel = (role?: string) => {
 };
 
 const resolveNotificationRole = (role?: string) => {
-  if (role === "agency" || role === "agency_member") return UserType.AGENCY;
+  if (role === "agency_member") return UserType.AGENCY_MEMBER;
+  if (role === "agency") return UserType.AGENCY;
   return UserType.USER;
 };
 
@@ -51,11 +58,64 @@ const ensureTagArray = (tags: unknown): string[] => {
   return [];
 };
 
+const TICKET_TAG_ALIASES: Record<string, string> = {
+  "application support": "app_support",
+  application_support: "app_support",
+  "document verification": "document_verification_support",
+  document_verification: "document_verification_support",
+  "payment or emi": "payment_emi_support",
+  payment_emi: "payment_emi_support",
+  "credit score": "credit_score_support",
+  credit_score: "credit_score_support",
+  insurance: "insurance_support",
+  "account access": "account_access_support",
+  account_access: "account_access_support",
+  grievance: "grievance_support",
+};
+
+const VALID_TICKET_TAGS = new Set<string>([
+  ...LOW_PRIORITY_TAGS,
+  ...HIGH_PRIORITY_TAGS,
+  ...MEDIUM_PRIORITY_TAGS,
+  ...CRITICAL_PRIORITY_TAGS,
+  ...SYSTEM_PRIORITY_TAGS,
+  ...ESCALATED_TAGS,
+  ...BARTER_SPECIFIC_TAGS,
+  ...CHAT_SOCIAL_TAGS,
+]);
+
+const normalizeSubmittedTags = (tags: unknown): string[] => {
+  const normalized = ensureTagArray(tags)
+    .map((tag) => tag.trim().toLowerCase())
+    .filter(Boolean)
+    .map((tag) => TICKET_TAG_ALIASES[tag] || tag)
+    .filter((tag) => VALID_TICKET_TAGS.has(tag));
+
+  return Array.from(new Set(normalized));
+};
+
 const cleanText = (value: unknown) =>
   typeof value === "string" ? value.trim() : "";
 
 const parseBoolean = (value: unknown) =>
   value === true || value === "true" || value === "1" || value === 1;
+
+const parseScheduledCallbackAt = (value: unknown) => {
+  const callbackAt = new Date(String(value || ""));
+  const minimum = Date.now() + 16 * 60 * 1000;
+  const maximum = Date.now() + 30 * 24 * 60 * 60 * 1000;
+  if (
+    Number.isNaN(callbackAt.getTime()) ||
+    callbackAt.getTime() < minimum ||
+    callbackAt.getTime() > maximum
+  ) {
+    throw new ApiError(
+      400,
+      "Choose a callback time between 16 minutes and 30 days from now",
+    );
+  }
+  return callbackAt;
+};
 
 const normalizeObjectId = (value: any): Types.ObjectId | null => {
   if (!value) return null;
@@ -213,9 +273,11 @@ const assignTicketDocument = async (
   assigneeModel: "Agent" | "Admin" = "Agent",
 ): Promise<{ assigned: boolean; ticket: any; agent: any }> => {
   const previousAssignee = ticket.assignee?.toString();
+  const previousAssigneeModel = String(ticket.assigneeModel || "Agent");
   const nextAssignee = agent._id?.toString();
 
   ticket.assignee = agent._id;
+  ticket.assigneeModel = assigneeModel;
   ticket.status =
     ticket.status === "open" || ticket.status === "re_assigned"
       ? "in_progress"
@@ -223,7 +285,7 @@ const assignTicketDocument = async (
   await ticket.save();
 
   if (previousAssignee !== nextAssignee) {
-    if (previousAssignee) {
+    if (previousAssignee && previousAssigneeModel === "Agent") {
       await Agent.updateOne(
         { _id: previousAssignee, activeTickets: { $gt: 0 } },
         { $inc: { activeTickets: -1 } },
@@ -250,6 +312,14 @@ const assignTicketAutomatically = async (ticket: any) => {
   const agent = await findEligibleAgentForTicket(tags);
 
   if (!agent) {
+    const fallback = await findDefaultSupportAssignee();
+    if (fallback?.assignee) {
+      return assignTicketDocument(
+        ticket,
+        fallback.assignee,
+        fallback.model,
+      );
+    }
     if (ticket.status !== "open") {
       ticket.status = "open";
       await ticket.save();
@@ -345,28 +415,58 @@ export const createTicket = async (
   try {
     const { _id: id, role } = req.user;
     const { tags, title, description } = req.body;
+    const cleanedTitle = cleanText(title);
+    const cleanedDescription = cleanText(description);
     const communicationConsent =
       req.body?.communicationConsent &&
       typeof req.body.communicationConsent === "object"
         ? req.body.communicationConsent
         : {};
 
-    if (!title || !description) {
+    if (!cleanedTitle || !cleanedDescription) {
       return next(new ApiError(400, "Title and description are required"));
     }
 
-    const tagList = ensureTagArray(tags);
+    const tagList = normalizeSubmittedTags(tags);
     if (!tagList.length) {
-      return next(new ApiError(400, "At least one valid tag is required"));
+      return next(
+        new ApiError(
+          400,
+          "Please select a valid support category and try again",
+        ),
+      );
     }
 
     const requesterRole = resolveRequesterModel(role);
+    const isCallbackRequest = tagList.includes("callback_request");
+    const callbackAt = isCallbackRequest
+      ? parseScheduledCallbackAt(req.body?.callbackAt)
+      : null;
+    let requesterProfile: any = null;
+    if (isCallbackRequest) {
+      requesterProfile =
+        requesterRole === "Agency"
+          ? await Agency.findById(id).select("name email mobile").lean()
+          : await User.findById(id).select("name email mobile").lean();
+    }
+    const callbackPhone = String((requesterProfile as any)?.mobile || "")
+      .replace(/\D/g, "")
+      .slice(-10);
+    if (isCallbackRequest && callbackPhone.length !== 10) {
+      return next(
+        new ApiError(
+          400,
+          "A valid 10-digit mobile number is required for a callback request",
+        ),
+      );
+    }
     const duplicate = await Ticket.findOne({
       requester: id,
       requesterRole,
-      $or: [{ tags: { $all: tagList } }, { title }, { description }],
+      title: cleanedTitle,
+      description: cleanedDescription,
       status: { $nin: ["closed", "resolved"] },
-    });
+    }).collation({ locale: "en", strength: 2 });
 
     if (duplicate) {
       return res
@@ -374,7 +474,7 @@ export const createTicket = async (
         .json(
           new ApiError(
             409,
-            "Ticket with same tags, title, or description already exists.",
+            "This exact ticket is already open. Continue the conversation from your ticket history.",
           ),
         );
     }
@@ -420,14 +520,14 @@ export const createTicket = async (
 
     const obj = {
       tags: tagList,
-      title,
-      description,
+      title: cleanedTitle,
+      description: cleanedDescription,
       requester: id,
       requesterRole,
       status: "open",
       dueDate: dueDatePlus24,
-      priority: await checkPriority(tags),
-      relatedTickets: await checkRelatedTickets(tags),
+      priority: await checkPriority(tagList),
+      relatedTickets: await checkRelatedTickets(tagList),
       source: cleanText(req.body?.source) || "website",
       platform:
         cleanText(req.body?.platform) ||
@@ -441,9 +541,75 @@ export const createTicket = async (
     };
 
     const ticket = await Ticket.create(obj);
-    const assignment = await assignTicketToAgent(
-      (ticket as any)._id.toString(),
-    );
+    let callbackRecord: any = null;
+    if (isCallbackRequest && callbackAt) {
+      const nameParts = String((requesterProfile as any)?.name || "Customer")
+        .trim()
+        .split(/\s+/);
+      try {
+        callbackRecord = await CallRecord.create({
+          phoneNumber: callbackPhone,
+          firstName: nameParts.shift() || "Customer",
+          lastName: nameParts.join(" "),
+          email: (requesterProfile as any)?.email || undefined,
+          callStatus: "callback_requested",
+          leadStatus: "callback_requested",
+          contactActionStatus: "pending",
+          followUp: true,
+          callbackAt,
+          productService: "Support callback",
+          dataSource: obj.source,
+          leadBy: role,
+          comment: cleanedDescription,
+          supportTicketId: ticket._id,
+          ...(requesterRole === "Agency" ? { channelAgency: id } : {}),
+          followUpHistory: [
+            {
+              openedAt: new Date(),
+              openingRemark: `Callback requested from ${obj.source}`,
+              callbackAt,
+            },
+          ],
+        });
+      } catch (callbackError) {
+        await Ticket.findByIdAndDelete(ticket._id).catch(() => undefined);
+        throw callbackError;
+      }
+    }
+    let assignment: any = {
+      assigned: false,
+      ticket,
+      reason: "assignment_pending",
+    };
+    try {
+      assignment = await assignTicketToAgent(
+        (ticket as any)._id.toString(),
+      );
+    } catch (assignmentError: any) {
+      console.log(
+        `[Support] Ticket ${ticket._id} created but assignment is pending: ${
+          assignmentError?.message || assignmentError
+        }`,
+      );
+    }
+    if (callbackRecord && assignment.assigned && (assignment as any).agent?._id) {
+      const assignedId = (assignment as any).agent._id;
+      callbackRecord = await CallRecord.findByIdAndUpdate(
+        callbackRecord._id,
+        {
+          $set: {
+            assignee: assignedId,
+            assignees: [assignedId],
+            assignedAt: new Date(),
+            assignmentMode: "auto",
+            "followUpHistory.0.assignedTo": assignedId,
+            "followUpHistory.0.assignedToName":
+              (assignment as any).agent.name || "Assigned agent",
+          },
+        },
+        { new: true },
+      );
+    }
     try {
       await sendSingleNotification({
         type: "ticket-created",
@@ -459,24 +625,43 @@ export const createTicket = async (
         }`,
       );
     }
-    if (tagList.includes("callback_request")) {
+    if (isCallbackRequest) {
       try {
-        const admins = await Admin.find({ role: { $in: ["admin", "manager"] } })
-          .select("_id")
-          .lean();
-        const adminIds = admins.map((admin) => admin._id.toString());
+        const admins = await Admin.aggregate([
+          { $match: { status: true } },
+          {
+            $lookup: {
+              from: "roles",
+              localField: "role",
+              foreignField: "_id",
+              as: "roleData",
+            },
+          },
+          { $unwind: { path: "$roleData", preserveNullAndEmptyArrays: true } },
+          { $match: { "roleData.name": { $not: /^agent$|^lander$/i } } },
+          { $project: { _id: 1 } },
+        ]);
+        const assignedCallbackId =
+          assignment.assigned && (assignment as any).agent?._id
+            ? (assignment as any).agent._id.toString()
+            : "";
+        const adminIds = admins
+          .map((admin) => admin._id.toString())
+          .filter((adminId) => adminId !== assignedCallbackId);
         const callbackContext = {
           ticketId: ticket._id.toString(),
-          callbackTime: new Date().toLocaleString(),
+          callbackTime: callbackAt?.toISOString() || "",
+          callbackRecordId: callbackRecord?._id?.toString?.() || "",
         };
-        if (assignment.assigned && (assignment as any).agent?._id) {
+        if (assignedCallbackId) {
           await sendSingleNotification({
             type: "ticket-created",
-            toUserId: (assignment as any).agent._id.toString(),
+            toUserId: assignedCallbackId,
             toRole: UserType.AGENT,
             fromUser: { _id: id.toString(), role: resolveNotificationRole(role) },
             context: callbackContext,
             direction: "sender",
+            dedupeKey: `callback-ticket:${ticket._id}:assignee:${assignedCallbackId}`,
           });
         }
         await Promise.all(
@@ -488,6 +673,7 @@ export const createTicket = async (
               fromUser: { _id: id.toString(), role: resolveNotificationRole(role) },
               context: callbackContext,
               direction: "sender",
+              dedupeKey: `callback-ticket:${ticket._id}:admin:${adminId}`,
             }).catch((error) => {
               console.log(
                 `[Notification] Failed to send callback ticket to ${adminId}: ${
@@ -595,10 +781,10 @@ const checkPriority = async (tags: any): Promise<any> => {
   });
 
   function decideOverallPriority() {
-    if (lowPriority.length > 0) return "low";
+    if (criticalPriority.length > 0) return "critical";
     else if (highPriority.length > 0) return "high";
     else if (mediumPriority.length > 0) return "medium";
-    else if (criticalPriority.length > 0) return "critical";
+    else if (lowPriority.length > 0) return "low";
     return "low";
   }
   return decideOverallPriority();
@@ -619,12 +805,16 @@ export const getTicket = async (
 ): Promise<any> => {
   try {
     const { role, _id: userId } = req.user;
+    const staffRole = await resolveChatStaffRole(userId, role);
     const result: any = await Ticket.findById(req.params.id)
       .populate("requester", "fullName name email mobile")
       .populate("listingId", "title name productType type")
       .populate("transactionId", "title name productType type")
       .populate("relatedTickets", "title status")
       .lean();
+    if (!result) {
+      return res.status(404).json(new ApiError(404, "Ticket not found"));
+    }
     const requesterId =
       (result as any)?.requester?._id?.toString?.() ||
       result?.requester?.toString?.();
@@ -636,12 +826,15 @@ export const getTicket = async (
         (await resolveSupportAssignee(result.assignee)) || result.assignee;
     }
 
-    if (role === "agent") {
+    if (staffRole === "agent") {
       if (assigneeId !== userId.toString()) {
         return res
           .status(403)
           .json(new ApiError(403, "Unauthorized to access this ticket"));
       }
+    } else if (staffRole === "admin") {
+      // Active Admin employees (including support/manager roles) have the
+      // operational overview required to assign and reply to tickets.
     } else if (role === "agency") {
       const agencyId = convertToObjectId(userId) || userId;
       const memberIds = await Agency.find({ parentAgency: agencyId }).distinct(
@@ -665,9 +858,28 @@ export const getTicket = async (
           .status(403)
           .json(new ApiError(403, "Unauthorized to access this ticket"));
       }
+    } else {
+      return res
+        .status(403)
+        .json(new ApiError(403, "Unauthorized to access this ticket"));
     }
-    if (!result)
-      return res.status(404).json(new ApiError(404, "Ticket not found"));
+    const requesterViewing = ["user", "agency", "agency_member"].includes(
+      role,
+    );
+    result.interactions = (Array.isArray(result.interactions)
+      ? result.interactions
+      : []
+    )
+      .filter(
+        (interaction: any) =>
+          !(requesterViewing && interaction?.action === "internal_note"),
+      )
+      .map((interaction: any) => ({
+        ...interaction,
+        isSender: requesterViewing
+          ? ["User", "Agency"].includes(interaction?.initiatorType)
+          : ["Agent", "Admin"].includes(interaction?.initiatorType),
+      }));
     return res
       .status(200)
       .json(new ApiResponse(200, result, "Data fetched successfully"));
@@ -692,9 +904,16 @@ export const deactivateAgent = async (
     await Ticket.updateMany(
       {
         assignee: id,
+        $or: [
+          { assigneeModel: "Agent" },
+          { assigneeModel: { $exists: false } },
+        ],
         status: { $nin: ["closed", "resolved"] },
       },
-      { $unset: { assignee: "" }, $set: { status: "re_assigned" } },
+      {
+        $unset: { assignee: "", assigneeModel: "" },
+        $set: { status: "re_assigned" },
+      },
     );
 
     const toggledAvailability = !agent.availability;
@@ -747,12 +966,14 @@ export const getTickets = async (
 ): Promise<any> => {
   try {
     const { _id: userId, role } = req.user;
-    const { assignee } = req.query;
+    const staffRole = await resolveChatStaffRole(userId, role);
     const query: any = { ...req.query };
     let roleMatchStage: any = null;
 
-    if (role === "agent") {
-      query.assignee = assignee || userId;
+    if (staffRole === "agent") {
+      query.assignee = userId;
+    } else if (staffRole === "admin") {
+      // Keep the requested operational filters for Admin employees.
     } else if (role === "user") {
       query.requester = userId;
       query.requesterRole = "User";
@@ -782,6 +1003,10 @@ export const getTickets = async (
           ],
         },
       };
+    } else {
+      return res
+        .status(403)
+        .json(new ApiError(403, "Unauthorized to access support tickets"));
     }
     const pipeline = [
       {
@@ -949,6 +1174,13 @@ export const getAgents = async (
         .json(new ApiResponse(200, agents, "Data fetched successfully"));
     }
 
+    const staffRole = await resolveChatStaffRole(userId, role);
+    if (staffRole !== "admin" && staffRole !== "agent") {
+      return res
+        .status(403)
+        .json(new ApiError(403, "Unauthorized to list support staff"));
+    }
+
     const { roleName, role: roleFilter, ...query } = req.query || {};
     const requestedRole = String(roleName || roleFilter || "")
       .trim()
@@ -1055,7 +1287,10 @@ export const deleteTicket = async (
     const ticketDaTa = await Ticket.findById(id);
     if (!ticketDaTa)
       return res.status(400).json(new ApiError(400, "Ticket not found"));
-    if (ticketDaTa && ticketDaTa?.assignee) {
+    if (
+      ticketDaTa?.assignee &&
+      String(ticketDaTa.assigneeModel || "Agent") === "Agent"
+    ) {
       const agentData = await Agent.findById({ _id: ticketDaTa?.assignee });
       if (agentData) {
         agentData.activeTickets = Math.max(
@@ -1091,9 +1326,16 @@ export const deleteAgent = async (
     await Ticket.updateMany(
       {
         assignee: id,
+        $or: [
+          { assigneeModel: "Agent" },
+          { assigneeModel: { $exists: false } },
+        ],
         status: { $nin: ["closed", "resolved"] },
       },
-      { $unset: { assignee: "" }, $set: { status: "re_assigned" } },
+      {
+        $unset: { assignee: "", assigneeModel: "" },
+        $set: { status: "re_assigned" },
+      },
     );
 
     await Agent.findByIdAndDelete(id);
@@ -1116,15 +1358,15 @@ const createInteractionObject = ({
   action,
   content,
   attachments,
-}: any): Promise<any> => {
+}: any): any => {
   const interaction: any = {
     initiator,
-    receiver,
     initiatorType,
-    receiverType,
     action,
     timestamp: new Date(),
   };
+  if (receiver) interaction.receiver = receiver;
+  if (receiverType) interaction.receiverType = receiverType;
 
   if (action === "commented" || action === "internal_note") {
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
@@ -1166,18 +1408,20 @@ export const addInteraction = async (
   res: Response,
 ): Promise<any> => {
   try {
-    let { role, _id } = req.user;
-    let { initiator, receiver, action, content, ticketId } = req.body;
+    const { role, _id } = req.user;
+    const { action, ticketId } = req.body;
+    const initiator = _id;
+    const content = cleanText(req.body?.content);
+    const actorId = _id?.toString?.() || String(_id);
 
     const ticket = await Ticket.findById(ticketId);
     if (!ticket)
       return res.status(404).json(new ApiError(404, "Ticket not found"));
 
-    // Admin can always interact with tickets
-    const isAdmin = role === "admin";
-    if (isAdmin) initiator = _id;
+    const staffRole = await resolveChatStaffRole(initiator, role);
+    const isAdmin = staffRole === "admin";
+    const isRequesterRole = ["user", "agency", "agency_member"].includes(role);
 
-    // Only initiator or assignee can interact
     if (role === "agency") {
       const memberIds = await Agency.find({ parentAgency: _id }).distinct(
         "_id",
@@ -1185,7 +1429,7 @@ export const addInteraction = async (
       const allowed = [_id.toString(), ...memberIds.map(String)];
       if (
         !allowed.includes(ticket.requester?.toString()) &&
-        ticket.assignee?.toString() !== _id.toString()
+        ticket.assignee?.toString() !== actorId
       ) {
         return res
           .status(403)
@@ -1195,30 +1439,14 @@ export const addInteraction = async (
       }
     } else if (
       !isAdmin &&
-      ticket.requester?.toString() !== _id &&
-      ticket.assignee?.toString() !== _id
+      ticket.requester?.toString() !== actorId &&
+      ticket.assignee?.toString() !== actorId
     ) {
       return res
         .status(403)
         .json(
           new ApiError(403, "You are not authorized to access this ticket"),
         );
-    }
-
-    const isRequesterRole = ["user", "agency", "agency_member"].includes(role);
-    if (isRequesterRole && initiator?.toString() !== _id.toString()) {
-      return res
-        .status(403)
-        .json(new ApiError(403, "Invalid initiator for this token"));
-    }
-    if (
-      !isRequesterRole &&
-      !isAdmin &&
-      initiator?.toString() !== _id.toString()
-    ) {
-      return res
-        .status(403)
-        .json(new ApiError(403, "Invalid initiator for this token"));
     }
 
     if (ticket.status === "closed")
@@ -1240,50 +1468,25 @@ export const addInteraction = async (
     if (!requesterExist)
       return res.status(404).json(new ApiError(404, "Requester not found"));
 
-    let effectiveReceiver: any = receiver;
+    let effectiveReceiver: any = isRequesterRole
+      ? ticket.assignee
+      : ticket.requester;
 
-    // For admin, use the provided receiver (should be requester for admin-to-user messaging)
-    // For non-admin users, use existing logic
-    if (!isAdmin) {
-      if (isRequesterRole) {
-        if (!ticket.assignee) {
-          const assignment = await assignTicketAutomatically(ticket);
-          if (
-            assignment.assigned &&
-            "agent" in assignment &&
-            assignment.agent?._id
-          ) {
-            effectiveReceiver = assignment.agent._id;
-          }
-        }
-        if (!effectiveReceiver && ticket.assignee) {
-          effectiveReceiver = ticket.assignee;
-        }
-        if (!effectiveReceiver) {
-          const fallbackAssignee = await findDefaultSupportAssignee();
-          if (fallbackAssignee?.assignee?._id) {
-            ticket.assignee = fallbackAssignee.assignee._id;
-            ticket.status =
-              ticket.status === "open" || ticket.status === "re_assigned"
-                ? "in_progress"
-                : ticket.status;
-            effectiveReceiver = fallbackAssignee.assignee._id;
-          }
-        }
-      }
-    } else {
-      // Admin context: receiver should be the requester for admin-to-user messaging
-      // If receiver not provided, default to requester
-      if (!effectiveReceiver) {
-        effectiveReceiver = ticket.requester;
+    if (isRequesterRole && !effectiveReceiver) {
+      const assignment = await assignTicketAutomatically(ticket);
+      if (
+        assignment.assigned &&
+        "agent" in assignment &&
+        assignment.agent?._id
+      ) {
+        effectiveReceiver = assignment.agent._id;
       }
     }
 
-    const agentIdToCheck = isRequesterRole ? effectiveReceiver : initiator;
-    if (agentIdToCheck && !isAdmin) {
-      const agentExist = await Agent.findById({ _id: agentIdToCheck });
+    if (isRequesterRole && effectiveReceiver) {
+      const agentExist = await Agent.findById({ _id: effectiveReceiver });
       const adminEmployeeExist = !agentExist
-        ? await Admin.findById({ _id: agentIdToCheck }).select("_id").lean()
+        ? await Admin.findById({ _id: effectiveReceiver }).select("_id").lean()
         : null;
       if (!agentExist && !adminEmployeeExist)
         return res
@@ -1302,9 +1505,8 @@ export const addInteraction = async (
       }));
     }
 
-    // Determine initiator and receiver types
     let initiatorType: string;
-    let receiverType: string;
+    let receiverType: string | undefined;
 
     if (isAdmin) {
       initiatorType = "Admin";
@@ -1316,13 +1518,24 @@ export const addInteraction = async (
         : null;
       receiverType = receiverIsAdmin ? "Admin" : "Agent";
     } else {
-      const initiatorIsAdmin = await Admin.exists({ _id: initiator });
-      initiatorType = initiatorIsAdmin ? "Admin" : "Agent";
+      initiatorType = (await Admin.exists({ _id: initiator }))
+        ? "Admin"
+        : "Agent";
       receiverType = requesterModel;
     }
 
-    const normalizedAction =
-      action === "status_update" ? "status_changed" : action;
+    const requestedAction =
+      action === "status_update" ? "status_changed" : action || "commented";
+    const normalizedAction = isRequesterRole ? "commented" : requestedAction;
+    if (
+      !["commented", "status_changed", "resolved", "internal_note"].includes(
+        normalizedAction,
+      )
+    ) {
+      return res
+        .status(400)
+        .json(new ApiError(400, "Invalid ticket interaction action"));
+    }
 
     const interaction = createInteractionObject({
       action: normalizedAction,
@@ -1352,6 +1565,9 @@ export const addInteraction = async (
     res.status(200).json({ success: true, data: ticket });
   } catch (error) {
     console.log(error);
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json(error);
+    }
     res.status(500).json(new ApiError(500, "Failed to add interaction", error));
   }
 };
@@ -1362,6 +1578,22 @@ export const manualAssignTicketToAgent = async (
 ): Promise<any> => {
   try {
     const { ticketId, agentId } = req.body;
+    const staffRole = await resolveChatStaffRole(
+      req.user?._id,
+      req.user?.role,
+    );
+    if (staffRole !== "admin") {
+      throw new ApiError(
+        403,
+        "Only an active admin employee can assign support tickets",
+      );
+    }
+    if (!Types.ObjectId.isValid(String(ticketId || ""))) {
+      throw new ApiError(400, "A valid ticket is required");
+    }
+    if (agentId && !Types.ObjectId.isValid(String(agentId))) {
+      throw new ApiError(400, "A valid support agent is required");
+    }
 
     const result = await assignTicketToAgent(ticketId, agentId);
 
@@ -1371,11 +1603,20 @@ export const manualAssignTicketToAgent = async (
         .json(new ApiError(409, "Ticket could not be assigned"));
     }
 
-    res
-      .status(200)
-      .json(
-        new ApiResponse(200, result.ticket, "Successfully assigned to agent"),
-      );
+    const ticketPayload = result.ticket?.toObject?.() || result.ticket;
+    if (ticketPayload?.assignee) {
+      ticketPayload.assignee =
+        (await resolveSupportAssignee(ticketPayload.assignee)) ||
+        ticketPayload.assignee;
+    }
+
+    res.status(200).json(
+      new ApiResponse(
+        200,
+        ticketPayload,
+        "Successfully assigned to support agent",
+      ),
+    );
   } catch (error) {
     if (error instanceof ApiError) {
       return res.status(error.statusCode).json(error);
@@ -1409,12 +1650,15 @@ const getData = async (id: any, role: any): Promise<any> => {
       const isSender =
         (isRequester &&
           (initiatorType === "User" || initiatorType === "Agency")) ||
-        (!isRequester && initiatorType === "Agent");
+        (!isRequester &&
+          (initiatorType === "Agent" || initiatorType === "Admin"));
       if (action?.action === "internal_note" && isRequester) return;
       interaction.push({ ...action, isSender });
     });
   }
-  ticketData.requester.name = ticketData?.requester?.name;
+  if (ticketData?.requester && typeof ticketData.requester === "object") {
+    ticketData.requester.name = ticketData.requester.name;
+  }
   return { ...ticketData, interactions: interaction };
 };
 
@@ -1428,6 +1672,22 @@ export const updateTicketStatus = async (
     const ticket = await Ticket.findById({ _id: id });
     if (!ticket)
       return res.status(404).json(new ApiError(404, "Ticket not found"));
+    const staffRole = await resolveChatStaffRole(_id, role);
+    const isAdminEmployee = staffRole === "admin";
+    const legacyAgent = staffRole === "agent"
+      ? await Agent.exists({ _id, availability: true })
+      : null;
+    const isAssignedAgent = Boolean(
+      staffRole === "agent" &&
+        (legacyAgent || (await Admin.exists({ _id, status: true }))) &&
+        ticket.assignee?.toString() === String(_id),
+    );
+
+    if (!isAdminEmployee && !isAssignedAgent) {
+      return res
+        .status(403)
+        .json(new ApiError(403, "You are not authorized to update this ticket"));
+    }
 
     if (ticket.status === status)
       return res.status(200).json({ success: true, message: "Status Updated" });
@@ -1437,7 +1697,7 @@ export const updateTicketStatus = async (
         .status(200)
         .json({ success: true, message: "Ticket has been already closed" });
 
-    if (!ticket?.assignee && role !== "admin")
+    if (!ticket?.assignee && !isAdminEmployee)
       return res
         .status(404)
         .json(new ApiError(404, "Ticket is not yet assigned"));
@@ -1445,7 +1705,8 @@ export const updateTicketStatus = async (
     if (
       (status === "closed" || status === "resolved") &&
       !ticket.resolutionDate &&
-      ticket.assignee
+      ticket.assignee &&
+      String(ticket.assigneeModel || "Agent") === "Agent"
     ) {
       ticket.resolutionDate = new Date();
       const agentData: any = await Agent.findById({ _id: ticket.assignee });
@@ -1535,9 +1796,16 @@ export const updateAgent = async (
       await Ticket.updateMany(
         {
           assignee: userId,
+          $or: [
+            { assigneeModel: "Agent" },
+            { assigneeModel: { $exists: false } },
+          ],
           status: { $nin: ["closed", "resolved"] },
         },
-        { $unset: { assignee: "" }, $set: { status: "re_assigned" } },
+        {
+          $unset: { assignee: "", assigneeModel: "" },
+          $set: { status: "re_assigned" },
+        },
       );
       agent.activeTickets = 0;
       req.body.activeTickets = 0;

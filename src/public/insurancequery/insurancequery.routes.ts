@@ -7,11 +7,17 @@ import {
   dynamicUpload,
   s3UploaderMiddleware,
 } from "../../middlewares/s3FileUploadMiddleware";
+import { requireApprovedDsaIfAgency } from "../../middlewares/dsaAuthMiddleware";
 
 const router = Router();
 
+router.get(
+  "/public/track",
+  asyncHandler(InsuranceQueryController.getPublicTrackingStatus),
+);
+
 // All routes require authentication
-router.use(authenticateToken);
+router.use(authenticateToken, requireApprovedDsaIfAgency);
 
 // CRUD routes for insurance queries
 router.post(

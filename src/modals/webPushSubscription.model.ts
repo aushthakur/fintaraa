@@ -12,6 +12,10 @@ export interface IWebPushSubscription extends Document {
   userAgent?: string;
   active: boolean;
   lastUsedAt?: Date;
+  lastSuccessAt?: Date;
+  lastFailureAt?: Date;
+  failureCount: number;
+  lastError?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -42,6 +46,10 @@ const WebPushSubscriptionSchema = new Schema<IWebPushSubscription>(
     userAgent: { type: String, trim: true },
     active: { type: Boolean, default: true, index: true },
     lastUsedAt: { type: Date },
+    lastSuccessAt: { type: Date },
+    lastFailureAt: { type: Date },
+    failureCount: { type: Number, default: 0, min: 0 },
+    lastError: { type: String, trim: true, maxlength: 1000 },
   },
   { timestamps: true },
 );

@@ -1,6 +1,32 @@
 export type TimeSeriesPoint = { date: string; count: number };
 export type AmountSeriesPoint = { date: string; amount: number };
 
+export type ApiHealthStatus = "operational" | "down";
+
+export interface DashboardCommandCentreResponse {
+  timezone: string;
+  generatedAt: string;
+  kpis: {
+    totalUsersToday: number;
+    newApplicationsToday: number;
+    totalActiveApplications: number;
+    approvalsThisWeek: number;
+    revenueThisMonth: number;
+    pendingCallbacks: number;
+  };
+  conversionFunnel: {
+    started: number;
+    submitted: number;
+    approved: number;
+  };
+  apiHealth: Array<{
+    key: "cibil" | "partner_banks" | "sms" | "whatsapp";
+    label: string;
+    status: ApiHealthStatus;
+    detail: string;
+  }>;
+}
+
 export interface DashboardOverviewResponse {
   range: {
     startDate: string;

@@ -6,12 +6,15 @@ import {
 } from "../modals/communicationOutbox.model";
 import {
   createDefaultMailOptions,
+  createNewsletterMailOptions,
   sendMail,
 } from "../utils/emailService";
+import { NewsletterSubscription } from "../modals/newsletterSubscription.model";
 import {
   sendInteraktTemplateMessage,
   type InteraktTemplatePayload,
 } from "./interakt.service";
+import { sendSMSMessage } from "../utils/smsService";
 
 type EnqueueCommunicationInput = {
   channel: CommunicationChannel;
@@ -21,12 +24,14 @@ type EnqueueCommunicationInput = {
   payload: Record<string, any>;
   idempotencyKey: string;
   maxAttempts?: number;
+  nextAttemptAt?: Date;
 };
 
 type EmailOutboxPayload = {
   to: string;
   subject: string;
   html: string;
+  newsletter?: boolean;
 };
 
 const BATCH_SIZE = 20;
@@ -69,7 +74,7 @@ export const enqueueCommunication = async (
           status: CommunicationOutboxStatus.PENDING,
           attempts: 0,
           maxAttempts: input.maxAttempts || 4,
-          nextAttemptAt: now,
+          nextAttemptAt: input.nextAttemptAt || now,
         },
       },
       { upsert: true, new: true, setDefaultsOnInsert: true },
@@ -90,12 +95,40 @@ const deliverCommunication = async (job: ICommunicationOutbox) => {
     if (!payload?.to || !payload?.subject || !payload?.html) {
       throw new Error("Email outbox payload is incomplete.");
     }
+    if (payload.newsletter) {
+      const isActive = await NewsletterSubscription.exists({
+        email: payload.to.trim().toLowerCase(),
+        status: "active",
+      });
+      if (!isActive) {
+        return {
+          messageId: "",
+          providerStatus: "skipped_unsubscribed",
+          skipped: true,
+        };
+      }
+    }
     const info = await sendMail(
-      createDefaultMailOptions(payload.to, payload.subject, payload.html),
+      payload.newsletter
+        ? createNewsletterMailOptions(
+            payload.to,
+            payload.subject,
+            payload.html,
+          )
+        : createDefaultMailOptions(payload.to, payload.subject, payload.html),
     );
+    const accepted = Array.isArray(info?.accepted) ? info.accepted : [];
+    const rejected = Array.isArray(info?.rejected) ? info.rejected : [];
+    if (accepted.length === 0 || rejected.length > 0) {
+      throw new Error(
+        `SMTP rejected recipient${rejected.length ? `: ${rejected.join(", ")}` : ""}`,
+      );
+    }
     return {
       messageId: providerMessageId(info),
-      providerStatus: "accepted",
+      providerStatus:
+        String(info?.response || "").trim().slice(0, 500) || "accepted",
+      skipped: false,
     };
   }
 
@@ -106,6 +139,24 @@ const deliverCommunication = async (job: ICommunicationOutbox) => {
     return {
       messageId: providerMessageId(response),
       providerStatus: "accepted",
+      skipped: false,
+    };
+  }
+
+  if (job.channel === CommunicationChannel.SMS) {
+    const payload = job.payload as {
+      to: string;
+      message: string;
+      templateId: string;
+      variables?: Record<string, string | number>;
+    };
+    const response = await sendSMSMessage(payload);
+    return {
+      messageId: providerMessageId(
+        response.success ? response.response : undefined,
+      ),
+      providerStatus: response.success ? "accepted" : response.reason,
+      skipped: false,
     };
   }
 
@@ -196,8 +247,10 @@ export const processCommunicationOutbox = async () => {
           },
           {
             $set: {
-              status: CommunicationOutboxStatus.SENT,
-              sentAt: new Date(),
+              status: result.skipped
+                ? CommunicationOutboxStatus.CANCELLED
+                : CommunicationOutboxStatus.SENT,
+              ...(result.skipped ? {} : { sentAt: new Date() }),
               providerMessageId: result.messageId || undefined,
               providerStatus: result.providerStatus,
               lastError: "",
@@ -279,6 +332,7 @@ export const applyInteraktDeliveryWebhook = async (body: any) => {
       CommunicationOutboxStatus.PROCESSING,
       CommunicationOutboxStatus.SENT,
     ],
+    [CommunicationOutboxStatus.CANCELLED]: [],
   };
   const eventAt = asWebhookDate(body?.timestamp);
   const set: Record<string, any> = {

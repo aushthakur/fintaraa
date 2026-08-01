@@ -9,6 +9,9 @@ import { watchEnvFile } from "./config/envWatcher";
 import { configureSocket } from "./config/socket.io";
 import { config as manualConfig } from "./config/config"
 import { startCommunicationOutboxWorker } from "./services/communicationOutbox.service";
+import { startPushCampaignWorker } from "./services/pushCampaign.service";
+import { ensureDefaultDripCampaign } from "./services/applicationDrip.service";
+import { startCallbackReminderScheduler } from "./services/callbackReminder.service";
 
 // Load environment variables
 config();
@@ -63,7 +66,10 @@ process.on("SIGINT", shutdown);
 const startServer = async (): Promise<void> => {
   try {
     await connectDB(); // Establish database connection
+    await ensureDefaultDripCampaign();
+    startCallbackReminderScheduler();
     startCommunicationOutboxWorker();
+    startPushCampaignWorker();
     httpServer.listen(port, () => {
       logger.info(
         `Server is running at http://localhost:${port}`.blue,

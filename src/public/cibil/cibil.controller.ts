@@ -10,11 +10,15 @@ import { ConsentHistory } from "../../modals/consentHistory.model";
 import { KycVerificationStatus, User } from "../../modals/user.model";
 import { Agency } from "../../modals/agency.model";
 import { BureauScoreHistory } from "../../modals/bureauScoreHistory.model";
-import { rewardReferralIfEligible } from "../../services/referral.service";
 import { fetchEncryptedCibilReport } from "../../services/surepassEncrypted.service";
 import { sendSingleNotification } from "../../services/notification.service";
 import { UserType } from "../../modals/notification.model";
 import { RazorpayService } from "../../config/razorpay";
+import { downloadFromS3 } from "../../config/s3Uploader";
+import {
+  extractStoredCibilPdf,
+  persistCibilPdfReport,
+} from "../../services/cibilPdfStorage.service";
 
 type ScoreBureau = "cibil" | "experian";
 
@@ -52,11 +56,18 @@ const extractScore = (report: any) =>
   ) || 0;
 
 const extractCreditReportLink = (report: any) =>
+  report?.fintaraaPdfStorage?.url ||
+  report?.data?.fintaraaPdfStorage?.url ||
+  report?.data?.pdf_url ||
+  report?.data?.pdfUrl ||
+  report?.data?.pdf_report_link ||
   report?.data?.credit_report_link ||
   report?.data?.creditReportLink ||
+  report?.pdf_url ||
+  report?.pdfUrl ||
+  report?.pdf_report_link ||
   report?.credit_report_link ||
   report?.creditReportLink ||
-  report?.pdfUrl ||
   null;
 
 const addDays = (date: Date, days: number) =>
@@ -213,9 +224,9 @@ const fetchAndPersistCustomerBureauScore = async (args: {
 }) => {
   const cibilReport = await fetchSurepassCibilReport(args.payload);
   const cibilScore = extractScore(cibilReport.data);
-  const pdfReport = await fetchSurepassCibilPdfReport(args.payload).catch(
-    () => null,
-  );
+  const pdfReport = extractStoredCibilPdf(cibilReport.data)
+    ? { data: cibilReport.data }
+    : await fetchSurepassCibilPdfReport(args.payload).catch(() => null);
   const pdfLink =
     extractCreditReportLink(pdfReport?.data) ||
     extractCreditReportLink(cibilReport.data);
@@ -1209,6 +1220,10 @@ export const fetchUserCibilReport = async (
     user.cibilLastFetchedAt = now;
     (user as any).cibilReport = report.data;
     (user as any).cibilRequestPayload = payload;
+    if (extractStoredCibilPdf(report.data)) {
+      user.cibilPdfLastFetchedAt = now;
+      (user as any).cibilPdfReport = report.data;
+    }
     if (score) {
       user.kycProfile = user.kycProfile || { reusableAcrossApplications: true };
       user.kycProfile.verification = {
@@ -1248,7 +1263,6 @@ export const fetchUserCibilReport = async (
           environment: report.environment,
         },
       });
-      await rewardReferralIfEligible(userId);
       try {
         await sendSingleNotification({
           type: "kyc-verified",
@@ -1311,31 +1325,49 @@ export const fetchUserCibilPdfReport = async (
     if (!user) return next(new ApiError(404, "User not found"));
 
     const now = new Date();
-    const lastFetched = user.cibilPdfLastFetchedAt
-      ? new Date(user.cibilPdfLastFetchedAt)
+    const scoreReport = (user as any)?.cibilReport || null;
+    const scoreReportHasStoredPdf = Boolean(extractStoredCibilPdf(scoreReport));
+    let cachedReport =
+      (user as any)?.cibilPdfReport ||
+      (scoreReportHasStoredPdf ? scoreReport : null);
+    const effectiveLastFetchedAt =
+      user.cibilPdfLastFetchedAt ||
+      (scoreReportHasStoredPdf ? user.cibilLastFetchedAt : null);
+    const lastFetched = effectiveLastFetchedAt
+      ? new Date(effectiveLastFetchedAt)
       : null;
     const msDiff = lastFetched ? now.getTime() - lastFetched.getTime() : null;
     const daysSinceFetch = msDiff ? msDiff / (1000 * 60 * 60 * 24) : null;
     const refreshLocked = daysSinceFetch !== null && daysSinceFetch < 30;
     const daysRemaining = Math.max(0, Math.ceil(30 - (daysSinceFetch || 0)));
-    const cachedReport = (user as any)?.cibilPdfReport || null;
-    const cachedLink =
-      cachedReport?.data?.credit_report_link ||
-      cachedReport?.data?.creditReportLink ||
-      cachedReport?.credit_report_link ||
-      cachedReport?.creditReportLink ||
-      null;
+    if (refreshLocked && cachedReport) {
+      try {
+        const storedCachedReport = await persistCibilPdfReport(cachedReport, {
+          environment: "production",
+        });
+        cachedReport = storedCachedReport.report;
+        if (storedCachedReport.uploaded || !(user as any)?.cibilPdfReport) {
+          (user as any).cibilPdfReport = cachedReport;
+          user.cibilPdfLastFetchedAt =
+            user.cibilPdfLastFetchedAt || effectiveLastFetchedAt || now;
+          await user.save();
+        }
 
-    if (refreshLocked && cachedLink) {
-      return res.status(200).json(
-        new ApiResponse(200, {
-          cached: true,
-          report: cachedReport,
-          refreshAvailableInDays: daysRemaining,
-          lastFetchedAt: user.cibilPdfLastFetchedAt,
-          message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
-        }),
-      );
+        return res.status(200).json(
+          new ApiResponse(200, {
+            cached: true,
+            report: cachedReport,
+            pdfUrl: storedCachedReport.storage.url,
+            cibilScore: extractScore(cachedReport) || undefined,
+            refreshAvailableInDays: daysRemaining,
+            lastFetchedAt: effectiveLastFetchedAt,
+            message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
+          }),
+        );
+      } catch {
+        // Legacy provider URLs can expire. Fetch a fresh copy below and move it
+        // to Fintaraa S3 even while the normal bureau refresh window is locked.
+      }
     }
 
     const payload = prepareSurepassCibilPayload({
@@ -1353,6 +1385,8 @@ export const fetchUserCibilPdfReport = async (
     const report = await fetchSurepassCibilPdfReport(payload, {
       environment: normalizedEnv,
     });
+    const freshLink = extractCreditReportLink(report.data);
+    const cibilScore = extractScore(report.data);
 
     user.cibilPdfLastFetchedAt = now;
     (user as any).cibilPdfReport = report.data;
@@ -1369,10 +1403,9 @@ export const fetchUserCibilPdfReport = async (
       customerPan: user.panCard,
       customerGender: user.gender,
       paymentStatus: "waived",
-      pdfUrl:
-        report.data?.credit_report_link ||
-        report.data?.creditReportLink ||
-        null,
+      pdfUrl: freshLink,
+      bureauScore: cibilScore || undefined,
+      cibilScore: cibilScore || undefined,
     });
 
     return res.status(200).json(
@@ -1380,12 +1413,98 @@ export const fetchUserCibilPdfReport = async (
         payload,
         cached: false,
         report: report.data,
+        pdfUrl: freshLink,
+        cibilScore: cibilScore || undefined,
         environment: report.environment,
-        refreshAvailableInDays: daysRemaining,
+        refreshAvailableInDays: 30,
         lastFetchedAt: user.cibilPdfLastFetchedAt,
         message: `CIBIL PDF can be refreshed again in ${daysRemaining} day(s).`,
       }),
     );
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const downloadUserCibilPdfReport = async (
+  req: Request | any,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) return next(new ApiError(401, "Unauthorized"));
+    const user = await User.findById(userId);
+    if (!user) return next(new ApiError(404, "User not found"));
+
+    const scoreReport = (user as any)?.cibilReport || null;
+    let report =
+      (user as any).cibilPdfReport ||
+      (extractStoredCibilPdf(scoreReport) ? scoreReport : null);
+    let storage = extractStoredCibilPdf(report);
+
+    if (!storage && report) {
+      try {
+        const migratedReport = await persistCibilPdfReport(report, {
+          environment: "production",
+        });
+        report = migratedReport.report;
+        storage = migratedReport.storage;
+        (user as any).cibilPdfReport = report;
+        await user.save();
+      } catch {
+        // The saved provider URL may already be expired. Refresh it below.
+      }
+    }
+
+    const fetchFreshReport = async () => {
+      const payload = prepareSurepassCibilPayload({
+        name: user.name,
+        mobile: user.mobile,
+        panCard: user.panCard,
+        consent: "Y",
+        gender:
+          String(user.gender || "male").toLowerCase() === "female"
+            ? "female"
+            : "male",
+      });
+      const freshReport = await fetchSurepassCibilPdfReport(payload, {
+        environment: "production",
+      });
+      report = freshReport.data;
+      storage = extractStoredCibilPdf(report);
+      if (!storage) throw new ApiError(502, "CIBIL PDF storage is unavailable");
+      user.cibilPdfLastFetchedAt = new Date();
+      (user as any).cibilPdfReport = report;
+      await user.save();
+      return storage;
+    };
+
+    if (!storage) {
+      storage = await fetchFreshReport();
+    }
+
+    let storedDownload;
+    try {
+      storedDownload = await downloadFromS3(storage.key);
+      if (storedDownload.body.subarray(0, 5).toString() !== "%PDF-") {
+        throw new Error("Stored CIBIL report is not a valid PDF");
+      }
+    } catch {
+      storage = await fetchFreshReport();
+      storedDownload = await downloadFromS3(storage.key);
+    }
+
+    const content = storedDownload.body;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="fintaraa-cibil-report-${new Date()
+        .toISOString()
+        .slice(0, 10)}.pdf"`,
+    );
+    res.setHeader("Content-Length", String(content.length));
+    return res.status(200).send(content);
   } catch (error) {
     return next(error);
   }

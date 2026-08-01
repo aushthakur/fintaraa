@@ -1,3 +1,8 @@
+import {
+  escapeEmailHtml,
+  renderLightTransactionalEmail,
+} from "../utils/transactionalEmailTemplate";
+
 export type LoanEmailTemplateKey =
   | "applicationCreated"
   | "documentsRequired"
@@ -9,6 +14,7 @@ export type LoanEmailTemplateKey =
 export type LoanEmailTemplateContext = {
   name: string;
   applicationId: string;
+  loanType: string;
   bankName: string;
   loanAmount: string;
   disburseAmount: string;
@@ -25,75 +31,50 @@ export type RenderedLoanEmail = {
   html: string;
 };
 
-const escapeHtml = (value: unknown) =>
-  String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-
-const emailShell = ({
-  preheader,
-  body,
-  cta,
-}: {
-  preheader: string;
-  body: string;
-  cta?: { label: string; href: string };
-}) => `
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="x-apple-disable-message-reformatting" />
-    <title>Fintaraa</title>
-  </head>
-  <body style="margin:0;background:#f4f7fb;padding:0;font-family:Arial,Helvetica,sans-serif;color:#172033">
-    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">
-      ${escapeHtml(preheader)}
-    </div>
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f7fb">
-      <tr>
-        <td align="center" style="padding:28px 12px">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;overflow:hidden;border:1px solid #dfe8f2;border-radius:18px;background:#ffffff">
-            <tr>
-              <td style="background:#071b35;padding:22px 30px">
-                <div style="font-size:24px;font-weight:800;letter-spacing:-0.4px;color:#ffffff">Fintaraa</div>
-                <div style="margin-top:4px;font-size:12px;letter-spacing:1.2px;color:#70d6ff">SMARTER FINANCIAL JOURNEYS</div>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:34px 30px 26px;font-size:16px;line-height:1.65;color:#344054">
-                ${body}
-                ${
-                  cta
-                    ? `<div style="padding-top:14px">
-                         <a href="${escapeHtml(cta.href)}" style="display:inline-block;border-radius:10px;background:#0969da;padding:13px 22px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none">${escapeHtml(cta.label)}</a>
-                       </div>`
-                    : ""
-                }
-              </td>
-            </tr>
-            <tr>
-              <td style="border-top:1px solid #e8eef5;padding:20px 30px;font-size:13px;line-height:1.6;color:#667085">
-                Team Fintaraa<br />
-                <span style="color:#98a2b3">This is a service update for your loan application.</span>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>`;
-
 const paragraph = (value: string) =>
   `<p style="margin:0 0 16px">${value}</p>`;
 
-const detail = (label: string, value: string) =>
-  `<div style="margin:8px 0;border-radius:10px;background:#f5f8fc;padding:12px 14px"><span style="font-size:13px;color:#667085">${escapeHtml(label)}</span><br /><strong style="font-size:16px;color:#172033">${escapeHtml(value)}</strong></div>`;
+const applicationSummary = (
+  rows: Array<{ label: string; value: string }>,
+) => {
+  const content = rows
+    .filter((row) => row.value && row.value !== "—")
+    .map(
+      (row, index) => `
+        <tr>
+          <td style="${index ? "border-top:1px solid #e4edf3;" : ""}padding:11px 0;font-size:12px;line-height:1.5;color:#667085">${escapeEmailHtml(row.label)}</td>
+          <td align="right" style="${index ? "border-top:1px solid #e4edf3;" : ""}padding:11px 0 11px 16px;font-size:13px;font-weight:700;line-height:1.5;word-break:break-word;color:#102a43">${escapeEmailHtml(row.value)}</td>
+        </tr>`,
+    )
+    .join("");
+
+  return `
+    <div style="margin:22px 0;border:1px solid #d8e6ef;border-radius:12px;background-color:#f8fbfd;padding:16px 18px">
+      <div style="margin-bottom:4px;font-size:11px;font-weight:800;letter-spacing:0.9px;text-transform:uppercase;color:#0b72b9">Application summary</div>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">${content}</table>
+    </div>`;
+};
+
+const nextSteps = (items: string[]) => `
+  <div style="margin:22px 0 16px">
+    <h2 style="margin:0 0 12px;font-size:17px;line-height:1.4;color:#102a43">What happens next</h2>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+      ${items
+        .map(
+          (item, index) => `
+            <tr>
+              <td valign="top" width="30" style="padding:5px 10px 5px 0">
+                <span style="display:inline-block;width:22px;height:22px;border-radius:50%;background-color:#e8f4fb;text-align:center;font-size:11px;font-weight:800;line-height:22px;color:#0b72b9">${index + 1}</span>
+              </td>
+              <td valign="top" style="padding:5px 0;font-size:14px;line-height:1.6;color:#475467">${escapeEmailHtml(item)}</td>
+            </tr>`,
+        )
+        .join("")}
+    </table>
+  </div>`;
+
+const informationNote = (value: string) =>
+  `<div style="margin:18px 0;border-left:4px solid #5aa9d6;border-radius:0 8px 8px 0;background-color:#f1f8fc;padding:12px 14px;font-size:12px;line-height:1.65;color:#475467">${escapeEmailHtml(value)}</div>`;
 
 export const renderLoanEmail = (
   key: LoanEmailTemplateKey,
@@ -105,28 +86,50 @@ export const renderLoanEmail = (
       String(value || "").trim(),
     ]),
   ) as LoanEmailTemplateContext;
-  const name = escapeHtml(context.name || "Customer");
+  const name = escapeEmailHtml(context.name || "Customer");
   const bankName = context.bankName || "our lending partner";
+  const loanType = context.loanType || "Loan";
+  const requestedAmount =
+    context.loanAmount && context.loanAmount !== "—"
+      ? `₹${context.loanAmount}`
+      : "—";
+  const disbursedAmount =
+    context.disburseAmount && context.disburseAmount !== "—"
+      ? `₹${context.disburseAmount}`
+      : "—";
 
   switch (key) {
     case "applicationCreated": {
       const preheader = `Hi ${context.name}, your application ${context.applicationId} is now with our team.`;
       return {
         templateName: "loan_application_created",
-        subject: "Your loan application has been created – Fintaraa",
+        subject: `Application ${context.applicationId} received – Fintaraa`,
         preheader,
-        html: emailShell({
+        html: renderLightTransactionalEmail({
           preheader,
+          eyebrow: "Loan application update",
+          title: "Application received",
           body: [
             paragraph(`Hi ${name},`),
-            paragraph("Your loan application has been created successfully."),
-            detail("Application ID", context.applicationId),
             paragraph(
-              "Our team is reviewing your documents and will update you soon.",
+              `Thank you for applying for a <strong style="color:#102a43">${escapeEmailHtml(loanType)}</strong> through Fintaraa. We have received your application and it is now in our review queue.`,
             ),
-            paragraph("Thank you for choosing Fintaraa."),
+            applicationSummary([
+              { label: "Application Number", value: context.applicationId },
+              { label: "Loan product", value: loanType },
+              { label: "Requested amount", value: requestedAmount },
+              { label: "Current status", value: "Application received" },
+            ]),
+            nextSteps([
+              "Our team will review the details and documents submitted with your application.",
+              "If any clarification or additional document is required, we will contact you on your registered details.",
+              "You will receive further updates as your application moves through lender assessment.",
+            ]),
+            informationNote(
+              "Please keep your Application Number handy whenever you contact Fintaraa about this request.",
+            ),
           ].join(""),
-          cta: {
+          action: {
             label: "Track Application Status",
             href: context.trackApplicationLink,
           },
@@ -137,22 +140,33 @@ export const renderLoanEmail = (
       const preheader = `Hi ${context.name}, please upload ${context.documentName} to continue.`;
       return {
         templateName: "documents_required",
-        subject: "Action needed: Documents required for your loan application",
+        subject: `Action required for application ${context.applicationId}`,
         preheader,
-        html: emailShell({
+        html: renderLightTransactionalEmail({
           preheader,
+          eyebrow: "Action required",
+          title: "Documents required",
           body: [
             paragraph(`Hi ${name},`),
             paragraph(
-              "To process your loan application, we require the following documents:",
+              "We need an additional document to continue processing your loan application.",
             ),
-            detail("Documents required", context.documentName),
-            paragraph("Please click the button below to upload your documents."),
-            paragraph(
-              "Please share them at the earliest to avoid any delay.",
+            applicationSummary([
+              { label: "Application Number", value: context.applicationId },
+              { label: "Loan product", value: loanType },
+              { label: "Document required", value: context.documentName },
+              { label: "Current status", value: "Documents required" },
+            ]),
+            nextSteps([
+              "Upload a clear and complete PDF or image of the requested document.",
+              "Ensure the name and details match the information provided in your application.",
+              "Our team will review the uploaded document and resume processing your application.",
+            ]),
+            informationNote(
+              "Uploading the requested document promptly helps avoid unnecessary processing delays.",
             ),
           ].join(""),
-          cta: {
+          action: {
             label: "Upload Documents",
             href: context.websiteUrl,
           },
@@ -163,20 +177,33 @@ export const renderLoanEmail = (
       const preheader = `Hi ${context.name}, your application ${context.applicationId} has moved forward.`;
       return {
         templateName: "bank_login_success",
-        subject: `Good news! Your loan application has been logged in with ${bankName}`,
+        subject: `Application ${context.applicationId} logged with ${bankName}`,
         preheader,
-        html: emailShell({
+        html: renderLightTransactionalEmail({
           preheader,
+          eyebrow: "Loan application update",
+          title: "Application logged with the lender",
           body: [
             paragraph(`Hi ${name},`),
-            paragraph("<strong style=\"color:#172033\">Good news!</strong>"),
             paragraph(
-              `Your loan application has been successfully logged in with ${escapeHtml(bankName)}.`,
+              `Good news—your <strong style="color:#102a43">${escapeEmailHtml(loanType)}</strong> application has been logged with ${escapeEmailHtml(bankName)} for assessment.`,
             ),
-            detail("Application ID", context.applicationId),
-            paragraph("We'll update you on every stage."),
+            applicationSummary([
+              { label: "Application Number", value: context.applicationId },
+              { label: "Loan product", value: loanType },
+              { label: "Lender", value: bankName },
+              { label: "Current status", value: "Logged with lender" },
+            ]),
+            nextSteps([
+              "The lender will assess your eligibility, submitted information, and supporting documents.",
+              "The lender or Fintaraa may contact you if further verification is required.",
+              "We will notify you when there is a decision or another action is needed.",
+            ]),
+            informationNote(
+              "Logging an application with a lender is not a guarantee of approval. The final decision remains subject to the lender's assessment and policy.",
+            ),
           ].join(""),
-          cta: {
+          action: {
             label: "View Application",
             href: context.trackApplicationLink,
           },
@@ -184,26 +211,40 @@ export const renderLoanEmail = (
       };
     }
     case "loanSanctioned": {
-      const preheader = `Your loan of ₹${context.loanAmount} has been sanctioned by ${bankName}.`;
+      const preheader = `Your loan application ${context.applicationId} has been sanctioned by ${bankName}.`;
       return {
         templateName: "loan_sanctioned",
-        subject: `Congratulations ${context.name}! Your loan has been sanctioned`,
+        subject: `Loan application ${context.applicationId} sanctioned`,
         preheader,
-        html: emailShell({
+        html: renderLightTransactionalEmail({
           preheader,
+          eyebrow: "Loan application update",
+          title: "Your loan has been sanctioned",
           body: [
             paragraph(`Hi ${name},`),
             paragraph(
               "<strong style=\"color:#087443\">Congratulations!</strong>",
             ),
-            paragraph("Your loan has been sanctioned."),
-            detail("Loan Amount", `₹${context.loanAmount}`),
-            detail("Bank", bankName),
             paragraph(
-              "Our representative will contact you regarding the disbursement process.",
+              `Your <strong style="color:#102a43">${escapeEmailHtml(loanType)}</strong> application has been sanctioned by ${escapeEmailHtml(bankName)}.`,
+            ),
+            applicationSummary([
+              { label: "Application Number", value: context.applicationId },
+              { label: "Loan product", value: loanType },
+              { label: "Sanctioned amount", value: requestedAmount },
+              { label: "Lender", value: bankName },
+              { label: "Current status", value: "Sanctioned" },
+            ]),
+            nextSteps([
+              "Review the lender's sanction letter, including interest rate, tenure, EMI, fees, and conditions.",
+              "Complete any pending agreement, verification, or disbursement formalities requested by the lender.",
+              "Our representative will guide you through the remaining disbursement process.",
+            ]),
+            informationNote(
+              "The sanction remains subject to the terms, validity period, and conditions stated in the lender's official sanction letter.",
             ),
           ].join(""),
-          cta: {
+          action: {
             label: "View Sanction Details",
             href: context.trackApplicationLink,
           },
@@ -211,24 +252,43 @@ export const renderLoanEmail = (
       };
     }
     case "loanDisbursed": {
-      const preheader = `₹${context.disburseAmount} has been disbursed by ${bankName}.`;
+      const preheader = `Your loan application ${context.applicationId} has been disbursed by ${bankName}.`;
       return {
         templateName: "loan_disbursed",
-        subject: `Congratulations ${context.name}! Your loan amount has been disbursed`,
+        subject: `Loan application ${context.applicationId} disbursed`,
         preheader,
-        html: emailShell({
+        html: renderLightTransactionalEmail({
           preheader,
+          eyebrow: "Loan application update",
+          title: "Your loan has been disbursed",
           body: [
             paragraph(`Hi ${name},`),
             paragraph(
               "<strong style=\"color:#087443\">Congratulations!</strong>",
             ),
-            paragraph("Your loan has been successfully disbursed."),
-            detail("Loan Amount", `₹${context.disburseAmount}`),
-            detail("Bank", bankName),
-            paragraph("Thank you for choosing Fintaraa."),
-            paragraph("Congratulations once again!"),
+            paragraph(
+              `The disbursement for your <strong style="color:#102a43">${escapeEmailHtml(loanType)}</strong> application has been completed by ${escapeEmailHtml(bankName)}.`,
+            ),
+            applicationSummary([
+              { label: "Application Number", value: context.applicationId },
+              { label: "Loan product", value: loanType },
+              { label: "Disbursed amount", value: disbursedAmount },
+              { label: "Lender", value: bankName },
+              { label: "Current status", value: "Disbursed" },
+            ]),
+            nextSteps([
+              "Confirm that the amount has been credited to the expected account or beneficiary.",
+              "Keep the loan agreement, repayment schedule, and lender communication safely for future reference.",
+              "Review your EMI start date and maintain sufficient balance before each repayment date.",
+            ]),
+            informationNote(
+              "If the credited amount or beneficiary details do not match your lender documents, contact us immediately.",
+            ),
           ].join(""),
+          action: {
+            label: "View Application Details",
+            href: context.trackApplicationLink,
+          },
         }),
       };
     }
@@ -236,20 +296,33 @@ export const renderLoanEmail = (
       const preheader = `Hi ${context.name}, an update regarding your application with ${bankName}.`;
       return {
         templateName: "application_rejected",
-        subject: "Update on your loan application – Fintaraa",
+        subject: `Update on loan application ${context.applicationId}`,
         preheader,
-        html: emailShell({
+        html: renderLightTransactionalEmail({
           preheader,
+          eyebrow: "Loan application update",
+          title: "Update on your application",
           body: [
             paragraph(`Hi ${name},`),
             paragraph(
-              `We regret to inform you that your loan application could not be approved by ${escapeHtml(bankName)}.`,
+              `We are sorry to inform you that your <strong style="color:#102a43">${escapeEmailHtml(loanType)}</strong> application could not be approved by ${escapeEmailHtml(bankName)} at this stage.`,
             ),
-            paragraph(
-              "Our Loan Advisor will help you explore alternative options.",
+            applicationSummary([
+              { label: "Application Number", value: context.applicationId },
+              { label: "Loan product", value: loanType },
+              { label: "Lender", value: bankName },
+              { label: "Current status", value: "Not approved" },
+            ]),
+            nextSteps([
+              "A Fintaraa Loan Advisor can review whether another lender or product may suit your profile.",
+              "You may be asked for updated information before exploring an alternative application.",
+              "Avoid submitting repeated applications in a short period unless advised, as multiple credit enquiries may affect your credit profile.",
+            ]),
+            informationNote(
+              "Approval decisions are made independently by lenders according to their internal credit policies. Alternative options are subject to eligibility and are not guaranteed.",
             ),
           ].join(""),
-          cta: {
+          action: {
             label: "Talk to a Loan Advisor",
             href: context.contactAdvisorLink,
           },

@@ -1,6 +1,7 @@
 import { Types } from "mongoose";
 import ApiError from "../../utils/ApiError";
 import Admin from "../../modals/admin.model";
+import Agent from "../../modals/agent.model";
 import Lander from "../../modals/lander.model";
 import Ticket from "../../modals/ticket.model";
 import ApiResponse from "../../utils/ApiResponse";
@@ -27,6 +28,7 @@ import Lead, { LeadConnectorType } from "../../modals/lead.model";
 import { leadManagementService } from "../../services/leadManagement.service";
 import EmployeeAssignmentEngine from "../../services/employeeAssignment.service";
 import {
+  getLoanTypeDisplayLabel,
   normalizeLoanType,
   getLoanTypeMatchValues,
 } from "../../utils/loanType";
@@ -37,8 +39,11 @@ import {
 } from "../../utils/helper";
 import {
   isLoanApplicationCompleted,
+  isLoanApplicationTerminal,
   syncLinkedCallRecordFollowUp,
 } from "../../services/callRecordFollowUp.service";
+import { syncReferralFromLoanStage } from "../../services/referral.service";
+import { resolveChatStaffRole } from "../../utils/chatStaffRole";
 
 const CallRecordService = new CommonService<ICallRecord>(CallRecord as any);
 
@@ -74,6 +79,24 @@ const buildCallRecordScopeMatch = (
   }
 
   return match;
+};
+
+const buildCallRecordItemAccessMatch = (userId: any, role?: string) => {
+  const objectId = toObjectId(userId);
+  if (role === "admin") return {};
+  if (!objectId) return { _id: null };
+
+  if (role === "agent") {
+    return {
+      $or: [
+        { createdBy: objectId },
+        { assignee: objectId },
+        { assignees: objectId },
+      ],
+    };
+  }
+
+  return { createdBy: objectId };
 };
 
 const normalizePhoneDigits = (input?: string): string => {
@@ -705,10 +728,16 @@ const createLoanQueryFromCallRecord = async (
     ).trim();
     if (contextQueryId) {
       const existingById = await LoanQuery.findById(contextQueryId);
-      if (existingById && existingById.loanType === loanType) {
+      if (
+        existingById &&
+        normalizeLoanType(existingById.loanType) === loanType
+      ) {
         return existingById;
       }
-      if (existingById && existingById.loanType !== loanType) {
+      if (
+        existingById &&
+        normalizeLoanType(existingById.loanType) !== loanType
+      ) {
         console.log(
           "[CallRecord] Existing loan context has different loan type; creating new loan query",
           {
@@ -722,13 +751,16 @@ const createLoanQueryFromCallRecord = async (
 
     if (callRecord.loanQueryId) {
       const linkedLoanQuery = await LoanQuery.findById(callRecord.loanQueryId);
-      if (linkedLoanQuery && linkedLoanQuery.loanType === loanType) {
+      if (
+        linkedLoanQuery &&
+        normalizeLoanType(linkedLoanQuery.loanType) === loanType
+      ) {
         return linkedLoanQuery;
       }
     }
 
     const existingByContact = await LoanQuery.findOne({
-      loanType,
+      loanType: { $in: getLoanTypeMatchValues(loanType) },
       status: {
         $nin: ["completed", "completed_success", "approved", "cancelled"],
       },
@@ -796,7 +828,7 @@ const createLoanQueryFromCallRecord = async (
     // Check if loan query already exists for this user and loan type
     const existingQuery = await LoanQuery.findOne({
       customerId: user._id,
-      loanType: loanType,
+      loanType: { $in: getLoanTypeMatchValues(loanType) },
       status: {
         $nin: ["completed", "completed_success", "approved", "cancelled"],
       },
@@ -2063,9 +2095,11 @@ export class CallRecordController {
       const requestTimeZone = (req as any)?.timezone || DEFAULT_QUERY_TIMEZONE;
       const userId = (req as any)?.user?._id;
       const { role } = (req as any)?.user || {};
+      const scopedRole =
+        (await resolveChatStaffRole(userId, role)) || role;
       const scopeMatch = buildCallRecordScopeMatch(
         userId,
-        role,
+        scopedRole,
         scope === "created" ? "created" : "assigned",
       );
 
@@ -2206,9 +2240,11 @@ export class CallRecordController {
     try {
       const userId = (req as any)?.user?._id;
       const { role } = (req as any)?.user || {};
+      const scopedRole =
+        (await resolveChatStaffRole(userId, role)) || role;
       const scope =
         (req.query?.scope as string) === "created" ? "created" : "assigned";
-      const match = buildCallRecordScopeMatch(userId, role, scope);
+      const match = buildCallRecordScopeMatch(userId, scopedRole, scope);
       const requestTimeZone = (req as any)?.timezone || DEFAULT_QUERY_TIMEZONE;
       const followupsFilter = getFollowUpBucketFilter(
         "followups",
@@ -2260,7 +2296,25 @@ export class CallRecordController {
 
   static async getById(req: Request, res: Response, next: NextFunction) {
     try {
-      const result = await CallRecordService.getById(req.params.id);
+      if (!Types.ObjectId.isValid(req.params.id)) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid call record id"));
+      }
+      const userId = (req as any).user?._id;
+      const staffRole = await resolveChatStaffRole(
+        userId,
+        (req as any).user?.role,
+      );
+      const result = await CallRecord.findOne({
+        _id: req.params.id,
+        ...buildCallRecordItemAccessMatch(userId, staffRole || undefined),
+      }).lean();
+      if (!result) {
+        return res
+          .status(404)
+          .json(new ApiError(404, "Call record not found"));
+      }
       const [enrichedRecord] = await enrichCallRecordsWithCustomerContext([
         normalizeCallRecordAssigneeView(result),
       ]);
@@ -2287,8 +2341,13 @@ export class CallRecordController {
       }
 
       const actorObjectId = toObjectId((req as any).user?._id);
+      const scopedRole =
+        (await resolveChatStaffRole(
+          (req as any).user?._id,
+          (req as any).user?.role,
+        )) || (req as any).user?.role;
       const accessMatch =
-        (req as any).user?.role === "agent" && actorObjectId
+        scopedRole === "agent" && actorObjectId
           ? {
               $or: [
                 { createdBy: actorObjectId },
@@ -2298,7 +2357,7 @@ export class CallRecordController {
             }
           : buildCallRecordScopeMatch(
               (req as any).user?._id,
-              (req as any).user?.role,
+              scopedRole,
               "created",
             );
       const selectedRecord = await CallRecord.findOne({
@@ -2350,10 +2409,14 @@ export class CallRecordController {
             .filter(Boolean),
         ),
       );
-      const [adminActors, userActors, landerActors] = activityActorIds.length
+      const [adminActors, agentActors, userActors, landerActors] =
+        activityActorIds.length
         ? await Promise.all([
             Admin.find({ _id: { $in: activityActorIds } })
               .select("name username email")
+              .lean(),
+            Agent.find({ _id: { $in: activityActorIds } })
+              .select("name email")
               .lean(),
             User.find({ _id: { $in: activityActorIds } })
               .select("name email")
@@ -2362,9 +2425,9 @@ export class CallRecordController {
               .select("name username email")
               .lean(),
           ])
-        : [[], [], []];
+        : [[], [], [], []];
       const activityActorNames = new Map<string, string>();
-      [...adminActors, ...userActors, ...landerActors].forEach((actor: any) => {
+      [...adminActors, ...agentActors, ...userActors, ...landerActors].forEach((actor: any) => {
         activityActorNames.set(
           String(actor?._id),
           String(actor?.name || actor?.username || actor?.email || "").trim(),
@@ -2472,7 +2535,10 @@ export class CallRecordController {
           source: "loan_application",
           type: "loan_linked",
           title: "Loan application linked",
-          description: `Linked ${String(loanQuery.loanType || "loan").replace(/_/g, " ")} application`,
+          description: `Linked ${getLoanTypeDisplayLabel(
+            loanQuery.loanType,
+            loanQuery.policyDetails,
+          )} application`,
           loanQueryId: loanQuery._id,
           createdAt:
             selectedRecord.loanQueryCreatedAt ||
@@ -2555,6 +2621,7 @@ export class CallRecordController {
       );
 
       const loanCompleted = isLoanApplicationCompleted(loanQuery?.status);
+      const loanTerminal = isLoanApplicationTerminal(loanQuery?.status);
       return res.status(200).json(
         new ApiResponse(
           200,
@@ -2565,9 +2632,9 @@ export class CallRecordController {
               lastName: selectedRecord.lastName,
               phoneNumber: selectedRecord.phoneNumber,
               followUp: loanQuery
-                ? !loanCompleted
+                ? !loanTerminal
                 : Boolean(selectedRecord.followUp),
-              callbackAt: loanCompleted ? null : selectedRecord.callbackAt,
+              callbackAt: loanTerminal ? null : selectedRecord.callbackAt,
             },
             loanApplication: loanQuery
               ? {
@@ -2576,13 +2643,14 @@ export class CallRecordController {
                   loanType: loanQuery.loanType,
                   status: loanQuery.status,
                   completed: loanCompleted,
+                  terminal: loanTerminal,
                 }
               : null,
             active: loanQuery
-              ? !loanCompleted
+              ? !loanTerminal
               : Boolean(selectedRecord.followUp),
-            continuesUntilLoanCompletion: Boolean(loanQuery && !loanCompleted),
-            trail: trail.slice(0, 250),
+            continuesUntilLoanCompletion: Boolean(loanQuery && !loanTerminal),
+            trail,
           },
           "Call record follow-up activity fetched",
         ),
@@ -2595,7 +2663,16 @@ export class CallRecordController {
   static async update(req: Request | any, res: Response, next: NextFunction) {
     try {
       const adminId = req.user?._id;
-      const record = await CallRecord.findById(req.params.id);
+      if (!Types.ObjectId.isValid(req.params.id)) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid call record id"));
+      }
+      const staffRole = await resolveChatStaffRole(adminId, req.user?.role);
+      const record = await CallRecord.findOne({
+        _id: req.params.id,
+        ...buildCallRecordItemAccessMatch(adminId, staffRole || undefined),
+      });
       if (!record)
         return res.status(404).json(new ApiError(404, "Call record not found"));
 
@@ -2692,14 +2769,14 @@ export class CallRecordController {
           .lean();
         if (
           linkedLoanQuery &&
-          !isLoanApplicationCompleted(linkedLoanQuery.status)
+          !isLoanApplicationTerminal(linkedLoanQuery.status)
         ) {
           return res
             .status(400)
             .json(
               new ApiError(
                 400,
-                "Follow-up remains active until the linked loan application is completed",
+                "Follow-up remains active until the linked loan application reaches a final outcome",
               ),
             );
         }
@@ -2966,9 +3043,16 @@ export class CallRecordController {
 
           // Only update fields that were actually sent.
           if (Object.keys(loanQueryUpdatePayload).length > 0) {
-            await LoanQuery.findByIdAndUpdate(loanQueryId, {
-              $set: loanQueryUpdatePayload,
-            });
+            const updatedLoanQuery = await LoanQuery.findByIdAndUpdate(
+              loanQueryId,
+              { $set: loanQueryUpdatePayload },
+              { new: true },
+            ).select(
+              "_id customerId status disbursedAmount disbursedDate loanAmount",
+            );
+            if (updatedLoanQuery) {
+              await syncReferralFromLoanStage(updatedLoanQuery);
+            }
           }
         }
       }
@@ -3218,7 +3302,11 @@ export class CallRecordController {
 
   static async remove(req: Request, res: Response, next: NextFunction) {
     try {
-      if ((req as any).user?.role !== "admin") {
+      const staffRole = await resolveChatStaffRole(
+        (req as any).user?._id,
+        (req as any).user?.role,
+      );
+      if (staffRole !== "admin") {
         return res
           .status(403)
           .json(new ApiError(403, "Only admin can delete call records"));

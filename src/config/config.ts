@@ -6,9 +6,19 @@ dotenv.config({
 });
 
 const toBool = (value: string | undefined): boolean => value === "true";
+const runtimeEnv = process.env.NODE_ENV || "production";
+const hasStaticOtpConfig = Boolean(
+  String(process.env.STATIC_OTP_MOBILE || "").trim() ||
+    String(process.env.STATIC_OTP_CODE || "").trim(),
+);
+if (runtimeEnv === "production" && hasStaticOtpConfig) {
+  throw new Error(
+    "STATIC_OTP_MOBILE/STATIC_OTP_CODE must not be configured in production",
+  );
+}
 
 export const config = {
-  env: process.env.NODE_ENV || "production",
+  env: runtimeEnv,
   port: Number(process.env.PORT) || 8080,
   baseUrl: process.env.APP_BASE_URL!,
   frontendUrl: process.env.FRONTEND_URL!,
@@ -84,6 +94,37 @@ export const config = {
     password: process.env.ADMIN_PASSWORD!,
   },
 
+  grievance: {
+    notificationEmails: String(
+      process.env.GRIEVANCE_NOTIFICATION_EMAILS ||
+        process.env.ADMIN_EMAIL ||
+        process.env.EMAIL_USER ||
+        "",
+    )
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+    smsStatusTemplateId:
+      process.env.GRIEVANCE_SMS_STATUS_TEMPLATE_ID || "",
+    smsStatusMessage: process.env.GRIEVANCE_SMS_STATUS_MESSAGE || "",
+  },
+
+  applicationNotifications: {
+    statusSmsTemplateId:
+      process.env.APPLICATION_STATUS_SMS_TEMPLATE_ID || "",
+    statusSmsMessage: process.env.APPLICATION_STATUS_SMS_MESSAGE || "",
+    documentReuploadSmsTemplateId:
+      process.env.DOCUMENT_REUPLOAD_SMS_TEMPLATE_ID || "",
+    documentReuploadSmsMessage:
+      process.env.DOCUMENT_REUPLOAD_SMS_MESSAGE || "",
+    whatsappStatusTemplate:
+      process.env.INTERAKT_APPLICATION_STATUS_TEMPLATE || "",
+    whatsappDocumentReuploadTemplate:
+      process.env.INTERAKT_DOCUMENT_REUPLOAD_TEMPLATE || "",
+    whatsappLanguage:
+      process.env.INTERAKT_APPLICATION_TEMPLATE_LANGUAGE || "en",
+  },
+
   sms: {
     enabled: toBool(process.env.SMS_ENABLED),
     provider: process.env.SMS_PROVIDER || "airtel_iq",
@@ -105,6 +146,20 @@ export const config = {
       // Optional metadata
       extraFields: process.env.AIRTEL_IQ_SMS_EXTRA_FIELDS || "{}",
     },
+  },
+  otp: {
+    staticMobile: String(process.env.STATIC_OTP_MOBILE || "")
+      .replace(/\D/g, "")
+      .slice(-10),
+    staticCode: String(process.env.STATIC_OTP_CODE || "").trim(),
+  },
+  dsa: {
+    payoutEncryptionKey: String(
+      process.env.DSA_PAYOUT_ENCRYPTION_KEY || "",
+    ).trim(),
+    referralBaseUrl:
+      process.env.DSA_REFERRAL_BASE_URL ||
+      `${process.env.PUBLIC_WEBSITE_URL || "https://fintaraa.com"}/products`,
   },
 
   notification: {
@@ -186,9 +241,25 @@ export const config = {
     enabled: toBool(process.env.S3_ENABLED),
     accessKeyId: process.env.S3_ACCESS_KEY_ID!,
     secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!,
+    serverSideEncryptionEnabled:
+      process.env.S3_SERVER_SIDE_ENCRYPTION_ENABLED === undefined
+        ? !process.env.S3_BASE_URL
+        : toBool(process.env.S3_SERVER_SIDE_ENCRYPTION_ENABLED),
   },
   documents: {
     passwordEncryptionKey: process.env.DOC_PASSWORD_KEY || "",
+  },
+
+  partnerCredentials: {
+    encryptionKey: process.env.PARTNER_CREDENTIAL_ENCRYPTION_KEY || "",
+    testTimeoutMs: Math.min(
+      Math.max(Number(process.env.PARTNER_API_TEST_TIMEOUT_MS || 5000), 1000),
+      15000,
+    ),
+    allowHttpTest: toBool(process.env.PARTNER_API_TEST_ALLOW_HTTP),
+    allowPrivateNetworkTest: toBool(
+      process.env.PARTNER_API_TEST_ALLOW_PRIVATE_NETWORKS,
+    ),
   },
 
   security: {

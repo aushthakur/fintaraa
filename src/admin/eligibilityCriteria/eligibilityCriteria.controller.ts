@@ -9,7 +9,8 @@ import {
   EligibilityCriteriaStatus,
 } from "../../modals/eligibilityCriteria.model";
 import { LoanQuery } from "../../modals/loanquery.model";
-import { createMailOptions, transporter } from "../../config/nodeMailerConfig";
+import { createMailOptions } from "../../config/nodeMailerConfig";
+import { sendMail } from "../../utils/emailService";
 import { checkEligibilityMailAccess } from "../eligibilityMailPermission/eligibilityMailPermission.utils";
 
 const EligibilityCriteriaService = new CommonService(EligibilityCriteria);
@@ -444,7 +445,7 @@ const queueEligibilityMailDispatch = async ({
   const results = await Promise.allSettled(
     recipients.map(async (email) => {
       console.log("[EligibilityMail] Sending queued mail", { email });
-      const info = await transporter.sendMail(
+      const info = await sendMail(
         createMailOptions(email, subject, html, attachments),
       );
       console.log("[EligibilityMail] Queued mail sent", {
@@ -567,6 +568,7 @@ const PUBLIC_ELIGIBILITY_SELECT_FIELDS = [
 const PUBLIC_LOAN_TYPE_ALIASES: Record<string, string> = {
   balancetransfer: "balanceTransferLoan",
   balancetransferloan: "balanceTransferLoan",
+  balancetransfertopuploan: "balanceTransferLoan",
   topup: "topUpLoan",
   topuploan: "topUpLoan",
   twowheeler: "twoWheelerLoan",
@@ -575,6 +577,8 @@ const PUBLIC_LOAN_TYPE_ALIASES: Record<string, string> = {
   usedcarloan: "usedCarLoan",
   agriculture: "agricultureLoan",
   agricultureloan: "agricultureLoan",
+  solar: "solarLoan",
+  solarloan: "solarLoan",
   personal: "personalLoan",
   personalloan: "personalLoan",
   instant: "instantLoan",
@@ -583,12 +587,16 @@ const PUBLIC_LOAN_TYPE_ALIASES: Record<string, string> = {
   creditscoreloan: "creditScoreLoan",
   home: "homeLoan",
   homeloan: "homeLoan",
+  construction: "homeLoan",
+  constructionloan: "homeLoan",
   business: "businessLoan",
   businessloan: "businessLoan",
   vehicle: "vehicleLoan",
   vehicleloan: "vehicleLoan",
   car: "vehicleLoan",
   carloan: "vehicleLoan",
+  vechile: "vehicleLoan",
+  vechileloan: "vehicleLoan",
   renovation: "renovationLoan",
   renovationloan: "renovationLoan",
   homerenovation: "renovationLoan",
@@ -1413,7 +1421,7 @@ export class EligibilityCriteriaController {
             recipients: criteriaRecipients,
           });
 
-          await transporter.sendMail(
+          await sendMail(
             createMailOptions(
               criteriaRecipients.join(","),
               subject,

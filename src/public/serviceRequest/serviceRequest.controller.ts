@@ -230,6 +230,9 @@ const makeQueryId = async () => {
 
 const safeString = (value: unknown) => String(value || "").trim();
 
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const normalizeMobile = (value: unknown) =>
   safeString(value).replace(/[\s-]/g, "").replace(/^\+91/, "");
 
@@ -241,6 +244,13 @@ const normalizeStageStatus = (
     ? status
     : "active";
 };
+
+const hasOwn = (value: unknown, key: string) =>
+  Boolean(
+    value &&
+      typeof value === "object" &&
+      Object.prototype.hasOwnProperty.call(value, key),
+  );
 
 export class ServiceRequestController {
   static async create(req: Request | any, res: Response, next: NextFunction) {
@@ -291,6 +301,14 @@ export class ServiceRequestController {
         mobile,
         email: safeString(req.body?.email),
         businessName: safeString(req.body?.businessName),
+        monthlyLoanAmount:
+          serviceType === ServiceRequestType.DSA
+            ? safeString(
+                req.body?.monthlyLoanAmount ||
+                  (details as Record<string, unknown>)?.monthlyLoanAmount ||
+                  (details as Record<string, unknown>)?.["Monthly Loan Amount"],
+              )
+            : undefined,
         businessType: safeString(req.body?.businessType),
         gstRequirement: safeString(req.body?.gstRequirement),
         state: safeString(req.body?.state),
@@ -383,18 +401,139 @@ export class ServiceRequestController {
   static async list(req: Request, res: Response, next: NextFunction) {
     try {
       const query: any = { recordType: "service_request" };
+
       if (req.query?.serviceType) {
         const serviceType = normalizeServiceType(req.query.serviceType);
-        if (serviceType) query.serviceType = serviceType;
+        if (!serviceType) {
+          return res.status(400).json(new ApiError(400, "Invalid service type"));
+        }
+        query.serviceType = serviceType;
       }
-      if (req.query?.status) query.status = req.query.status;
-      const result = await ServiceRequest.find(query)
-        .sort({ updatedAt: -1 })
-        .limit(Math.min(Number(req.query?.limit) || 50, 200))
-        .lean();
+      for (const field of [
+        "status",
+        "currentStage",
+        "followUpStatus",
+        "source",
+        "platform",
+        "queryId",
+        "mobile",
+      ]) {
+        const value = safeString(req.query?.[field]);
+        if (value) query[field] = value;
+      }
+
+      const search = safeString(req.query?.search);
+      const selectedField =
+        safeString(req.query?.selectedField) ||
+        safeString(req.query?.searchkey);
+      const searchableFields = [
+        "queryId",
+        "serviceType",
+        "name",
+        "businessName",
+        "monthlyLoanAmount",
+        "mobile",
+        "email",
+        "status",
+        "currentStage",
+        "source",
+        "platform",
+      ];
+      if (search) {
+        const match = { $regex: escapeRegExp(search), $options: "i" };
+        if (searchableFields.includes(selectedField)) {
+          query[selectedField] =
+            selectedField === "serviceType"
+              ? normalizeServiceType(search) || match
+              : match;
+        } else {
+          query.$or = searchableFields.map((field) => ({ [field]: match }));
+        }
+      }
+
+      const startDate = safeString(req.query?.startDate);
+      const endDate = safeString(req.query?.endDate);
+      if (startDate || endDate) {
+        query.createdAt = {};
+        if (startDate) {
+          const start = new Date(`${startDate}T00:00:00.000Z`);
+          if (!Number.isNaN(start.getTime())) query.createdAt.$gte = start;
+        }
+        if (endDate) {
+          const end = new Date(`${endDate}T23:59:59.999Z`);
+          if (!Number.isNaN(end.getTime())) query.createdAt.$lte = end;
+        }
+        if (Object.keys(query.createdAt).length === 0) delete query.createdAt;
+      }
+
+      const page = Math.max(Number(req.query?.page) || 1, 1);
+      const limit = Math.min(Math.max(Number(req.query?.limit) || 20, 1), 200);
+      const sortableFields = new Set([
+        "queryId",
+        "serviceType",
+        "name",
+        "businessName",
+        "monthlyLoanAmount",
+        "mobile",
+        "email",
+        "status",
+        "currentStage",
+        "assignedExecutive",
+        "followUpAt",
+        "followUpStatus",
+        "source",
+        "platform",
+        "createdAt",
+        "updatedAt",
+      ]);
+      const requestedSortKey = safeString(req.query?.sortKey);
+      const sortKey = sortableFields.has(requestedSortKey)
+        ? requestedSortKey
+        : "updatedAt";
+      const sortDir =
+        safeString(req.query?.sortDir).toLowerCase() === "asc" ||
+        safeString(req.query?.sortDir) === "1"
+          ? 1
+          : -1;
+
+      const [result, totalItems] = await Promise.all([
+        ServiceRequest.find(query)
+          .sort({ [sortKey]: sortDir })
+          .skip((page - 1) * limit)
+          .limit(limit)
+          .lean(),
+        ServiceRequest.countDocuments(query),
+      ]);
+      const normalizedResult = result.map((item) => {
+        const details = (item.details || {}) as Record<string, unknown>;
+        const monthlyLoanAmount =
+          safeString(item.monthlyLoanAmount) ||
+          safeString(details.monthlyLoanAmount) ||
+          safeString(details["Monthly Loan Amount"]) ||
+          safeString(details["Monthly Lead Volume"]);
+
+        return monthlyLoanAmount && !item.monthlyLoanAmount
+          ? { ...item, monthlyLoanAmount }
+          : item;
+      });
+
       return res
         .status(200)
-        .json(new ApiResponse(200, result, "Service requests fetched"));
+        .json(
+          new ApiResponse(
+            200,
+            {
+              result: normalizedResult,
+              pagination: {
+                totalPages: Math.max(Math.ceil(totalItems / limit), 1),
+                totalItems,
+                currentPage: page,
+                itemsPerPage: limit,
+              },
+            },
+            "Service requests fetched",
+          ),
+        );
     } catch (err) {
       next(err);
     }
@@ -419,6 +558,27 @@ export class ServiceRequestController {
     }
   }
 
+  static async getAdminById(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const result = await ServiceRequest.findOne({
+        _id: req.params.id,
+        recordType: "service_request",
+      }).lean();
+      if (!result) {
+        return res.status(404).json(new ApiError(404, "Request not found"));
+      }
+      return res
+        .status(200)
+        .json(new ApiResponse(200, result, "Service request fetched"));
+    } catch (err) {
+      next(err);
+    }
+  }
+
   static async updateStage(req: Request, res: Response, next: NextFunction) {
     try {
       const request = await ServiceRequest.findOne({
@@ -437,6 +597,11 @@ export class ServiceRequestController {
         return res.status(400).json(new ApiError(400, "Invalid stage"));
       }
 
+      const updatedBy =
+        safeString((req as any).user?.name) ||
+        safeString((req as any).user?.fullName) ||
+        safeString(req.body?.updatedBy) ||
+        "Admin";
       request.timeline = request.timeline.map((item, index) => ({
         stage: item.stage,
         status:
@@ -449,20 +614,70 @@ export class ServiceRequestController {
           index === stageIndex
             ? safeString(req.body?.remarks) || item.remarks
             : item.remarks,
-        updatedBy:
-          index === stageIndex
-            ? safeString(req.body?.updatedBy) || "Admin"
-            : item.updatedBy,
+        updatedBy: index === stageIndex ? updatedBy : item.updatedBy,
         updatedAt: index === stageIndex ? new Date() : item.updatedAt,
       }));
       request.currentStage = stage;
       request.currentStageIndex = stageIndex;
-      request.assignedExecutive =
-        safeString(req.body?.assignedExecutive) || request.assignedExecutive;
+      const hadFollowUp = Boolean(request.followUpAt || request.followUpNote);
+      if (hasOwn(req.body, "assignedExecutive")) {
+        request.assignedExecutive =
+          safeString(req.body?.assignedExecutive) || undefined;
+      }
+
+      if (hasOwn(req.body, "followUpAt")) {
+        const rawFollowUpAt = safeString(req.body?.followUpAt);
+        if (!rawFollowUpAt) {
+          request.followUpAt = undefined;
+        } else {
+          const followUpAt = new Date(rawFollowUpAt);
+          if (Number.isNaN(followUpAt.getTime())) {
+            return res
+              .status(400)
+              .json(new ApiError(400, "Invalid follow-up date"));
+          }
+          request.followUpAt = followUpAt;
+        }
+      }
+      if (hasOwn(req.body, "followUpNote")) {
+        request.followUpNote = safeString(req.body?.followUpNote) || undefined;
+      }
+
+      const followUpStatus = safeString(req.body?.followUpStatus);
+      if (["pending", "completed", "cancelled"].includes(followUpStatus)) {
+        request.followUpStatus = followUpStatus as
+          | "pending"
+          | "completed"
+          | "cancelled";
+      }
+
+      const hasFollowUpUpdate =
+        ["followUpAt", "followUpNote", "followUpStatus"].some((field) =>
+          hasOwn(req.body, field),
+        ) &&
+        Boolean(hadFollowUp || request.followUpAt || request.followUpNote);
+      if (hasFollowUpUpdate) {
+        request.followUpHistory = [
+          ...(request.followUpHistory || []),
+          {
+            scheduledAt: request.followUpAt,
+            note: request.followUpNote,
+            status: request.followUpStatus || "pending",
+            assignedExecutive: request.assignedExecutive,
+            updatedBy,
+            updatedAt: new Date(),
+          },
+        ];
+      }
+
+      const requestedStatus = safeString(req.body?.status);
+      const validStatuses = Object.values(ServiceRequestStatus) as string[];
       request.status =
         stage === "Completed"
           ? ServiceRequestStatus.COMPLETED
-          : ServiceRequestStatus.IN_PROGRESS;
+          : validStatuses.includes(requestedStatus)
+            ? (requestedStatus as ServiceRequestStatus)
+            : ServiceRequestStatus.IN_PROGRESS;
       await request.save();
 
       return res

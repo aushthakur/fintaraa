@@ -6,9 +6,42 @@ import { ChatService } from "../../services/chat.service";
 import Lead from "../../modals/lead.model";
 import Admin from "../../modals/admin.model";
 import Agent from "../../modals/agent.model";
+import Lander from "../../modals/lander.model";
 import { User } from "../../modals/user.model";
 import { Types } from "mongoose";
 import { decryptQueryMessageText } from "../../utils/queryChatCrypto";
+import { resolveChatActorRole } from "../../utils/chatStaffRole";
+
+const normalizeChatId = (value: any) => String(value?._id || value || "");
+
+const assertLeadChatAccess = (lead: any, role: string, actorId: any) => {
+  if (role === "admin") return;
+  if (role === "agent" || role === "lander") {
+    const assignedAgentId = normalizeChatId(lead?.assignment?.current?.agent);
+    if (assignedAgentId && assignedAgentId === normalizeChatId(actorId)) {
+      return;
+    }
+    throw new ApiError(403, "Access denied");
+  }
+  if (
+    normalizeChatId(lead?.borrowerProfile) === normalizeChatId(actorId)
+  ) {
+    return;
+  }
+  throw new ApiError(403, "Access denied");
+};
+
+const resolveLeadStaffModel = async (
+  staffId: any,
+): Promise<"Admin" | "Agent" | "Lander" | null> => {
+  if (!staffId || !Types.ObjectId.isValid(String(staffId))) return null;
+  const admin = await Admin.exists({ _id: staffId, status: true });
+  if (admin) return "Admin";
+  const agent = await Agent.exists({ _id: staffId });
+  if (agent) return "Agent";
+  const lander = await Lander.exists({ _id: staffId });
+  return lander ? "Lander" : null;
+};
 
 export class LeadChatController {
   /**
@@ -21,30 +54,33 @@ export class LeadChatController {
   ) {
     try {
       const currentUserId = (req as any).user?._id;
-      const { role } = (req as any).user || {};
+      const role = await resolveChatActorRole(
+        currentUserId,
+        (req as any).user?.role,
+      );
 
-      if (!role || (role !== "admin" && role !== "agent")) {
+      if (!role || !["admin", "agent", "lander"].includes(role)) {
         throw new ApiError(403, "Access denied");
       }
 
       const match: any = {
         leadId: { $exists: true, $ne: null },
         $or: [
-          { senderModel: "User", receiverModel: { $in: ["Agent", "Admin"] } },
-          { senderModel: { $in: ["Agent", "Admin"] }, receiverModel: "User" },
+          { senderModel: "User", receiverModel: { $in: ["Agent", "Admin", "Lander"] } },
+          { senderModel: { $in: ["Agent", "Admin", "Lander"] }, receiverModel: "User" },
         ],
       };
 
-      if (role === "agent" && currentUserId) {
+      if ((role === "agent" || role === "lander") && currentUserId) {
         match.$or = [
           {
-            senderModel: { $in: ["Agent", "Admin"] },
+            senderModel: { $in: ["Agent", "Admin", "Lander"] },
             receiverModel: "User",
             sender: new Types.ObjectId(String(currentUserId)),
           },
           {
             senderModel: "User",
-            receiverModel: { $in: ["Agent", "Admin"] },
+            receiverModel: { $in: ["Agent", "Admin", "Lander"] },
             receiver: new Types.ObjectId(String(currentUserId)),
           },
         ];
@@ -116,7 +152,7 @@ export class LeadChatController {
       const userIds = [...new Set(rows.map((r: any) => String(r?._id?.userId)).filter(Boolean))];
       const staffIds = [...new Set(rows.map((r: any) => String(r?._id?.staffId)).filter(Boolean))];
 
-      const [leads, users, agents, admins] = await Promise.all([
+      const [leads, users, agents, admins, landers] = await Promise.all([
         Lead.find({ _id: { $in: leadIds } })
           .select("_id leadRef fullName mobile")
           .lean(),
@@ -129,12 +165,15 @@ export class LeadChatController {
         Admin.find({ _id: { $in: staffIds } })
           .select("_id username name email")
           .lean(),
+        Lander.find({ _id: { $in: staffIds } })
+          .select("_id name email")
+          .lean(),
       ]);
 
       const leadMap = new Map(leads.map((lead: any) => [String(lead._id), lead]));
       const userMap = new Map(users.map((u: any) => [String(u._id), u]));
       const agentMap = new Map(
-        [...agents, ...admins].map((a: any) => [String(a._id), a]),
+        [...agents, ...admins, ...landers].map((a: any) => [String(a._id), a]),
       );
 
       const conversations = rows.map((row: any) => {
@@ -163,7 +202,12 @@ export class LeadChatController {
                 _id: staffId,
                 name: agent?.name || agent?.username || "Agent",
                 email: agent?.email || "",
-                role: staffModel === "Admin" ? "Admin" : "Agent",
+                role:
+                  staffModel === "Admin"
+                    ? "Admin"
+                    : staffModel === "Lander"
+                      ? "Lander"
+                      : "Agent",
               }
             : undefined,
           unreadCount: Number(row?.unreadCount) || 0,
@@ -198,7 +242,10 @@ export class LeadChatController {
     try {
       const leadId = req.params.id;
       const userId = (req as any).user?._id;
-      const { role } = (req as any).user || {};
+      const role = await resolveChatActorRole(
+        userId,
+        (req as any).user?.role,
+      );
 
       // Verify lead exists
       const lead = await Lead.findById(leadId);
@@ -206,12 +253,7 @@ export class LeadChatController {
         throw new ApiError(404, "Lead not found");
       }
 
-      // Check permissions: admin/agent can access, or user if they own the lead
-      if (role !== "admin" && role !== "agent") {
-        // For regular users, check if they're the lead owner
-        // This would need to be implemented based on your lead-user relationship
-        throw new ApiError(403, "Access denied");
-      }
+      assertLeadChatAccess(lead, role, userId);
 
       // Get messages for this lead
       const messages = await Message.find({ leadId })
@@ -243,6 +285,17 @@ export class LeadChatController {
                 email: agent.email,
                 profilePictureUrl: agent.profilePictureUrl,
               };
+            } else {
+              const admin = await Admin.findById(msg.sender)
+                .select("_id email username name")
+                .lean();
+              if (admin) {
+                senderData = {
+                  _id: admin._id.toString(),
+                  name: admin.name || admin.username,
+                  email: admin.email,
+                };
+              }
             }
           } else if (msg.senderModel === "User") {
             const user = await User.findById(msg.sender).select("_id name email").lean();
@@ -251,6 +304,18 @@ export class LeadChatController {
                 _id: user._id.toString(),
                 name: user.name,
                 email: user.email,
+              };
+            }
+          } else if (msg.senderModel === "Lander") {
+            const lander = await Lander.findById(msg.sender)
+              .select("_id name email profilePictureUrl")
+              .lean();
+            if (lander) {
+              senderData = {
+                _id: lander._id.toString(),
+                name: lander.name,
+                email: lander.email,
+                profilePictureUrl: lander.profilePictureUrl,
               };
             }
           } else {
@@ -281,6 +346,17 @@ export class LeadChatController {
                 email: agent.email,
                 profilePictureUrl: agent.profilePictureUrl,
               };
+            } else {
+              const admin = await Admin.findById(msg.receiver)
+                .select("_id email username name")
+                .lean();
+              if (admin) {
+                receiverData = {
+                  _id: admin._id.toString(),
+                  name: admin.name || admin.username,
+                  email: admin.email,
+                };
+              }
             }
           } else if (msg.receiverModel === "User") {
             const user = await User.findById(msg.receiver).select("_id name email").lean();
@@ -289,6 +365,18 @@ export class LeadChatController {
                 _id: user._id.toString(),
                 name: user.name,
                 email: user.email,
+              };
+            }
+          } else if (msg.receiverModel === "Lander") {
+            const lander = await Lander.findById(msg.receiver)
+              .select("_id name email profilePictureUrl")
+              .lean();
+            if (lander) {
+              receiverData = {
+                _id: lander._id.toString(),
+                name: lander.name,
+                email: lander.email,
+                profilePictureUrl: lander.profilePictureUrl,
               };
             }
           } else {
@@ -338,7 +426,10 @@ export class LeadChatController {
       const leadId = req.params.id;
       const { text, receiverId, media } = req.body;
       const senderId = (req as any).user?._id;
-      const { role } = (req as any).user || {};
+      const role = await resolveChatActorRole(
+        senderId,
+        (req as any).user?.role,
+      );
 
       // Either text or media must be provided
       if ((!text || !text.trim()) && (!media || media.length === 0)) {
@@ -350,9 +441,16 @@ export class LeadChatController {
       if (!lead) {
         throw new ApiError(404, "Lead not found");
       }
+      assertLeadChatAccess(lead, role, senderId);
 
       // Determine sender and receiver models
-      const senderModel = role === "admin" ? "Admin" : role === "agent" ? "Agent" : "User";
+      const senderModel =
+        role === "admin"
+          ? "Admin"
+          : role === "agent" || role === "lander"
+            ? (await resolveLeadStaffModel(senderId)) ||
+              (role === "lander" ? "Lander" : "Agent")
+            : "User";
       
       // Determine receiver: 
       // - If admin/agent is sending, receiver should be the lead owner (borrowerProfile)
@@ -363,8 +461,12 @@ export class LeadChatController {
         : undefined;
       let receiverModel: "User" | "Admin" | "Agent" | "Lander" = "User";
 
-      if (senderModel === "Admin" || senderModel === "Agent") {
-        // Admin/Agent sending to lead owner or assigned agent
+      if (
+        senderModel === "Admin" ||
+        senderModel === "Agent" ||
+        senderModel === "Lander"
+      ) {
+        // Staff replies always go to the customer attached to this lead.
         if (lead.borrowerProfile) {
           // Priority 1: Send to lead owner (borrowerProfile)
           // Extract _id if populated, otherwise use the ObjectId directly
@@ -373,39 +475,33 @@ export class LeadChatController {
             : (lead.borrowerProfile as Types.ObjectId).toString();
           finalReceiverId = borrowerId;
           receiverModel = "User";
-        } else if (finalReceiverId) {
-          // Priority 2: Use provided receiverId
-          receiverModel = "User"; // Assume it's a user unless we check the actual model
-        } else if (lead.assignment?.current?.agent) {
-          // Priority 3: If no borrowerProfile and no receiverId, send to assigned agent
-          const agentId = (lead.assignment.current.agent as any)?._id
-            ? (lead.assignment.current.agent as any)._id.toString()
-            : (lead.assignment.current.agent as Types.ObjectId).toString();
-          finalReceiverId = agentId;
-          receiverModel = "Agent";
+        } else if (
+          finalReceiverId &&
+          (await User.exists({ _id: finalReceiverId }))
+        ) {
+          receiverModel = "User";
         } else {
-          // No way to determine receiver
-          throw new ApiError(400, "Cannot determine message receiver. Lead has no borrower profile, no assigned agent, and no receiverId provided.");
+          throw new ApiError(
+            400,
+            "Cannot determine the customer for this lead conversation",
+          );
         }
       } else {
-        // User sending to admin/agent - use provided receiverId or assigned agent
-        if (!finalReceiverId) {
-          // Try to get assigned agent from assignment
-          if (lead.assignment?.current?.agent) {
-            const agentId = (lead.assignment.current.agent as any)?._id
-              ? (lead.assignment.current.agent as any)._id.toString()
-              : (lead.assignment.current.agent as Types.ObjectId).toString();
-            finalReceiverId = agentId;
-            receiverModel = "Agent";
-          } else {
-            throw new ApiError(400, "Receiver ID is required or lead must have an assigned agent");
-          }
+        // Customer messages are restricted to the lead's current assignee.
+        const assignedId = normalizeChatId(lead.assignment?.current?.agent);
+        if (!assignedId) {
+          throw new ApiError(400, "Lead must have an assigned agent");
         }
+        if (finalReceiverId && normalizeChatId(finalReceiverId) !== assignedId) {
+          throw new ApiError(403, "Receiver is not assigned to this lead");
+        }
+        finalReceiverId = assignedId;
+        receiverModel = (await resolveLeadStaffModel(assignedId)) || "Agent";
       }
-      
-      // Try to determine receiver model by checking if it's a user
-      // For simplicity, assume receiver is a User (lead owner)
-      // You can enhance this by checking the receiver's actual role
+
+      if (!finalReceiverId || !Types.ObjectId.isValid(finalReceiverId)) {
+        throw new ApiError(400, "Invalid message receiver");
+      }
 
       // Helper function to determine media type from mimetype
       const getMediaType = (mimetype: string): "image" | "video" | "audio" | "document" | "other" => {
@@ -470,6 +566,29 @@ export class LeadChatController {
             email: agent.email,
             profilePictureUrl: agent.profilePictureUrl,
           };
+        } else {
+          const admin = await Admin.findById(senderId)
+            .select("_id email username name")
+            .lean();
+          if (admin) {
+            senderData = {
+              _id: admin._id.toString(),
+              name: admin.name || admin.username,
+              email: admin.email,
+            };
+          }
+        }
+      } else if (senderModel === "Lander") {
+        const lander = await Lander.findById(senderId)
+          .select("_id name email profilePictureUrl")
+          .lean();
+        if (lander) {
+          senderData = {
+            _id: lander._id.toString(),
+            name: lander.name,
+            email: lander.email,
+            profilePictureUrl: lander.profilePictureUrl,
+          };
         }
       } else if (senderModel === "User") {
         const user = await User.findById(senderId).select("_id name email").lean();
@@ -482,8 +601,7 @@ export class LeadChatController {
         }
       }
 
-      // Fetch receiver based on receiverModel
-      // Note: In sendMessage, receiverModel is only "User" or "Agent", never "Admin"
+      // Fetch receiver based on receiverModel.
       if (receiverModel === "Agent") {
         const agent = await Agent.findById(finalReceiverId).select("_id name email profilePictureUrl").lean();
         if (agent) {
@@ -492,6 +610,40 @@ export class LeadChatController {
             name: agent.name,
             email: agent.email,
             profilePictureUrl: agent.profilePictureUrl,
+          };
+        } else {
+          const admin = await Admin.findById(finalReceiverId)
+            .select("_id email username name")
+            .lean();
+          if (admin) {
+            receiverData = {
+              _id: admin._id.toString(),
+              name: admin.name || admin.username,
+              email: admin.email,
+            };
+          }
+        }
+      } else if (receiverModel === "Admin") {
+        const admin = await Admin.findById(finalReceiverId)
+          .select("_id email username name")
+          .lean();
+        if (admin) {
+          receiverData = {
+            _id: admin._id.toString(),
+            name: admin.name || admin.username,
+            email: admin.email,
+          };
+        }
+      } else if (receiverModel === "Lander") {
+        const lander = await Lander.findById(finalReceiverId)
+          .select("_id name email profilePictureUrl")
+          .lean();
+        if (lander) {
+          receiverData = {
+            _id: lander._id.toString(),
+            name: lander.name,
+            email: lander.email,
+            profilePictureUrl: lander.profilePictureUrl,
           };
         }
       } else if (receiverModel === "User") {

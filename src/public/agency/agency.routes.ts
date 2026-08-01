@@ -11,35 +11,44 @@ import {
   markNotificationRead,
 } from "../../services/notification.service";
 import { AgencyController } from "./agency.controller";
+import {
+  requireApprovedDsa,
+  requireDsaRole,
+} from "../../middlewares/dsaAuthMiddleware";
 
 const router = Router();
 
 router.post("/send-otp", asyncHandler(AgencyController.sendOtp));
 router.post("/verify-otp", asyncHandler(AgencyController.verifyOtp));
 
-router.use(authenticateToken);
+router.use(authenticateToken, requireDsaRole);
 
 router.get("/current", asyncHandler(AgencyController.getCurrentAgency));
 router.get(
   "/earnings/summary",
+  requireApprovedDsa,
   asyncHandler(AgencyController.getEarningsSummary),
 );
 router.get(
   "/earnings/events",
+  requireApprovedDsa,
   asyncHandler(AgencyController.getEarningEvents),
 );
-router.get("/leads/summary", asyncHandler(AgencyController.getLeadSummary));
-router.get("/leads/events", asyncHandler(AgencyController.getLeadEvents));
+router.get("/leads/summary", requireApprovedDsa, asyncHandler(AgencyController.getLeadSummary));
+router.get("/leads/events", requireApprovedDsa, asyncHandler(AgencyController.getLeadEvents));
 router.get(
   "/payouts/summary",
+  requireApprovedDsa,
   asyncHandler(AgencyController.getPayoutSummary),
 );
 router.get(
   "/payouts/requests",
+  requireApprovedDsa,
   asyncHandler(AgencyController.listPayoutRequests),
 );
 router.post(
   "/payouts/requests",
+  requireApprovedDsa,
   asyncHandler(AgencyController.createPayoutRequest),
 );
 router.get(
@@ -50,10 +59,19 @@ router.put(
   "/notification-preferences",
   asyncHandler(AgencyController.updateNotificationPreferences)
 );
-router.get("/team", asyncHandler(AgencyController.getTeamMembers));
-router.get("/team/:id", asyncHandler(AgencyController.getTeamMember));
+router.post(
+  "/push-token",
+  asyncHandler(AgencyController.registerPushToken),
+);
+router.delete(
+  "/push-token",
+  asyncHandler(AgencyController.unregisterPushToken),
+);
+router.get("/team", requireApprovedDsa, asyncHandler(AgencyController.getTeamMembers));
+router.get("/team/:id", requireApprovedDsa, asyncHandler(AgencyController.getTeamMember));
 router.post(
   "/team",
+  requireApprovedDsa,
   dynamicUpload([
     { name: "profilePicture", maxCount: 1 },
     { name: "avatar", maxCount: 1 },
@@ -63,6 +81,7 @@ router.post(
 );
 router.put(
   "/team/:id",
+  requireApprovedDsa,
   dynamicUpload([
     { name: "profilePicture", maxCount: 1 },
     { name: "avatar", maxCount: 1 },

@@ -71,6 +71,61 @@ export interface CaptureLeadOptions {
   skipExternalNotifications?: boolean;
 }
 
+export type LeadSourceSnapshot = Partial<ILead["capturedFrom"]> & {
+  platform: string;
+  capturedAt: Date;
+  externalId?: string;
+};
+
+const compactRecord = <T extends Record<string, any>>(value?: T | null) =>
+  Object.fromEntries(
+    Object.entries(value || {}).filter(
+      ([, item]) => item !== undefined && item !== null && item !== "",
+    ),
+  ) as Partial<T>;
+
+export const preserveFirstTouchAttribution = <T extends Record<string, any>>(
+  current?: T | null,
+  incoming?: T | null,
+): T =>
+  ({
+    ...compactRecord(incoming),
+    ...compactRecord(current),
+  }) as T;
+
+export const appendLeadSourceHistory = (
+  history: LeadSourceSnapshot[] | undefined,
+  firstTouch: ILead["capturedFrom"] | undefined,
+  incoming: ILead["capturedFrom"],
+  capturedAt: Date,
+  externalId?: string,
+) => {
+  const next = Array.isArray(history) ? [...history] : [];
+  if (!next.length && firstTouch?.platform) {
+    next.push({
+      ...compactRecord(firstTouch),
+      platform: String(firstTouch.platform),
+      capturedAt,
+    });
+  }
+  const duplicateExternalId =
+    externalId &&
+    next.some(
+      (entry) =>
+        entry.externalId === externalId &&
+        entry.platform === String(incoming.platform),
+    );
+  if (!duplicateExternalId) {
+    next.push({
+      ...compactRecord(incoming),
+      platform: String(incoming.platform),
+      capturedAt,
+      ...(externalId ? { externalId } : {}),
+    });
+  }
+  return next;
+};
+
 interface AssignmentContext {
   actorId?: string;
   reason?: string;
@@ -121,8 +176,17 @@ const uniqueStrings = (items: (string | null | undefined)[]): string[] => {
 
 const parseLoanProduct = (value?: string): LoanProductType | undefined => {
   if (!value) return undefined;
-  const normalized = value.toString().toLowerCase();
-  return Object.values(LoanProductType).find((option) => option === normalized);
+  const canonicalLoanType = normalizeLoanType(value);
+  if (
+    canonicalLoanType &&
+    (Object.values(LoanProductType) as string[]).includes(canonicalLoanType)
+  ) {
+    return canonicalLoanType as unknown as LoanProductType;
+  }
+  const normalized = value.toString().trim().toLowerCase();
+  return Object.values(LoanProductType).find(
+    (option) => String(option).toLowerCase() === normalized,
+  );
 };
 
 const parseNumber = (value?: any): number | undefined => {
@@ -279,7 +343,11 @@ class LeadAssignmentEngine {
     list?: string[] | LoanProductType[]
   ) {
     if (!value || !list || list.length === 0) return true;
-    return list.map((item) => item?.toString()).includes(value.toString());
+    const normalizeProduct = (item: string | LoanProductType) =>
+      normalizeLoanType(String(item || "")) ||
+      String(item || "").trim().toLowerCase();
+    const normalizedValue = normalizeProduct(value);
+    return list.some((item) => normalizeProduct(item) === normalizedValue);
   }
 
   private static async findBestAgent(lead: ILead): Promise<IAgent | null> {
@@ -337,11 +405,30 @@ export class LeadManagementService {
     });
 
     lead.tags = Array.from(new Set([...(lead.tags || []), ...normalized.tags]));
+    const currentMetadata = compactRecord(
+      lead.metadata?.toObject ? lead.metadata.toObject() : lead.metadata,
+    );
+    const sourceHistory = appendLeadSourceHistory(
+      currentMetadata.sourceHistory,
+      existing?.capturedFrom,
+      normalized.capturedFrom,
+      now,
+      options.externalId,
+    );
     lead.metadata = {
-      ...(lead.metadata || {}),
+      ...currentMetadata,
       ...(normalized.metadata || {}),
+      sourceHistory,
+      latestSource: {
+        ...compactRecord(normalized.capturedFrom),
+        capturedAt: now,
+        ...(options.externalId ? { externalId: options.externalId } : {}),
+      },
     };
-    lead.utm = { ...(lead.utm || {}), ...(normalized.utm || {}) };
+    lead.utm = preserveFirstTouchAttribution(
+      lead.utm?.toObject ? lead.utm.toObject() : lead.utm,
+      normalized.utm,
+    );
 
     lead = await LeadAssignmentEngine.ensureAssignment(lead, {
       actorId: options.actorId,
@@ -418,9 +505,14 @@ export class LeadManagementService {
       throw new ApiError(400, "Invalid follow-up due date");
     }
 
+    // reminderAt represents the scheduled event time. The reminder worker uses
+    // a 15-minute look-ahead, so defaulting it to dueAt delivers at T-15.
     const reminderAt = payload.reminderAt
       ? new Date(payload.reminderAt)
-      : undefined;
+      : dueAt;
+    if (Number.isNaN(reminderAt.getTime())) {
+      throw new ApiError(400, "Invalid follow-up reminder date");
+    }
 
     const followUp = {
       dueAt,
@@ -696,11 +788,14 @@ export class LeadManagementService {
     console.log(`  📝 Building loan query from form data...`);
 
     const normalizedLoanType = normalizeLoanType(formData?.loanType);
+    if (!normalizedLoanType) {
+      throw new ApiError(400, "Invalid loanType");
+    }
 
     // Merge form data with lead/borrower data
     const loanQueryData: any = {
       ...formData,
-      ...(normalizedLoanType ? { loanType: normalizedLoanType } : {}),
+      loanType: normalizedLoanType,
       customerId: borrower._id,
       // Ensure bankStatementUrl has a value - use placeholder if not uploaded yet
       bankStatementUrl: formData.bankStatementUrl || "",
@@ -919,6 +1014,7 @@ export class LeadManagementService {
       capturedFrom,
       utm,
       metadata: {
+        ...(options.metadata || {}),
         rawPayload: payload,
         channel: capturedFrom.channel,
         campaignName: payload.campaignName,
@@ -980,10 +1076,13 @@ export class LeadManagementService {
       ...(target.location || {}),
       ...(source.location || {}),
     };
-    target.capturedFrom = {
-      ...(target.capturedFrom || {}),
-      ...source.capturedFrom,
-    };
+    const currentCapturedFrom: any = target.capturedFrom as any;
+    target.capturedFrom = preserveFirstTouchAttribution(
+      currentCapturedFrom?.toObject
+        ? currentCapturedFrom.toObject()
+        : currentCapturedFrom,
+      source.capturedFrom,
+    );
   }
 
   private async ensureBorrowerProfile(

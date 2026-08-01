@@ -588,12 +588,6 @@ const sanitizeAgencyUpdatePayload = (
     if (role === "agency") next.parentAgency = undefined;
   }
 
-  if (payload.status !== undefined) {
-    const status = normalizeStatus(payload.status);
-    if (!status) throw new ApiError(400, "Invalid status");
-    next.status = status;
-  }
-
   if (payload.isEmailVerified !== undefined) {
     next.isEmailVerified = normalizeBoolean(payload.isEmailVerified, false);
   }
@@ -633,6 +627,10 @@ export class AgencyAdminController {
   static async create(req: Request, res: Response, next: NextFunction) {
     try {
       const payload = sanitizeAgencyCreatePayload(req.body);
+      if (payload.role === "agency") {
+        payload.status = UserStatus.PENDING_VERIFICATION;
+        payload.approvalReview = { status: "pending" };
+      }
 
       if (payload.role === "agency_member" && !payload.parentAgency) {
         return res
@@ -874,6 +872,14 @@ export class AgencyAdminController {
 
       const update: Record<string, any> = { status };
       if (status === UserStatus.ACTIVE) {
+        if (agency.role === "agency" && !agency.parentAgency) {
+          return res.status(409).json(
+            new ApiError(
+              409,
+              "Primary DSA approval must use PATCH /api/admin/dsa/profiles/:id/status",
+            ),
+          );
+        }
         const review = buildPartnerApprovalChecklist(agency);
         if (!review.complete) {
           return res.status(400).json(
@@ -1262,7 +1268,7 @@ export class AgencyAdminController {
   ) {
     try {
       const { agencyId, status, page = "1", limit = "20" } = req.query;
-      const filter: Record<string, any> = {};
+      const filter: Record<string, any> = { isCanonical: { $ne: false } };
       if (typeof agencyId === "string" && agencyId.trim()) {
         filter.ownerAgency = agencyId.trim();
       }

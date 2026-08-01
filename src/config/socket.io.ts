@@ -476,6 +476,7 @@ export const emitNotificationToUser = (
     title: string;
     body: string;
     notificationId?: string;
+    campaignId?: string;
     type?: string;
     url?: string;
   },

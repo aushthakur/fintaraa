@@ -293,7 +293,37 @@ export const NotificationMessages: Record<string, DualNotificationTemplate> = {
     }),
     receiver: (ctx) => ({
       title: "Referral Reward",
-      message: `You earned ${ctx?.points || 100} points for a successful referral.`,
+      message: `You earned ₹${ctx?.amount || 500} after your referred friend's eligible loan was disbursed.`,
+    }),
+  },
+  "referral-payout-paid": {
+    sender: () => ({
+      title: "Referral Payout Processed",
+      message: "Referral payout marked as paid.",
+    }),
+    receiver: (ctx) => ({
+      title: "Referral Payout Paid",
+      message: `Your referral payout of ₹${ctx?.amount || 0} has been processed${ctx?.payoutReference ? ` (reference: ${ctx.payoutReference})` : ""}.`,
+    }),
+  },
+  "referral-payout-approved": {
+    sender: () => ({
+      title: "Referral Payout Approved",
+      message: "Referral payout request approved.",
+    }),
+    receiver: (ctx) => ({
+      title: "Referral Payout Approved",
+      message: `Your referral payout request for ₹${ctx?.amount || 0} has been approved and is awaiting manual payment.`,
+    }),
+  },
+  "referral-payout-rejected": {
+    sender: () => ({
+      title: "Referral Payout Rejected",
+      message: "Referral payout request rejected.",
+    }),
+    receiver: (ctx) => ({
+      title: "Referral Payout Rejected",
+      message: `Your referral payout request for ₹${ctx?.amount || 0} was rejected${ctx?.note ? `: ${ctx.note}` : "."}`,
     }),
   },
 
@@ -305,6 +335,17 @@ export const NotificationMessages: Record<string, DualNotificationTemplate> = {
     receiver: () => ({
       title: "Preferences Updated",
       message: "Your notification preferences were updated.",
+    }),
+  },
+
+  "profile-incomplete": {
+    sender: (ctx) => ({
+      title: "Profile Completion Reminder Sent",
+      message: `Profile reminder sent for ${ctx?.product || "the application"}.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Complete Your Profile",
+      message: `Complete the missing profile details to continue your ${ctx?.product || "application"}${ctx?.missingFields ? `: ${ctx.missingFields}` : "."}`,
     }),
   },
 
@@ -371,6 +412,72 @@ export const NotificationMessages: Record<string, DualNotificationTemplate> = {
     receiver: (ctx) => ({
       title: "Documents Received",
       message: `We received ${ctx?.documents || "your documents"}${ctx?.loanId ? ` for application ${ctx.loanId}` : ""}.`,
+    }),
+  },
+
+  "loan-document-review-pending": {
+    sender: (ctx) => ({
+      title: "Documents Awaiting Review",
+      message: `${ctx?.name || "A customer"} uploaded ${ctx?.documents || "documents"}${ctx?.loanId ? ` for ${ctx.loanId}` : ""}.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Documents Awaiting Review",
+      message: `${ctx?.name || "A customer"} uploaded ${ctx?.documents || "documents"}${ctx?.loanId ? ` for ${ctx.loanId}` : ""}.`,
+    }),
+  },
+
+  "loan-document-approved": {
+    sender: (ctx) => ({
+      title: "Document Approved",
+      message: `${ctx?.document || "Document"} was approved.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Document Approved",
+      message: `${ctx?.document || "Your document"}${ctx?.loanId ? ` for ${ctx.loanId}` : ""} has been approved.`,
+    }),
+  },
+
+  "loan-document-rejected": {
+    sender: (ctx) => ({
+      title: "Document Rejected",
+      message: `${ctx?.document || "Document"} was rejected.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Document Rejected",
+      message: `${ctx?.document || "Your document"}${ctx?.loanId ? ` for ${ctx.loanId}` : ""} was rejected${ctx?.note ? `: ${ctx.note}` : "."}`,
+    }),
+  },
+
+  "loan-document-reupload-requested": {
+    sender: (ctx) => ({
+      title: "Document Re-upload Requested",
+      message: `A new copy of ${ctx?.document || "a document"} was requested.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Document Re-upload Required",
+      message: `Please upload a new copy of ${ctx?.document || "the document"}${ctx?.loanId ? ` for ${ctx.loanId}` : ""}${ctx?.note ? `: ${ctx.note}` : "."}`,
+    }),
+  },
+
+  "insurance-application-created": {
+    sender: (ctx) => ({
+      title: "Insurance Application Created",
+      message: `Insurance application ${ctx?.applicationId || ""} was created.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Insurance Application Submitted",
+      message: `Your ${ctx?.productName || "insurance"} application${ctx?.applicationId ? ` (${ctx.applicationId})` : ""} has been submitted.`,
+    }),
+  },
+
+  "insurance-application-status-updated": {
+    sender: (ctx) => ({
+      title: "Insurance Status Updated",
+      message: `Insurance application ${ctx?.applicationId || ""} is now ${ctx?.status || "updated"}.`,
+    }),
+    receiver: (ctx) => ({
+      title: "Insurance Application Update",
+      message: `Your ${ctx?.productName || "insurance"} application${ctx?.applicationId ? ` (${ctx.applicationId})` : ""} is now ${ctx?.status || "updated"}.`,
     }),
   },
 };

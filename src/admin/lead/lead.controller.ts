@@ -10,6 +10,7 @@ import Lead, {
 import { CommonService } from "../../services/common.services";
 import { leadManagementService } from "../../services/leadManagement.service";
 import Agent from "../../modals/agent.model";
+import { buildLeadOwnershipMatch } from "./leadAccess.middleware";
 
 const leadService = new CommonService(Lead);
 
@@ -77,28 +78,11 @@ export class LeadController {
       const userId = (req as any).user?._id;
       const { role } = (req as any).user || {};
 
-      // Build match stage for role-based filtering
-      let matchStage: any = {};
-      
-      // For non-admin users (agents, landers, etc.), only show leads assigned to them
-      // Admin role is typically "admin", all other roles should be filtered
-      if (role !== "admin" && userId) {
-        const userObjectId = new Types.ObjectId(String(userId));
-        // Match leads where assignment.current exists and agent matches
-        matchStage = {
-          "assignment.current": { $exists: true, $ne: null },
-          "assignment.current.agent": userObjectId,
-        };
-        
-        // Debug logging
-        console.log("🔍 Filtering leads for user:", {
-          userId: String(userId),
-          role,
-          userObjectId: userObjectId.toString(),
-          filter: JSON.stringify(matchStage),
-        });
-      } else {
-        console.log("👑 Admin access - showing all leads");
+      const matchStage = buildLeadOwnershipMatch(userId, role);
+      if (!matchStage) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Lead CRM access is restricted to staff"));
       }
 
       const pipeline = [
@@ -146,6 +130,18 @@ export class LeadController {
             tags: 1,
             location: 1,
             capturedFrom: 1,
+            latestSource: {
+              $ifNull: [
+                "$metadata.latestSource.platform",
+                {
+                  $ifNull: [
+                    { $arrayElemAt: ["$integrationEvents.provider", -1] },
+                    "$capturedFrom.platform",
+                  ],
+                },
+              ],
+            },
+            sourceHistory: { $ifNull: ["$metadata.sourceHistory", []] },
             createdAt: 1,
             nextActionAt: 1,
             lastContactedAt: 1,
@@ -565,13 +561,24 @@ export class LeadController {
   }
 
   static async pipelineSummary(
-    _req: Request,
+    req: Request,
     res: Response,
     next: NextFunction
   ) {
     try {
+      const userId = (req as any).user?._id;
+      const role = (req as any).user?.role;
+      const ownershipMatch = buildLeadOwnershipMatch(userId, role);
+      if (!ownershipMatch) {
+        return res
+          .status(403)
+          .json(new ApiError(403, "Lead CRM access is restricted to staff"));
+      }
       const [summary, overdue] = await Promise.all([
         Lead.aggregate([
+          ...(Object.keys(ownershipMatch).length
+            ? [{ $match: ownershipMatch }]
+            : []),
           {
             $group: {
               _id: "$status",
@@ -580,6 +587,7 @@ export class LeadController {
           },
         ]),
         Lead.countDocuments({
+          ...ownershipMatch,
           status: {
             $in: [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.IN_PROGRESS],
           },

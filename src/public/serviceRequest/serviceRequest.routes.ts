@@ -2,7 +2,7 @@ import express from "express";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { ServiceRequestController } from "./serviceRequest.controller";
 import {
-  authorize,
+  authorizePermission,
   authenticateToken,
   optionalAuthenticateToken,
 } from "../../middlewares/authMiddleware";
@@ -27,19 +27,25 @@ router.get(
 router.get(
   "/admin",
   authenticateToken,
-  authorize("admin"),
+  authorizePermission("Service Requests"),
   asyncHandler(ServiceRequestController.list),
+);
+router.get(
+  "/admin/:id",
+  authenticateToken,
+  authorizePermission("Service Requests"),
+  asyncHandler(ServiceRequestController.getAdminById),
 );
 router.put(
   "/admin/:id",
   authenticateToken,
-  authorize("admin"),
+  authorizePermission("Service Requests"),
   asyncHandler(ServiceRequestController.update),
 );
 router.patch(
   "/admin/:id/stage",
   authenticateToken,
-  authorize("admin"),
+  authorizePermission("Service Requests"),
   asyncHandler(ServiceRequestController.updateStage),
 );
 

@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { config } from "../config/config";
@@ -6,6 +5,10 @@ import {
   allocatePrefixedSequence,
   formatYearMonthDaySequencePrefix,
 } from "../utils/idAllocator";
+import {
+  buildUserReferralCode,
+  normalizeReferralCode,
+} from "../utils/referral";
 import mongoose, { Schema, Document, Types } from "mongoose";
 
 export enum UserStatus {
@@ -53,6 +56,18 @@ export enum AccountSource {
   UNKNOWN = "unknown",
 }
 
+export enum RegistrationSource {
+  ORGANIC = "organic",
+  REFERRAL = "referral",
+  PAID = "paid",
+  WHATSAPP = "whatsapp",
+  APP = "app",
+  WEBSITE = "website",
+  ADMIN = "admin",
+  CRM = "crm",
+  UNKNOWN = "unknown",
+}
+
 export enum EmploymentType {
   SALARIED = "salaried",
   SELF_EMPLOYED = "self_employed",
@@ -72,8 +87,28 @@ export enum KycVerificationStatus {
 
 export enum LoanProductType {
   PERSONAL_LOAN = "personal_loan",
+  TOP_UP_LOAN = "top_up_loan",
+  BALANCE_TRANSFER_TOP_UP_LOAN = "Balance Transfer+ Top Up Loan",
   HOME_LOAN = "home_loan",
   BUSINESS_LOAN = "business_loan",
+  AGRICULTURE_LOAN = "Agriculture Loan",
+  SOLAR_LOAN = "Solar Loan",
+  CAR_LOAN = "Vechile Loan",
+  TWO_WHEELER_LOAN = "Two Wheeler Loan",
+  VEHICLE_LOAN = "vehicle_loan",
+  INSTANT_LOAN = "instant_loan",
+  EDUCATION_LOAN = "education_loan",
+  GOLD_LOAN = "gold_loan",
+  LOAN_AGAINST_PROPERTY = "loan_against_property",
+  RENOVATION_LOAN = "renovation_loan",
+  WORKING_CAPITAL_LOAN = "working_capital_loan",
+  LOAN_AGAINST_SECURITY = "loan_against_security",
+  LOAN_AGAINST_CAR = "loan_against_car",
+  MACHINERY_LOAN = "machinery_loan",
+  DOD_LOAN = "dod_loan",
+  OD_LOAN = "od_loan",
+  INDUSTRIAL_LOAN = "industrial_loan",
+  COMMERCIAL_PURCHASES_LOAN = "commercial_purchases_loan",
   CREDIT_CARD = "credit_card",
   BNPL = "bnpl",
 }
@@ -130,6 +165,7 @@ export interface IDocumentRecord {
   issuer?: string;
   fileUrl?: string;
   issuedOn?: Date;
+  uploadedAt?: Date;
   verified?: boolean;
   referenceId?: string;
 }
@@ -142,6 +178,7 @@ export const DocumentSchema = new Schema(
     issuer: { type: String, trim: true },
     fileUrl: { type: String, trim: true },
     issuedOn: { type: Date },
+    uploadedAt: { type: Date, default: Date.now },
     verified: { type: Boolean, default: false },
     referenceId: { type: String, trim: true },
   },
@@ -202,7 +239,7 @@ const DeviceAuthSchema = new Schema(
   { _id: false },
 );
 
-const PushTokenSchema = new Schema(
+export const PushTokenSchema = new Schema(
   {
     token: { type: String, required: true, trim: true },
     platform: {
@@ -533,8 +570,14 @@ export interface IUser extends Document {
   avatar?: string;
   referralCode?: string;
   referralPoints?: number;
+  referralRewardCredits?: Types.ObjectId[];
   referredBy?: Types.ObjectId;
   accountSource?: AccountSource;
+  registrationSource?: RegistrationSource;
+  acquisition?: Record<string, any>;
+  isDeleted?: boolean;
+  deletedAt?: Date;
+  deletedBy?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
   password: string;
@@ -599,9 +642,30 @@ const UserSchema = new Schema<IUser>(
       default: AccountSource.UNKNOWN,
       index: true,
     },
-    referralCode: { type: String, unique: true, sparse: true, trim: true },
+    registrationSource: {
+      type: String,
+      enum: Object.values(RegistrationSource),
+      default: RegistrationSource.UNKNOWN,
+      index: true,
+    },
+    acquisition: { type: Schema.Types.Mixed },
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date },
+    deletedBy: { type: Schema.Types.ObjectId, ref: "Admin" },
+    referralCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
+      set: normalizeReferralCode,
+    },
     referredBy: { type: Schema.Types.ObjectId, ref: "User" },
     referralPoints: { type: Number, default: 0 },
+    referralRewardCredits: {
+      type: [{ type: Schema.Types.ObjectId, ref: "ReferralEvent" }],
+      default: [],
+      select: false,
+    },
     password: { type: String },
     lastLoginAt: { type: Date },
     lastActiveAt: { type: Date },
@@ -697,14 +761,12 @@ const UserSchema = new Schema<IUser>(
 
 UserSchema.index({ email: 1, status: 1 });
 UserSchema.index({ accountSource: 1, createdAt: -1 });
+UserSchema.index({ registrationSource: 1, createdAt: -1 });
+UserSchema.index({ isDeleted: 1, createdAt: -1 });
 UserSchema.index({ "fcmTokens.token": 1 });
 
-export const generateReferralCode = (userId: string) => {
-  const prefix = "REF";
-  const randomPart = crypto.randomBytes(2).toString("hex");
-  const userPart = userId.toString().slice(-4);
-  return `${prefix}-${randomPart}-${userPart}`.toUpperCase();
-};
+export const generateReferralCode = (userId: string) =>
+  buildUserReferralCode(userId);
 
 const allocateUniqueCustomerId = async (user: any): Promise<string> => {
   const session = user.$session();
@@ -735,6 +797,16 @@ const allocateUniqueCustomerId = async (user: any): Promise<string> => {
 
   throw new Error("Unable to allocate a unique customer ID");
 };
+
+// Every user receives a scalable referral code. Existing codes are preserved.
+// This also backfills a missing code whenever a legacy/placeholder user is
+// next saved (for example, after successful OTP verification).
+UserSchema.pre("validate", function (next) {
+  if (this.role === "user" && !this.referralCode) {
+    this.referralCode = buildUserReferralCode(this._id);
+  }
+  next();
+});
 
 // 🔐 Password Hash Middleware
 UserSchema.pre("save", async function (next) {
