@@ -7,15 +7,6 @@ dotenv.config({
 
 const toBool = (value: string | undefined): boolean => value === "true";
 const runtimeEnv = process.env.NODE_ENV || "production";
-const hasStaticOtpConfig = Boolean(
-  String(process.env.STATIC_OTP_MOBILE || "").trim() ||
-    String(process.env.STATIC_OTP_CODE || "").trim(),
-);
-if (runtimeEnv === "production" && hasStaticOtpConfig) {
-  throw new Error(
-    "STATIC_OTP_MOBILE/STATIC_OTP_CODE must not be configured in production",
-  );
-}
 
 export const config = {
   env: runtimeEnv,

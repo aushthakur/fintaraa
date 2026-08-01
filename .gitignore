@@ -17,6 +17,8 @@ yarn-error.log*
 
 # Environment variables
 .env
+.env.dev
+.env.production
 .env.local
 .env.*.local
 
@@ -32,4 +34,3 @@ Thumbs.db
 
 # Coverage directory used by tools like istanbul
 coverage/
-
