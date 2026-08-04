@@ -56,6 +56,21 @@ const providerMessageId = (response: any) =>
       "",
   ).trim();
 
+const whatsappJobLogContext = (job: ICommunicationOutbox) => {
+  const payload = job.payload as Partial<InteraktTemplatePayload>;
+  return {
+    jobId: String(job._id),
+    eventName: job.eventName,
+    referenceId: job.referenceId || "",
+    to: `${payload?.countryCode || ""}${payload?.phoneNumber || ""}`,
+    templateName: payload?.template?.name || "",
+    callbackData: payload?.callbackData || "",
+    idempotencyKey: job.idempotencyKey,
+    attempt: job.attempts,
+    maxAttempts: job.maxAttempts,
+  };
+};
+
 export const enqueueCommunication = async (
   input: EnqueueCommunicationInput,
 ) => {
@@ -133,9 +148,17 @@ const deliverCommunication = async (job: ICommunicationOutbox) => {
   }
 
   if (job.channel === CommunicationChannel.WHATSAPP) {
-    const response = await sendInteraktTemplateMessage(
-      job.payload as InteraktTemplatePayload,
+    const payload = job.payload as InteraktTemplatePayload;
+    const logContext = whatsappJobLogContext(job);
+    console.log(
+      "[CommunicationOutbox] WhatsApp sending to this number:",
+      logContext,
     );
+    const response = await sendInteraktTemplateMessage(payload);
+    console.log("[CommunicationOutbox] WhatsApp provider accepted:", {
+      ...logContext,
+      providerMessageId: providerMessageId(response),
+    });
     return {
       messageId: providerMessageId(response),
       providerStatus: "accepted",
@@ -259,6 +282,13 @@ export const processCommunicationOutbox = async () => {
           },
         );
       } catch (error) {
+        if (job.channel === CommunicationChannel.WHATSAPP) {
+          console.log("[CommunicationOutbox] WhatsApp delivery failed:", {
+            ...whatsappJobLogContext(job),
+            error: errorMessage(error),
+            willRetry: job.attempts < job.maxAttempts,
+          });
+        }
         await markJobFailedOrRetry(job, error);
       }
     }

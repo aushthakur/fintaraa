@@ -58,6 +58,20 @@ const normalizeEventKey = (input: CustomerApplicationCommunication) =>
     .replace(/[^a-zA-Z0-9:_-]/g, "-")
     .slice(0, 180);
 
+const getApplicationWhatsappLogContext = (
+  input: CustomerApplicationCommunication,
+  eventKey: string,
+) => ({
+  kind: input.kind,
+  applicationId: input.applicationId,
+  status: input.status,
+  eventKey,
+  to: input.mobile || "",
+  hasWhatsappConsent: input.whatsappConsent === true,
+  whatsappChannelEnabled: input.channels?.whatsapp !== false,
+  interaktEnabled: config.integrations.interakt.enabled,
+});
+
 const buildEmail = (input: CustomerApplicationCommunication) => {
   const name = escapeHtml(input.customerName || "Customer");
   const applicationId = escapeHtml(input.applicationId);
@@ -167,12 +181,25 @@ const queueWhatsapp = async (
   input: CustomerApplicationCommunication,
   eventKey: string,
 ) => {
-  if (
-    !input.whatsappConsent ||
-    !input.mobile ||
-    input.channels?.whatsapp === false ||
-    !config.integrations.interakt.enabled
-  ) {
+  const logContext = getApplicationWhatsappLogContext(input, eventKey);
+  console.log("[Application WhatsApp] Template hit:", logContext);
+  if (!input.whatsappConsent) {
+    console.log(
+      "[Application WhatsApp] Skipped - WhatsApp consent missing:",
+      logContext,
+    );
+    return;
+  }
+  if (!input.mobile) {
+    console.log("[Application WhatsApp] Skipped - mobile number missing:", logContext);
+    return;
+  }
+  if (input.channels?.whatsapp === false) {
+    console.log("[Application WhatsApp] Skipped - channel disabled:", logContext);
+    return;
+  }
+  if (!config.integrations.interakt.enabled) {
+    console.log("[Application WhatsApp] Skipped - Interakt disabled:", logContext);
     return;
   }
   const notificationConfig = config.applicationNotifications;
@@ -180,7 +207,13 @@ const queueWhatsapp = async (
   const templateName = isDocumentRequest
     ? notificationConfig.whatsappDocumentReuploadTemplate
     : notificationConfig.whatsappStatusTemplate;
-  if (!templateName) return;
+  if (!templateName) {
+    console.log("[Application WhatsApp] Skipped - template name missing:", {
+      ...logContext,
+      isDocumentRequest,
+    });
+    return;
+  }
 
   const actionUrl =
     input.actionUrl || getApplicationTrackingUrl(input.applicationId);
@@ -198,7 +231,20 @@ const queueWhatsapp = async (
         formatApplicationStatus(input.status),
         actionUrl,
       ];
-  await enqueueCommunication({
+  const callbackData = `application:${input.kind}:${input.applicationId}:${eventKey}`;
+  const idempotencyKey = `application:${input.kind}:${input.applicationId}:${eventKey}:whatsapp`;
+  console.log(
+    "[Application WhatsApp] Queueing template - sending to this number when worker runs:",
+    {
+      ...logContext,
+      templateName,
+      languageCode: notificationConfig.whatsappLanguage,
+      bodyValues,
+      callbackData,
+      idempotencyKey,
+    },
+  );
+  const queued = await enqueueCommunication({
     channel: CommunicationChannel.WHATSAPP,
     eventName: isDocumentRequest
       ? "application-document-reupload-requested"
@@ -209,14 +255,20 @@ const queueWhatsapp = async (
       countryCode: config.integrations.interakt.defaultCountryCode,
       phoneNumber: input.mobile,
       type: "Template",
-      callbackData: `application:${input.kind}:${input.applicationId}:${eventKey}`,
+      callbackData,
       template: {
         name: templateName,
         languageCode: notificationConfig.whatsappLanguage,
         bodyValues,
       },
     },
-    idempotencyKey: `application:${input.kind}:${input.applicationId}:${eventKey}:whatsapp`,
+    idempotencyKey,
+  });
+  console.log("[Application WhatsApp] Queued template:", {
+    ...logContext,
+    templateName,
+    idempotencyKey,
+    outboxStatus: (queued as any)?.status,
   });
 };
 

@@ -46,6 +46,10 @@ const normalizePhone = (countryCode: string, phoneNumber: string) => {
   return { countryCode: normalizedCountryCode, phoneNumber: normalizedPhone };
 };
 
+const interaktMessageId = (data: any) =>
+  String(data?.messageId || data?.id || data?.data?.messageId || data?.data?.id || "")
+    .trim();
+
 export const sendInteraktTemplateMessage = async (
   payload: InteraktTemplatePayload
 ) => {
@@ -87,6 +91,15 @@ export const sendInteraktTemplateMessage = async (
   };
 
   const url = normalizeBaseUrl(interaktConfig.baseUrl);
+  const logContext = {
+    to: `${recipient.countryCode}${recipient.phoneNumber}`,
+    templateName: normalizedPayload.template.name,
+    languageCode: normalizedPayload.template.languageCode,
+    bodyValues: normalizedPayload.template.bodyValues,
+    callbackData: normalizedPayload.callbackData || "",
+    campaignId: normalizedPayload.campaignId || "",
+  };
+  console.log("[Interakt] Sending WhatsApp template to this number:", logContext);
   const response = await axios.post(url, normalizedPayload, {
     headers: {
       Authorization: buildAuthHeader(interaktConfig.authToken),
@@ -95,10 +108,19 @@ export const sendInteraktTemplateMessage = async (
     timeout: interaktConfig.timeoutMs,
   });
   if (response?.data?.result === false) {
+    console.log("[Interakt] WhatsApp template rejected:", {
+      ...logContext,
+      message: response.data?.message || "Interakt request failed.",
+    });
     throw new ApiError(
       400,
       response.data?.message || "Interakt request failed."
     );
   }
+  console.log("[Interakt] WhatsApp template accepted:", {
+    ...logContext,
+    providerMessageId: interaktMessageId(response.data),
+    result: response?.data?.result,
+  });
   return response.data;
 };

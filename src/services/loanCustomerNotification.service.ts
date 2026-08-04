@@ -107,6 +107,22 @@ const formatAmount = (value: unknown) => {
     : "";
 };
 
+const getLoanWhatsappLogContext = (
+  query: any,
+  templateKey: LoanWhatsappTemplateKey | undefined,
+  contact: ReturnType<typeof getCustomerContact>,
+) => ({
+  applicationId: getApplicationId(query),
+  status: query?.status || "application_created",
+  loanType: getLoanNotificationContext(query).loanType,
+  templateKey: templateKey || null,
+  to: contact.mobile || "",
+  hasWhatsappConsent:
+    query?.whatsappConsent === true ||
+    query?.communicationConsent?.whatsapp === true,
+  interaktEnabled: config.integrations.interakt.enabled,
+});
+
 const getRequestedDocuments = (remarks?: string) => {
   const value = String(remarks || "").replace(/^Requested documents:\s*/i, "").trim();
   return value || "Required loan documents";
@@ -186,24 +202,48 @@ const queueLoanWhatsapp = async (
   recipient?: any,
 ) => {
   const contact = getCustomerContact(query, recipient);
+  const applicationId = getApplicationId(query);
   const hasWhatsappConsent =
     query?.whatsappConsent === true ||
     query?.communicationConsent?.whatsapp === true;
-  if (
-    !hasWhatsappConsent ||
-    !contact.mobile ||
-    !config.integrations.interakt.enabled
-  )
+  const logContext = getLoanWhatsappLogContext(query, templateKey, contact);
+  console.log("[Loan WhatsApp] Template hit:", logContext);
+  if (!hasWhatsappConsent) {
+    console.log("[Loan WhatsApp] Skipped - WhatsApp consent missing:", logContext);
     return;
+  }
+  if (!contact.mobile) {
+    console.log("[Loan WhatsApp] Skipped - mobile number missing:", logContext);
+    return;
+  }
+  if (!config.integrations.interakt.enabled) {
+    console.log("[Loan WhatsApp] Skipped - Interakt disabled:", logContext);
+    return;
+  }
   let template;
   try {
     template = getLoanWhatsappTemplate(templateKey, values);
   } catch (error: any) {
-    console.log("Loan WhatsApp skipped:", error?.message || error);
+    console.log("[Loan WhatsApp] Skipped - template values invalid:", {
+      ...logContext,
+      error: error?.message || error,
+    });
     return;
   }
-  const applicationId = getApplicationId(query);
-  await enqueueCommunication({
+  const callbackData = `loan:${applicationId}:${templateKey}`;
+  const idempotencyKey = `loan:${applicationId}:${templateKey}:whatsapp`;
+  console.log(
+    "[Loan WhatsApp] Queueing template - sending to this number when worker runs:",
+    {
+      ...logContext,
+      templateName: template.name,
+      languageCode: template.languageCode,
+      bodyValues: template.bodyValues,
+      callbackData,
+      idempotencyKey,
+    },
+  );
+  const queued = await enqueueCommunication({
     channel: CommunicationChannel.WHATSAPP,
     eventName: templateKey,
     referenceId: applicationId,
@@ -212,13 +252,26 @@ const queueLoanWhatsapp = async (
       countryCode: config.integrations.interakt.defaultCountryCode,
       phoneNumber: contact.mobile,
       type: "Template",
-      callbackData: `loan:${applicationId}:${templateKey}`,
+      callbackData,
       template,
     },
-    idempotencyKey: `loan:${applicationId}:${templateKey}:whatsapp`,
-  }).catch((error) =>
-    console.log("Loan WhatsApp queue failed:", error?.message || error),
-  );
+    idempotencyKey,
+  }).catch((error) => {
+    console.log("[Loan WhatsApp] Queue failed:", {
+      ...logContext,
+      templateName: template.name,
+      error: error?.message || error,
+    });
+    return null;
+  });
+  if (queued) {
+    console.log("[Loan WhatsApp] Queued template:", {
+      ...logContext,
+      templateName: template.name,
+      idempotencyKey,
+      outboxStatus: (queued as any)?.status,
+    });
+  }
 };
 
 export const notifyLoanApplicationCreated = async (queryOrId: any) => {
@@ -306,6 +359,11 @@ export const notifyLoanStageUpdated = async (
 
   const templateKey = loanWhatsappTemplateForStatus(query.status);
   const contact = getCustomerContact(query, recipient?.profile);
+  console.log("[Loan WhatsApp] Stage status checked:", {
+    ...getLoanWhatsappLogContext(query, templateKey, contact),
+    loanSpecificWhatsappTemplate: Boolean(templateKey),
+    genericApplicationWhatsappPath: !templateKey,
+  });
   const documentsRequested =
     query.status === ApplicationStatus.DOCUMENTS_REQUESTED
       ? getRequestedDocuments(options.remarks)
@@ -332,7 +390,13 @@ export const notifyLoanStageUpdated = async (
       sms: true,
     },
   });
-  if (!templateKey) return;
+  if (!templateKey) {
+    console.log("[Loan WhatsApp] No loan-specific template mapped for status:", {
+      ...getLoanWhatsappLogContext(query, templateKey, contact),
+      status: query?.status,
+    });
+    return;
+  }
 
   const valuesByTemplate: Record<LoanWhatsappTemplateKey, unknown[]> = {
     applicationCreated: [contact.name, getApplicationId(query)],
