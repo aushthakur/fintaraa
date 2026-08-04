@@ -67,7 +67,7 @@ export const resolveLoanNotificationRecipient = async (query: any) => {
       query?.customerId;
     if (!agencyId) return null;
     const agency = await Agency.findById(agencyId)
-      .select("name email mobile role")
+      .select("name email mobile role notification")
       .lean();
     if (!agency) return null;
     return {
@@ -82,10 +82,16 @@ export const resolveLoanNotificationRecipient = async (query: any) => {
 
   const userId = query?.customerId?._id || query?.customerId;
   if (!userId) return null;
-  const profile =
-    query?.customerId?.email || query?.customerId?.mobile
+  let profile =
+    query?.customerId && typeof query.customerId === "object"
       ? query.customerId
-      : await User.findById(userId).select("name email mobile").lean();
+      : null;
+  if (!profile?.notification) {
+    profile =
+      (await User.findById(userId)
+        .select("name email mobile notification")
+        .lean()) || profile;
+  }
   if (!profile) return null;
   return { id: String(userId), role: UserType.USER, profile };
 };
@@ -107,19 +113,51 @@ const formatAmount = (value: unknown) => {
     : "";
 };
 
+const getLoanWhatsappConsentState = (query: any, recipient?: any) => {
+  const queryWhatsappConsent = query?.whatsappConsent === true;
+  const queryCommunicationWhatsapp = query?.communicationConsent?.whatsapp === true;
+  const profileWhatsappConsent =
+    recipient?.whatsappConsent === true ||
+    recipient?.communicationConsent?.whatsapp === true;
+  const profileWhatsappPreference =
+    recipient?.notification?.whatsapp === true ||
+    recipient?.preferences?.notifications?.whatsapp === true;
+  const consentSource = queryWhatsappConsent
+    ? "query.whatsappConsent"
+    : queryCommunicationWhatsapp
+      ? "query.communicationConsent.whatsapp"
+      : profileWhatsappConsent
+        ? "profile.whatsappConsent"
+        : profileWhatsappPreference
+          ? "profile.notification.whatsapp"
+          : "none";
+
+  return {
+    hasWhatsappConsent:
+      queryWhatsappConsent ||
+      queryCommunicationWhatsapp ||
+      profileWhatsappConsent ||
+      profileWhatsappPreference,
+    consentSource,
+    queryWhatsappConsent,
+    queryCommunicationWhatsapp,
+    profileWhatsappConsent,
+    profileWhatsappPreference,
+  };
+};
+
 const getLoanWhatsappLogContext = (
   query: any,
   templateKey: LoanWhatsappTemplateKey | undefined,
   contact: ReturnType<typeof getCustomerContact>,
+  recipient?: any,
 ) => ({
   applicationId: getApplicationId(query),
   status: query?.status || "application_created",
   loanType: getLoanNotificationContext(query).loanType,
   templateKey: templateKey || null,
   to: contact.mobile || "",
-  hasWhatsappConsent:
-    query?.whatsappConsent === true ||
-    query?.communicationConsent?.whatsapp === true,
+  ...getLoanWhatsappConsentState(query, recipient),
   interaktEnabled: config.integrations.interakt.enabled,
 });
 
@@ -203,10 +241,14 @@ const queueLoanWhatsapp = async (
 ) => {
   const contact = getCustomerContact(query, recipient);
   const applicationId = getApplicationId(query);
-  const hasWhatsappConsent =
-    query?.whatsappConsent === true ||
-    query?.communicationConsent?.whatsapp === true;
-  const logContext = getLoanWhatsappLogContext(query, templateKey, contact);
+  const consentState = getLoanWhatsappConsentState(query, recipient);
+  const hasWhatsappConsent = consentState.hasWhatsappConsent;
+  const logContext = getLoanWhatsappLogContext(
+    query,
+    templateKey,
+    contact,
+    recipient,
+  );
   console.log("[Loan WhatsApp] Template hit:", logContext);
   if (!hasWhatsappConsent) {
     console.log("[Loan WhatsApp] Skipped - WhatsApp consent missing:", logContext);
@@ -309,6 +351,7 @@ export const notifyLoanApplicationCreated = async (queryOrId: any) => {
     getApplicationId(query),
   ], recipient?.profile);
   const contact = getCustomerContact(query, recipient?.profile);
+  const consentState = getLoanWhatsappConsentState(query, recipient?.profile);
   await queueCustomerApplicationCommunications({
     kind: "loan",
     applicationId: getApplicationId(query),
@@ -316,9 +359,7 @@ export const notifyLoanApplicationCreated = async (queryOrId: any) => {
     customerName: contact.name,
     email: contact.email,
     mobile: contact.mobile,
-    whatsappConsent:
-      query?.whatsappConsent === true ||
-      query?.communicationConsent?.whatsapp === true,
+    whatsappConsent: consentState.hasWhatsappConsent,
     productName: getLoanNotificationContext(query).loanType,
     status: "submitted",
     eventKey: "application-created",
@@ -359,8 +400,9 @@ export const notifyLoanStageUpdated = async (
 
   const templateKey = loanWhatsappTemplateForStatus(query.status);
   const contact = getCustomerContact(query, recipient?.profile);
+  const consentState = getLoanWhatsappConsentState(query, recipient?.profile);
   console.log("[Loan WhatsApp] Stage status checked:", {
-    ...getLoanWhatsappLogContext(query, templateKey, contact),
+    ...getLoanWhatsappLogContext(query, templateKey, contact, recipient?.profile),
     loanSpecificWhatsappTemplate: Boolean(templateKey),
     genericApplicationWhatsappPath: !templateKey,
   });
@@ -375,9 +417,7 @@ export const notifyLoanStageUpdated = async (
     customerName: contact.name,
     email: contact.email,
     mobile: contact.mobile,
-    whatsappConsent:
-      query?.whatsappConsent === true ||
-      query?.communicationConsent?.whatsapp === true,
+    whatsappConsent: consentState.hasWhatsappConsent,
     productName: getLoanNotificationContext(query).loanType,
     status: query.status,
     remarks: options.remarks,
@@ -392,7 +432,7 @@ export const notifyLoanStageUpdated = async (
   });
   if (!templateKey) {
     console.log("[Loan WhatsApp] No loan-specific template mapped for status:", {
-      ...getLoanWhatsappLogContext(query, templateKey, contact),
+      ...getLoanWhatsappLogContext(query, templateKey, contact, recipient?.profile),
       status: query?.status,
     });
     return;
@@ -446,6 +486,7 @@ export const notifyLoanDocumentReuploadRequested = async (
   const recipient = await resolveLoanNotificationRecipient(query);
   if (!recipient) return;
   const contact = getCustomerContact(query, recipient.profile);
+  const consentState = getLoanWhatsappConsentState(query, recipient.profile);
   await queueCustomerApplicationCommunications({
     kind: "loan",
     applicationId: getApplicationId(query),
@@ -453,9 +494,7 @@ export const notifyLoanDocumentReuploadRequested = async (
     customerName: contact.name,
     email: contact.email,
     mobile: contact.mobile,
-    whatsappConsent:
-      query?.whatsappConsent === true ||
-      query?.communicationConsent?.whatsapp === true,
+    whatsappConsent: consentState.hasWhatsappConsent,
     productName: getLoanNotificationContext(query).loanType,
     status: "documents_requested",
     documentName,
