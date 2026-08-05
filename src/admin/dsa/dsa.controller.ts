@@ -22,6 +22,10 @@ import {
   getLoanTypeMatchValues,
   normalizeLoanType,
 } from "../../utils/loanType";
+import {
+  fetchSurepassPennyDropVerification,
+  prepareSurepassPennyDropPayload,
+} from "../../services/surepass.service";
 
 const params = (query: any, maxLimit = 100) => {
   const page = Math.max(Number(query?.page) || 1, 1);
@@ -108,6 +112,21 @@ const uploadedUrl = (value: any) => {
 
 const uploadedMeta = (value: any) => (Array.isArray(value) ? value[0] : value);
 
+const ensureVerificationConsent = (value: any) => {
+  const normalized =
+    typeof value === "string" ? value.trim().toLowerCase() : value;
+  const hasConsent =
+    value === true ||
+    normalized === "y" ||
+    normalized === "yes" ||
+    normalized === "true" ||
+    normalized === "1";
+
+  if (!hasConsent) {
+    throw new ApiError(400, "Consent is required before verification");
+  }
+};
+
 const csvCell = (value: any) => {
   let text = value === null || value === undefined ? "" : String(value);
   if (/^[=+\-@]/.test(text)) text = `'${text}`;
@@ -123,6 +142,83 @@ const escapeHtml = (value: any) =>
     .replace(/'/g, "&#039;");
 
 export class DsaAdminController {
+  static async verifyBankAccount(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      ensureVerificationConsent(req.body?.consent);
+      const payload = prepareSurepassPennyDropPayload(req.body || {});
+      const verification = await fetchSurepassPennyDropVerification(payload);
+      const responseData: any = verification?.data || {};
+      const normalizedData: any =
+        responseData?.data ||
+        responseData?.result ||
+        responseData?.details ||
+        responseData;
+
+      const accountExists =
+        normalizedData?.account_exists ??
+        normalizedData?.accountExists ??
+        normalizedData?.verified ??
+        normalizedData?.success;
+
+      if (accountExists === false) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Bank account verification failed", responseData));
+      }
+
+      const bankDetails = {
+        accountNumber: payload.account_number,
+        ifscCode: payload.ifsc,
+        accountHolderName:
+          normalizedData?.name_at_bank ||
+          normalizedData?.account_holder_name ||
+          normalizedData?.beneficiary_name ||
+          payload.name ||
+          "",
+        bankName:
+          normalizedData?.bank_name || normalizedData?.bankName || "",
+        branchName:
+          normalizedData?.branch_name || normalizedData?.branch || "",
+        verified: true,
+        verificationStatus:
+          String(
+            normalizedData?.verification_status ||
+              normalizedData?.status ||
+              responseData?.status ||
+              "verified",
+          ).trim() || "verified",
+        verificationMessage:
+          normalizedData?.message || responseData?.message || "Bank verified",
+        verificationReferenceId:
+          normalizedData?.reference_id ||
+          normalizedData?.referenceId ||
+          responseData?.reference_id ||
+          responseData?.referenceId ||
+          "",
+        verificationUtr: normalizedData?.utr || normalizedData?.transaction_id || "",
+        verifiedAt: new Date(),
+      };
+
+      return res.status(200).json(
+        new ApiResponse(
+          200,
+          {
+            environment: verification.environment,
+            bankDetails,
+            providerResponse: responseData,
+          },
+          "Bank account verified successfully",
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async summary(_req: Request, res: Response, next: NextFunction) {
     try {
       const [profiles, commissions, paidRows, payouts, totalApplications, approvedApplications, trainingResources, outstandingRows] = await Promise.all([

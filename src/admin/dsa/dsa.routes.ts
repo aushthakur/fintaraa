@@ -9,6 +9,10 @@ const router = Router();
 router.use(authenticateToken, authorize("admin"));
 
 router.get("/summary", asyncHandler(DsaAdminController.summary));
+router.post(
+  "/verify-bank-account",
+  asyncHandler(DsaAdminController.verifyBankAccount),
+);
 router.get("/profiles", asyncHandler(DsaAdminController.profiles));
 router.get("/profiles/:id", asyncHandler(DsaAdminController.profile));
 router.patch("/profiles/:id/status", asyncHandler(DsaAdminController.updateProfileStatus));
