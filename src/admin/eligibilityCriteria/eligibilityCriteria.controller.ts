@@ -258,7 +258,9 @@ const normalizeAbbValue = (value: any) => {
 };
 
 const sanitizeEligibilityPayload = (payload: Record<string, any>) => {
-  const normalizedSalaryType = normalizeEligibilitySalaryType(payload.salaryType);
+  const normalizedSalaryType = normalizeEligibilitySalaryType(
+    payload.salaryType,
+  );
   const fieldGroupKey = getEligibilityFieldGroupKey(normalizedSalaryType);
   const allowedFields = new Set([
     ...ELIGIBILITY_BASE_FIELDS,
@@ -304,7 +306,9 @@ const sanitizeEligibilityPayload = (payload: Record<string, any>) => {
           ),
         }
       : {}),
-    status: String(payload.status || "").trim().toLowerCase(),
+    status: String(payload.status || "")
+      .trim()
+      .toLowerCase(),
   };
 
   return Object.fromEntries(
@@ -436,35 +440,40 @@ const queueEligibilityMailDispatch = async ({
   html: string;
   attachments: any[];
 }) => {
+  const normalizedRecipients = Array.from(
+    new Set(recipients.map(normalizeEmail).filter((email) => Boolean(email))),
+  );
   console.log("[EligibilityMail] Queue dispatch started", {
-    recipients: recipients.length,
+    recipients: normalizedRecipients.length,
     attachments: attachments.length,
     subject,
   });
 
-  const results = await Promise.allSettled(
-    recipients.map(async (email) => {
-      console.log("[EligibilityMail] Sending queued mail", { email });
-      const info = await sendMail(
-        createMailOptions(email, subject, html, attachments),
-      );
-      console.log("[EligibilityMail] Queued mail sent", {
-        email,
-        messageId: info?.messageId,
-        accepted: info?.accepted,
-        rejected: info?.rejected,
-      });
-      return info;
-    }),
-  );
-
-  const failures = results.filter((result) => result.status === "rejected");
-  if (failures.length > 0) {
-    console.log("Eligibility mail dispatch completed with failures:", {
-      total: recipients.length,
-      failed: failures.length,
-    });
+  if (normalizedRecipients.length === 0) {
+    console.log(
+      "[EligibilityMail] No recipients available for queued dispatch",
+    );
+    return;
   }
+
+  const [to, ...cc] = normalizedRecipients;
+  console.log("[EligibilityMail] Sending queued mail", { to, cc });
+  const info = await sendMail(
+    createMailOptions(
+      to,
+      subject,
+      html,
+      attachments,
+      cc.length ? cc : undefined,
+    ),
+  );
+  console.log("[EligibilityMail] Queued mail sent", {
+    to,
+    cc,
+    messageId: info?.messageId,
+    accepted: info?.accepted,
+    rejected: info?.rejected,
+  });
 };
 
 type DocumentAttachmentInput = {
@@ -783,7 +792,10 @@ const buildPublicTermHighlights = (criteria: Record<string, any>) => {
       ? `Yes${criteria.lifeInsurancePercentage ? ` (${formatPublicPercent(criteria.lifeInsurancePercentage)})` : ""}`
       : "",
   );
-  push("Minimum ITR", criteria.itrYears ? formatPublicYears(criteria.itrYears) : "");
+  push(
+    "Minimum ITR",
+    criteria.itrYears ? formatPublicYears(criteria.itrYears) : "",
+  );
   push("ABB Days", formatPublicAbb(criteria.abb));
   push(
     "Low LTV",
@@ -867,9 +879,7 @@ const buildPublicTermHighlights = (criteria: Record<string, any>) => {
   push(
     "ITR FOIR",
     [
-      criteria.itrFoir0To600000
-        ? `0-6L: ${criteria.itrFoir0To600000}%`
-        : "",
+      criteria.itrFoir0To600000 ? `0-6L: ${criteria.itrFoir0To600000}%` : "",
       criteria.itrFoir600000To1000000
         ? `6L-10L: ${criteria.itrFoir600000To1000000}%`
         : "",
@@ -899,8 +909,14 @@ const buildPublicTermHighlights = (criteria: Record<string, any>) => {
   push("Cash Rental", criteria.cashRental);
   push("Bank Rental", criteria.bankRental);
   push("Mix Rental", criteria.mixRental);
-  push("Residential LTV", criteria.residentialCatALtv ? `Up to ${criteria.residentialCatALtv}%` : "");
-  push("Commercial LTV", criteria.commercialCatALtv ? `Up to ${criteria.commercialCatALtv}%` : "");
+  push(
+    "Residential LTV",
+    criteria.residentialCatALtv ? `Up to ${criteria.residentialCatALtv}%` : "",
+  );
+  push(
+    "Commercial LTV",
+    criteria.commercialCatALtv ? `Up to ${criteria.commercialCatALtv}%` : "",
+  );
   return terms;
 };
 
@@ -976,7 +992,8 @@ const buildPublicEligibilityResult = (
 
   if (filters.salaryType) {
     const passed =
-      normalizeEligibilitySalaryType(criteria.salaryType) === filters.salaryType;
+      normalizeEligibilitySalaryType(criteria.salaryType) ===
+      filters.salaryType;
     checks.push({
       label: "Income profile",
       requirement: criteria.salaryType || "Any",
@@ -1284,7 +1301,8 @@ export class EligibilityCriteriaController {
             .json(
               new ApiError(
                 403,
-                access.reason || "You do not have access to send this eligibility email",
+                access.reason ||
+                  "You do not have access to send this eligibility email",
               ),
             );
         }
@@ -1341,7 +1359,10 @@ export class EligibilityCriteriaController {
       });
 
       const subject = `Eligibility Criteria Match - ${
-        loanQuery?.firstName || loanQuery?.lastName || loanQuery?.mobile || "Loan Query"
+        loanQuery?.firstName ||
+        loanQuery?.lastName ||
+        loanQuery?.mobile ||
+        "Loan Query"
       }`;
       const html = buildEligibilityMailHtml(
         loanQuery,
@@ -1398,10 +1419,13 @@ export class EligibilityCriteriaController {
           const criteriaRecipients = getRecipientEmails([criteria]);
 
           if (criteriaRecipients.length === 0) {
-            console.log("[EligibilityMail] Skipping criteria with no recipients", {
-              criteriaId: criteria._id,
-              bankName: criteria.bankName,
-            });
+            console.log(
+              "[EligibilityMail] Skipping criteria with no recipients",
+              {
+                criteriaId: criteria._id,
+                bankName: criteria.bankName,
+              },
+            );
             return {
               id: criteria._id,
               sent: false,
@@ -1435,7 +1459,11 @@ export class EligibilityCriteriaController {
             recipients: criteriaRecipients,
           });
 
-          return { id: criteria._id, sent: true, recipients: criteriaRecipients };
+          return {
+            id: criteria._id,
+            sent: true,
+            recipients: criteriaRecipients,
+          };
         }),
       );
 

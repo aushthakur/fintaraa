@@ -10,8 +10,8 @@ import { Request, Response, NextFunction } from "express";
 import { UserType } from "../../modals/notification.model";
 import { CommonService } from "../../services/common.services";
 import {
-  Gender,
   User,
+  Gender,
   UserStatus,
   AccountSource,
 } from "../../modals/user.model";
@@ -103,6 +103,49 @@ const normalizePhoneDigits = (input?: string): string => {
   return String(input || "").replace(/\D/g, "");
 };
 
+const completedLinkedLoanEditLockStatuses = new Set<string>([
+  InsuranceApplicationStatus.COMPLETED,
+  InsuranceApplicationStatus.COMPLETED_SUCCESS,
+]);
+
+const normalizeLinkedLoanStatus = (value: any) =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
+
+const isCompletedLinkedLoanEditLocked = (status: any) =>
+  completedLinkedLoanEditLockStatuses.has(normalizeLinkedLoanStatus(status));
+
+const hasStoredDisbursedAmount = (value: any) => {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount > 0;
+};
+
+const hasStoredDisbursedDate = (value: any) =>
+  value !== undefined && value !== null && String(value).trim() !== "";
+
+const isSameLockedDisbursedNumber = (incoming: any, stored: any) => {
+  if (!hasStoredDisbursedAmount(stored)) return incoming === undefined;
+  const incomingNumber = Number(incoming);
+  const storedNumber = Number(stored);
+  return (
+    Number.isFinite(incomingNumber) &&
+    Number.isFinite(storedNumber) &&
+    incomingNumber === storedNumber
+  );
+};
+
+const isSameLockedDisbursedDate = (incoming: any, stored: any) => {
+  if (!hasStoredDisbursedDate(stored)) return incoming === undefined;
+  const incomingTime = new Date(incoming).getTime();
+  const storedTime = new Date(stored).getTime();
+  return (
+    Number.isFinite(incomingTime) &&
+    Number.isFinite(storedTime) &&
+    incomingTime === storedTime
+  );
+};
+
 const normalizePhoneToLeadFormat = (input?: string): string => {
   const digits = normalizePhoneDigits(input);
   if (!digits) return "";
@@ -167,11 +210,77 @@ const normalizeEmploymentTypeForCallRecord = (value: any) => {
   return key;
 };
 
+const normalizeAddressDetailsForCallRecord = (value: any) => {
+  const source = value && typeof value === "object" ? value : {};
+  const rawDurationOfStayYears = String(
+    source.durationOfStayYears ?? "",
+  ).trim();
+  const rawDurationOfStayMonths = String(
+    source.durationOfStayMonths ?? "",
+  ).trim();
+  const durationOfStayYears = Number(rawDurationOfStayYears);
+  const durationOfStayMonths = Number(rawDurationOfStayMonths);
+  const houseType = String(source.houseType || "")
+    .trim()
+    .toLowerCase();
+
+  return {
+    street: String(source.street || "").trim(),
+    city: String(source.city || "").trim(),
+    state: String(source.state || "").trim(),
+    pincode: String(source.pincode || "")
+      .replace(/\D/g, "")
+      .slice(0, 6),
+    ...(rawDurationOfStayYears &&
+    Number.isFinite(durationOfStayYears) &&
+    durationOfStayYears >= 0
+      ? { durationOfStayYears }
+      : {}),
+    ...(rawDurationOfStayMonths &&
+    Number.isFinite(durationOfStayMonths) &&
+    durationOfStayMonths >= 0 &&
+    durationOfStayMonths <= 11
+      ? { durationOfStayMonths }
+      : {}),
+    ...(["rented", "owned"].includes(houseType) ? { houseType } : {}),
+  };
+};
+
 const sanitizeCallRecordPayload = (payload: Record<string, any>) => {
   const next = { ...payload };
   const employmentType = normalizeEmploymentTypeForCallRecord(
     next.employmentType,
   );
+
+  const hasPermanentAddress =
+    next.permanentAddress && typeof next.permanentAddress === "object";
+  const hasCurrentAddress =
+    next.currentAddress && typeof next.currentAddress === "object";
+  const hasCurrentAddressPreference = Object.prototype.hasOwnProperty.call(
+    next,
+    "currentAddressSameAsPermanent",
+  );
+
+  if (hasPermanentAddress) {
+    next.permanentAddress = normalizeAddressDetailsForCallRecord(
+      next.permanentAddress,
+    );
+    next.address = next.permanentAddress.street;
+    next.city = next.permanentAddress.city;
+    next.state = next.permanentAddress.state;
+    next.pincode = next.permanentAddress.pincode;
+  }
+  if (hasCurrentAddressPreference) {
+    next.currentAddressSameAsPermanent =
+      next.currentAddressSameAsPermanent !== false;
+  }
+  if (next.currentAddressSameAsPermanent === true && hasPermanentAddress) {
+    next.currentAddress = next.permanentAddress;
+  } else if (hasCurrentAddress) {
+    next.currentAddress = normalizeAddressDetailsForCallRecord(
+      next.currentAddress,
+    );
+  }
 
   if (Object.prototype.hasOwnProperty.call(next, "callbackAt")) {
     const callbackAt = parseDateInTimeZone(
@@ -709,6 +818,27 @@ const createLoanQueryFromCallRecord = async (
         : normalizedPhone;
 
     const normalizedLoanContext = context || {};
+    const permanentAddress = normalizeAddressDetailsForCallRecord(
+      normalizedLoanContext.permanentAddress ||
+        callRecord.permanentAddress || {
+          street:
+            normalizedLoanContext.street ||
+            normalizedLoanContext.address ||
+            callRecord.address,
+          city: normalizedLoanContext.city || callRecord.city,
+          state: normalizedLoanContext.state || callRecord.state,
+          pincode: normalizedLoanContext.pincode || callRecord.pincode,
+        },
+    );
+    const currentAddressSameAsPermanent =
+      typeof normalizedLoanContext.currentAddressSameAsPermanent === "boolean"
+        ? normalizedLoanContext.currentAddressSameAsPermanent
+        : callRecord.currentAddressSameAsPermanent !== false;
+    const currentAddress = currentAddressSameAsPermanent
+      ? permanentAddress
+      : normalizeAddressDetailsForCallRecord(
+          normalizedLoanContext.currentAddress || callRecord.currentAddress,
+        );
     const requestedProductService = String(
       normalizedLoanContext.productService || callRecord.productService || "",
     ).trim();
@@ -871,28 +1001,32 @@ const createLoanQueryFromCallRecord = async (
     ).trim();
     const resolvedCity =
       String(
-        normalizedLoanContext.city ||
+        permanentAddress.city ||
+          normalizedLoanContext.city ||
           callRecord.city ||
           lead?.location?.city ||
           "Unknown",
       ).trim() || "Unknown";
     const resolvedState =
       String(
-        normalizedLoanContext.state ||
+        permanentAddress.state ||
+          normalizedLoanContext.state ||
           callRecord.state ||
           lead?.location?.state ||
           "Unknown",
       ).trim() || "Unknown";
     const resolvedPincode =
       String(
-        normalizedLoanContext.pincode ||
+        permanentAddress.pincode ||
+          normalizedLoanContext.pincode ||
           callRecord.pincode ||
           lead?.location?.pincode ||
           "000000",
       ).trim() || "000000";
     const resolvedStreet =
       String(
-        normalizedLoanContext.street ||
+        permanentAddress.street ||
+          normalizedLoanContext.street ||
           normalizedLoanContext.address ||
           callRecord.address ||
           "Not Provided",
@@ -1047,6 +1181,15 @@ const createLoanQueryFromCallRecord = async (
       ifscCode: resolvedIfscCode,
       bankStatementUrl:
         normalizedLoanContext.bankStatementUrl || callRecord.recordingUrl || "",
+      policyDetails: {
+        ...(normalizedLoanContext.policyDetails &&
+        typeof normalizedLoanContext.policyDetails === "object"
+          ? normalizedLoanContext.policyDetails
+          : {}),
+        permanentAddress,
+        currentAddressSameAsPermanent,
+        currentAddress,
+      },
       ...(primaryAssigneeId ? { assignedAgent: primaryAssigneeId } : {}),
       ...(Array.isArray(callRecord.assignees) && callRecord.assignees.length > 0
         ? {
@@ -1640,6 +1783,61 @@ export class CallRecordController {
       delete payload.commentBy;
       delete payload.commentedAt;
 
+      const requestedLoanQueryId =
+        payload?.loanContext?.queryId || payload?.loanContext?.loanQueryId;
+      if (
+        requestedLoanQueryId &&
+        !Types.ObjectId.isValid(String(requestedLoanQueryId))
+      ) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid linked loan query id"));
+      }
+      const requestedLoanQuery = requestedLoanQueryId
+        ? await LoanQuery.findById(requestedLoanQueryId)
+            .select("status disbursedAmount disbursedDate")
+            .lean()
+        : null;
+
+      if (isCompletedLinkedLoanEditLocked(requestedLoanQuery?.status)) {
+        return res
+          .status(409)
+          .json(
+            new ApiError(409, "Completed loan applications cannot be edited"),
+          );
+      }
+
+      if (
+        requestedLoanQuery &&
+        hasStoredDisbursedAmount(requestedLoanQuery.disbursedAmount) &&
+        Object.prototype.hasOwnProperty.call(payload, "disbursedAmount") &&
+        !isSameLockedDisbursedNumber(
+          payload.disbursedAmount,
+          requestedLoanQuery.disbursedAmount,
+        )
+      ) {
+        return res
+          .status(409)
+          .json(
+            new ApiError(409, "Disbursed amount cannot be changed once saved"),
+          );
+      }
+      if (
+        requestedLoanQuery &&
+        hasStoredDisbursedDate(requestedLoanQuery.disbursedDate) &&
+        Object.prototype.hasOwnProperty.call(payload, "disbursedDate") &&
+        !isSameLockedDisbursedDate(
+          payload.disbursedDate,
+          requestedLoanQuery.disbursedDate,
+        )
+      ) {
+        return res
+          .status(409)
+          .json(
+            new ApiError(409, "Disbursed date cannot be changed once saved"),
+          );
+      }
+
       if (!payload.phoneNumber) {
         return res
           .status(400)
@@ -1688,9 +1886,7 @@ export class CallRecordController {
         const inquiryLoanAmount = Number(payload.loanAmount);
         const inquiryMonthlySalary = Number(payload.monthlySalary);
         const inquiryPanNumber = String(payload.panNumber || "").trim();
-        const inquiryEmploymentType = String(
-          payload.employmentType || "",
-        )
+        const inquiryEmploymentType = String(payload.employmentType || "")
           .trim()
           .toLowerCase();
         if (!inquiryProduct) {
@@ -1896,7 +2092,9 @@ export class CallRecordController {
             loanQueryId: finalLoanQueryId,
             status: linkedLoanQuery.status,
           });
-          finalRecord = await CallRecord.findById(finalRecord?._id || result._id);
+          finalRecord = await CallRecord.findById(
+            finalRecord?._id || result._id,
+          );
         }
       }
 
@@ -2095,8 +2293,7 @@ export class CallRecordController {
       const requestTimeZone = (req as any)?.timezone || DEFAULT_QUERY_TIMEZONE;
       const userId = (req as any)?.user?._id;
       const { role } = (req as any)?.user || {};
-      const scopedRole =
-        (await resolveChatStaffRole(userId, role)) || role;
+      const scopedRole = (await resolveChatStaffRole(userId, role)) || role;
       const scopeMatch = buildCallRecordScopeMatch(
         userId,
         scopedRole,
@@ -2240,8 +2437,7 @@ export class CallRecordController {
     try {
       const userId = (req as any)?.user?._id;
       const { role } = (req as any)?.user || {};
-      const scopedRole =
-        (await resolveChatStaffRole(userId, role)) || role;
+      const scopedRole = (await resolveChatStaffRole(userId, role)) || role;
       const scope =
         (req.query?.scope as string) === "created" ? "created" : "assigned";
       const match = buildCallRecordScopeMatch(userId, scopedRole, scope);
@@ -2309,11 +2505,13 @@ export class CallRecordController {
       const result = await CallRecord.findOne({
         _id: req.params.id,
         ...buildCallRecordItemAccessMatch(userId, staffRole || undefined),
-      }).lean();
+      })
+        .populate("channelAgency", "name mobile email status approvalReview")
+        .populate("channelApprovalRequestedBy", "name username email")
+        .populate("channelApprovalReviewedBy", "name username email")
+        .lean();
       if (!result) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Call record not found"));
+        return res.status(404).json(new ApiError(404, "Call record not found"));
       }
       const [enrichedRecord] = await enrichCallRecordsWithCustomerContext([
         normalizeCallRecordAssigneeView(result),
@@ -2322,6 +2520,185 @@ export class CallRecordController {
         .status(200)
         .json(
           new ApiResponse(200, enrichedRecord || result, "Call record fetched"),
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async getApprovedChannelAgencies(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const agencies = await Agency.find({
+        status: UserStatus.ACTIVE,
+        role: { $in: ["agency", "agency_member"] },
+        "approvalReview.status": { $ne: "rejected" },
+      })
+        .select("_id name mobile email status approvalReview")
+        .sort({ name: 1 })
+        .lean();
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(200, agencies, "Approved channel agencies fetched"),
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async requestChannelApproval(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const adminId = req.user?._id;
+      if (!Types.ObjectId.isValid(req.params.id)) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid call record id"));
+      }
+      const staffRole = await resolveChatStaffRole(adminId, req.user?.role);
+      const record = await CallRecord.findOne({
+        _id: req.params.id,
+        ...buildCallRecordItemAccessMatch(adminId, staffRole || undefined),
+      });
+      if (!record) {
+        return res.status(404).json(new ApiError(404, "Call record not found"));
+      }
+      if (record.channelApprovalStatus === "approved") {
+        return res
+          .status(400)
+          .json(
+            new ApiError(400, "Approved call record cannot request approval"),
+          );
+      }
+
+      const channelAgencyId = String(
+        req.body.channelAgency || record.channelAgency || "",
+      ).trim();
+      if (!Types.ObjectId.isValid(channelAgencyId)) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Valid channel agency is required"));
+      }
+
+      const update: any = {
+        channelAgency: new Types.ObjectId(channelAgencyId),
+        channelApprovalStatus: "pending",
+        channelApprovalRequestedBy: adminId,
+        channelApprovalRequestedAt: new Date(),
+        channelApprovalRequestNotes: String(
+          req.body.channelApprovalRequestNotes || "",
+        ).trim(),
+        channelApprovalReviewedBy: undefined,
+        channelApprovalReviewedAt: undefined,
+        channelApprovalReviewNotes: undefined,
+      };
+
+      const updatedRecord = await CallRecordService.updateById(
+        req.params.id,
+        update,
+        { new: true },
+      );
+      const recordWithAgency = await CallRecord.findById(req.params.id)
+        .populate("channelAgency", "name mobile email status approvalReview")
+        .lean();
+      const [enrichedRecord] = await enrichCallRecordsWithCustomerContext([
+        normalizeCallRecordAssigneeView(recordWithAgency),
+      ]);
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            enrichedRecord || recordWithAgency || updatedRecord,
+            "Channel approval requested",
+          ),
+        );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  static async reviewChannelApproval(
+    req: Request | any,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const adminId = req.user?._id;
+      if (!Types.ObjectId.isValid(req.params.id)) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid call record id"));
+      }
+      const record = await CallRecord.findById(req.params.id).lean();
+      if (!record) {
+        return res.status(404).json(new ApiError(404, "Call record not found"));
+      }
+      if (record.channelApprovalStatus === "approved") {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Call record is already approved"));
+      }
+      if (!record.channelAgency) {
+        return res
+          .status(400)
+          .json(
+            new ApiError(
+              400,
+              "Cannot review channel approval without a selected partner",
+            ),
+          );
+      }
+
+      const status = String(req.body.status || "")
+        .trim()
+        .toLowerCase();
+      if (status !== "approved" && status !== "rejected") {
+        return res
+          .status(400)
+          .json(
+            new ApiError(
+              400,
+              "Approval review status must be either approved or rejected",
+            ),
+          );
+      }
+
+      const update: any = {
+        channelApprovalStatus: status,
+        channelApprovalReviewedBy: adminId,
+        channelApprovalReviewedAt: new Date(),
+        channelApprovalReviewNotes: String(
+          req.body.channelApprovalReviewNotes || req.body.notes || "",
+        ).trim(),
+      };
+
+      const updatedRecord = await CallRecordService.updateById(
+        req.params.id,
+        update,
+        { new: true },
+      );
+      const recordWithAgency = await CallRecord.findById(req.params.id)
+        .populate("channelAgency", "name mobile email status approvalReview")
+        .lean();
+      const [enrichedRecord] = await enrichCallRecordsWithCustomerContext([
+        normalizeCallRecordAssigneeView(recordWithAgency),
+      ]);
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            enrichedRecord || recordWithAgency || updatedRecord,
+            `Channel approval ${status}`,
+          ),
         );
     } catch (err) {
       next(err);
@@ -2371,9 +2748,7 @@ export class CallRecordController {
         .lean();
 
       if (!selectedRecord) {
-        return res
-          .status(404)
-          .json(new ApiError(404, "Call record not found"));
+        return res.status(404).json(new ApiError(404, "Call record not found"));
       }
 
       const loanQueryId = selectedRecord.loanQueryId;
@@ -2411,36 +2786,34 @@ export class CallRecordController {
       );
       const [adminActors, agentActors, userActors, landerActors] =
         activityActorIds.length
-        ? await Promise.all([
-            Admin.find({ _id: { $in: activityActorIds } })
-              .select("name username email")
-              .lean(),
-            Agent.find({ _id: { $in: activityActorIds } })
-              .select("name email")
-              .lean(),
-            User.find({ _id: { $in: activityActorIds } })
-              .select("name email")
-              .lean(),
-            Lander.find({ _id: { $in: activityActorIds } })
-              .select("name username email")
-              .lean(),
-          ])
-        : [[], [], [], []];
+          ? await Promise.all([
+              Admin.find({ _id: { $in: activityActorIds } })
+                .select("name username email")
+                .lean(),
+              Agent.find({ _id: { $in: activityActorIds } })
+                .select("name email")
+                .lean(),
+              User.find({ _id: { $in: activityActorIds } })
+                .select("name email")
+                .lean(),
+              Lander.find({ _id: { $in: activityActorIds } })
+                .select("name username email")
+                .lean(),
+            ])
+          : [[], [], [], []];
       const activityActorNames = new Map<string, string>();
-      [...adminActors, ...agentActors, ...userActors, ...landerActors].forEach((actor: any) => {
-        activityActorNames.set(
-          String(actor?._id),
-          String(actor?.name || actor?.username || actor?.email || "").trim(),
-        );
-      });
+      [...adminActors, ...agentActors, ...userActors, ...landerActors].forEach(
+        (actor: any) => {
+          activityActorNames.set(
+            String(actor?._id),
+            String(actor?.name || actor?.username || actor?.email || "").trim(),
+          );
+        },
+      );
 
       const getPersonLabel = (person: any, fallback?: string) =>
         String(
-          person?.name ||
-            person?.username ||
-            person?.email ||
-            fallback ||
-            "",
+          person?.name || person?.username || person?.email || fallback || "",
         ).trim();
       const trail: Array<Record<string, any>> = [];
       let sequence = 0;
@@ -2551,11 +2924,9 @@ export class CallRecordController {
           : [];
         loanActivities
           .filter((activity: any) =>
-            [
-              "status_changed",
-              "follow_up_updated",
-              "note_added",
-            ].includes(String(activity?.type || "")),
+            ["status_changed", "follow_up_updated", "note_added"].includes(
+              String(activity?.type || ""),
+            ),
           )
           .forEach((activity: any, index: number) => {
             const payload = activity?.payload || {};
@@ -2676,6 +3047,38 @@ export class CallRecordController {
       if (!record)
         return res.status(404).json(new ApiError(404, "Call record not found"));
 
+      if (record.channelApprovalStatus === "approved") {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Approved call record cannot be edited"));
+      }
+
+      const mutationLoanQueryId =
+        record.loanQueryId ||
+        req.body?.loanContext?.queryId ||
+        req.body?.loanContext?.loanQueryId;
+      if (
+        mutationLoanQueryId &&
+        !Types.ObjectId.isValid(String(mutationLoanQueryId))
+      ) {
+        return res
+          .status(400)
+          .json(new ApiError(400, "Invalid linked loan query id"));
+      }
+      const linkedLoanQuery = mutationLoanQueryId
+        ? await LoanQuery.findById(mutationLoanQueryId)
+            .select("status disbursedAmount disbursedDate")
+            .lean()
+        : null;
+
+      if (isCompletedLinkedLoanEditLocked(linkedLoanQuery?.status)) {
+        return res
+          .status(409)
+          .json(
+            new ApiError(409, "Completed loan applications cannot be edited"),
+          );
+      }
+
       const previousAssignee = record.assignee?.toString();
       const incomingAssignee = req.body?.assignee;
       const incomingAssignees = normalizeObjectIdArray(
@@ -2694,6 +3097,47 @@ export class CallRecordController {
       delete (updateBody as any).followUpRemark;
       delete (updateBody as any).commentBy;
       delete (updateBody as any).commentedAt;
+      delete (updateBody as any).channelApprovalStatus;
+      delete (updateBody as any).channelApprovalRequestedBy;
+      delete (updateBody as any).channelApprovalRequestedAt;
+      delete (updateBody as any).channelApprovalRequestNotes;
+      delete (updateBody as any).channelApprovalReviewedBy;
+      delete (updateBody as any).channelApprovalReviewedAt;
+      delete (updateBody as any).channelApprovalReviewNotes;
+
+      const storedDisbursedAmount =
+        linkedLoanQuery?.disbursedAmount ?? record.disbursedAmount;
+      const storedDisbursedDate =
+        linkedLoanQuery?.disbursedDate ?? record.disbursedDate;
+
+      if (
+        hasStoredDisbursedAmount(storedDisbursedAmount) &&
+        Object.prototype.hasOwnProperty.call(updateBody, "disbursedAmount") &&
+        !isSameLockedDisbursedNumber(
+          updateBody.disbursedAmount,
+          storedDisbursedAmount,
+        )
+      ) {
+        return res
+          .status(409)
+          .json(
+            new ApiError(409, "Disbursed amount cannot be changed once saved"),
+          );
+      }
+      if (
+        hasStoredDisbursedDate(storedDisbursedDate) &&
+        Object.prototype.hasOwnProperty.call(updateBody, "disbursedDate") &&
+        !isSameLockedDisbursedDate(
+          updateBody.disbursedDate,
+          storedDisbursedDate,
+        )
+      ) {
+        return res
+          .status(409)
+          .json(
+            new ApiError(409, "Disbursed date cannot be changed once saved"),
+          );
+      }
 
       const updates: any = {
         ...updateBody,
@@ -2764,9 +3208,6 @@ export class CallRecordController {
         Object.prototype.hasOwnProperty.call(updateBody, "followUp") &&
         updates.followUp === false;
       if (followUpExplicitlyDisabled && record.loanQueryId) {
-        const linkedLoanQuery = await LoanQuery.findById(record.loanQueryId)
-          .select("status")
-          .lean();
         if (
           linkedLoanQuery &&
           !isLoanApplicationTerminal(linkedLoanQuery.status)
@@ -3085,7 +3526,10 @@ export class CallRecordController {
             "Admin";
           const now = new Date();
           const assignedTo =
-            updates.assignee || result?.assignee || record?.assignee || undefined;
+            updates.assignee ||
+            result?.assignee ||
+            record?.assignee ||
+            undefined;
           const reason = String(
             rawFollowUpNote ||
               updates.comment ||

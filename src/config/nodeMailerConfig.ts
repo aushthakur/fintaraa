@@ -8,12 +8,19 @@ import {
 const transporter = getEmailTransporter();
 
 const createMailOptions = (
-  receiverEmail: string,
+  receiverEmail: string | string[],
   subject: string,
   htmlContent: string,
   attachments?: SendMailOptions["attachments"],
+  cc?: string | string[],
 ): SendMailOptions =>
-  createDefaultMailOptions(receiverEmail, subject, htmlContent, attachments);
+  createDefaultMailOptions(
+    receiverEmail,
+    subject,
+    htmlContent,
+    attachments,
+    cc,
+  );
 
 const sendEmail = (
   receiverEmail: string,

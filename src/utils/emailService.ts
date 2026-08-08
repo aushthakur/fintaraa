@@ -8,9 +8,9 @@ import { generateOtpTemplate } from "./emailTemplate";
 import { getNewsletterUnsubscribeUrl } from "../services/newsletterUnsubscribe.service";
 
 interface EmailPayload {
-    to: string;
-    otp: string;
-    userName?: string;
+  to: string;
+  otp: string;
+  userName?: string;
 }
 
 let transporter: Transporter | null = null;
@@ -36,10 +36,11 @@ export const getEmailTransporter = () => {
 };
 
 export const createDefaultMailOptions = (
-  receiverEmail: string,
+  receiverEmail: string | string[],
   subject: string,
   htmlContent: string,
   attachments?: SendMailOptions["attachments"],
+  cc?: string | string[],
 ): SendMailOptions => ({
   from: {
     name: "Fintaraa",
@@ -47,6 +48,7 @@ export const createDefaultMailOptions = (
   },
   replyTo: config.email.from as string,
   to: receiverEmail,
+  cc: cc && cc.length > 0 ? cc : undefined,
   subject,
   html: htmlContent,
   attachments: attachments && attachments.length > 0 ? attachments : undefined,

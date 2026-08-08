@@ -1,5 +1,15 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
 
+export interface IAddressDetails {
+  street?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  durationOfStayYears?: number;
+  durationOfStayMonths?: number;
+  houseType?: "rented" | "owned";
+}
+
 export interface ICallRecord extends Document {
   phoneNumber: string;
   firstName?: string;
@@ -12,6 +22,9 @@ export interface ICallRecord extends Document {
   city?: string;
   state?: string;
   pincode?: string;
+  permanentAddress?: IAddressDetails;
+  currentAddressSameAsPermanent?: boolean;
+  currentAddress?: IAddressDetails;
   callStatus?: string;
   followUp?: boolean;
   productService?: string;
@@ -78,6 +91,13 @@ export interface ICallRecord extends Document {
   assignedAt?: Date;
   assignmentMode?: "auto" | "manual";
   channelAgency?: Types.ObjectId;
+  channelApprovalStatus?: "pending" | "approved" | "rejected";
+  channelApprovalRequestedBy?: Types.ObjectId;
+  channelApprovalRequestedAt?: Date;
+  channelApprovalRequestNotes?: string;
+  channelApprovalReviewedBy?: Types.ObjectId;
+  channelApprovalReviewedAt?: Date;
+  channelApprovalReviewNotes?: string;
   attachedLead?: Types.ObjectId;
   loanQueryId?: Types.ObjectId;
   loanQueryCreatedAt?: Date;
@@ -91,7 +111,20 @@ export interface ICallRecord extends Document {
   updatedAt?: Date;
 }
 
-const CallRecordSchema = new Schema<ICallRecord>(
+const AddressDetailsSchema = new Schema<IAddressDetails>(
+  {
+    street: { type: String, trim: true },
+    city: { type: String, trim: true },
+    state: { type: String, trim: true },
+    pincode: { type: String, trim: true },
+    durationOfStayYears: { type: Number, min: 0 },
+    durationOfStayMonths: { type: Number, min: 0, max: 11 },
+    houseType: { type: String, enum: ["rented", "owned"] },
+  },
+  { _id: false },
+);
+
+const CallRecordSchema = new Schema(
   {
     phoneNumber: { type: String, required: true, trim: true, index: true },
     firstName: { type: String, trim: true },
@@ -104,6 +137,9 @@ const CallRecordSchema = new Schema<ICallRecord>(
     city: { type: String, trim: true },
     state: { type: String, trim: true },
     pincode: { type: String, trim: true },
+    permanentAddress: { type: AddressDetailsSchema, default: undefined },
+    currentAddressSameAsPermanent: { type: Boolean, default: true },
+    currentAddress: { type: AddressDetailsSchema, default: undefined },
     callStatus: { type: String, trim: true },
     followUp: { type: Boolean, default: false },
     productService: { type: String, trim: true },
@@ -190,6 +226,17 @@ const CallRecordSchema = new Schema<ICallRecord>(
     },
     attachedLead: { type: Schema.Types.ObjectId, ref: "Lead" },
     channelAgency: { type: Schema.Types.ObjectId, ref: "Agency" },
+    channelApprovalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      index: true,
+    },
+    channelApprovalRequestedBy: { type: Schema.Types.ObjectId },
+    channelApprovalRequestedAt: { type: Date },
+    channelApprovalRequestNotes: { type: String, trim: true },
+    channelApprovalReviewedBy: { type: Schema.Types.ObjectId },
+    channelApprovalReviewedAt: { type: Date },
+    channelApprovalReviewNotes: { type: String, trim: true },
     loanQueryId: { type: Schema.Types.ObjectId, ref: "LoanQuery" },
     loanQueryCreatedAt: { type: Date },
     insuranceQueryId: { type: Schema.Types.ObjectId, ref: "InsuranceQuery" },

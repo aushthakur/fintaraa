@@ -467,6 +467,48 @@ const terminalLoanFollowUpStatuses = new Set<string>([
 const isTerminalLoanFollowUpStatus = (status?: any) =>
   terminalLoanFollowUpStatuses.has(String(status || "").trim());
 
+const completedLoanEditLockStatuses = new Set<string>([
+  ApplicationStatus.COMPLETED,
+  ApplicationStatus.COMPLETED_SUCCESS,
+]);
+
+const isCompletedLoanEditLocked = (status?: any) =>
+  completedLoanEditLockStatuses.has(
+    String(status || "")
+      .trim()
+      .toLowerCase(),
+  );
+
+const hasStoredDisbursedAmount = (value: any) => {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount > 0;
+};
+
+const hasStoredDisbursedDate = (value: any) =>
+  value !== undefined && value !== null && String(value).trim() !== "";
+
+const isSameLockedNumber = (incoming: any, stored: any) => {
+  if (!hasStoredDisbursedAmount(stored)) return incoming === undefined;
+  const incomingNumber = Number(incoming);
+  const storedNumber = Number(stored);
+  return (
+    Number.isFinite(incomingNumber) &&
+    Number.isFinite(storedNumber) &&
+    incomingNumber === storedNumber
+  );
+};
+
+const isSameLockedDate = (incoming: any, stored: any) => {
+  if (!hasStoredDisbursedDate(stored)) return incoming === undefined;
+  const incomingTime = new Date(incoming).getTime();
+  const storedTime = new Date(stored).getTime();
+  return (
+    Number.isFinite(incomingTime) &&
+    Number.isFinite(storedTime) &&
+    incomingTime === storedTime
+  );
+};
+
 const normalizeBooleanInput = (value: any): boolean | undefined => {
   if (value === undefined || value === null || value === "") return undefined;
   if (typeof value === "boolean") return value;
@@ -3676,6 +3718,50 @@ export class LoanQueryController {
           .json(new ApiError(403, "You can only update your own loan queries"));
       }
 
+      if (isCompletedLoanEditLocked(existingResult.status)) {
+        return res
+          .status(409)
+          .json(
+            new ApiError(409, "Completed loan applications cannot be edited"),
+          );
+      }
+
+      const requestBody = req.body || {};
+      const disbursedAmountLocked =
+        hasStoredDisbursedAmount(existingResult.disbursedAmount);
+      const disbursedDateLocked =
+        hasStoredDisbursedDate(existingResult.disbursedDate);
+
+      if (
+        disbursedAmountLocked &&
+        Object.prototype.hasOwnProperty.call(requestBody, "disbursedAmount") &&
+        !isSameLockedNumber(
+          requestBody.disbursedAmount,
+          existingResult.disbursedAmount,
+        )
+      ) {
+        return res
+          .status(409)
+          .json(
+            new ApiError(409, "Disbursed amount cannot be changed once saved"),
+          );
+      }
+
+      if (
+        disbursedDateLocked &&
+        Object.prototype.hasOwnProperty.call(requestBody, "disbursedDate") &&
+        !isSameLockedDate(
+          requestBody.disbursedDate,
+          existingResult.disbursedDate,
+        )
+      ) {
+        return res
+          .status(409)
+          .json(
+            new ApiError(409, "Disbursed date cannot be changed once saved"),
+          );
+      }
+
       processFileUploads(req);
       if (req.body.rcLookup !== undefined) {
         req.body.rcLookup = parseMaybeJson(req.body.rcLookup);
@@ -4658,6 +4744,17 @@ export class LoanQueryController {
         return res
           .status(200)
           .json(new ApiResponse(200, query, "Status already updated"));
+      }
+
+      if (isCompletedLoanEditLocked(oldStatus)) {
+        return res
+          .status(409)
+          .json(
+            new ApiError(
+              409,
+              "Completed loan application status cannot be changed",
+            ),
+          );
       }
 
       const [updatedByName] = await Promise.all([
