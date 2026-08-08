@@ -3,12 +3,18 @@ import { uploadToS3 } from "../config/s3Uploader";
 import { Request, Response, NextFunction } from "express";
 
 const memoryStorage = multer.memoryStorage();
+const MAX_UPLOAD_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 
 // Dynamically configure multer field-based upload
 export const dynamicUpload = (
   fields: { name: string; maxCount?: number }[]
 ) => {
-  return multer({ storage: memoryStorage }).fields(fields);
+  return multer({
+    storage: memoryStorage,
+    limits: {
+      fileSize: MAX_UPLOAD_FILE_SIZE_BYTES,
+    },
+  }).fields(fields);
 };
 
 // S3 upload middleware that maps file + metadata
