@@ -15,7 +15,7 @@ const homeBanners = [
   {
     eyebrow: "RBI registered partner network",
     title: "Compare Loans, Insurance & Cards",
-    highlightText: "from 30+ Banks",
+    highlightText: "from 50+ Banks",
     description:
       "One secure check. Multiple trusted offers. No CIBIL impact and instant eligibility guidance.",
     sourceImage: "/assets/home/hero-banners/financial-advisor-family.png",
