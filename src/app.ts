@@ -15,6 +15,8 @@ import { notFoundHandler } from "./middlewares/notFounHandler";
 import { globalErrorHandler } from "./middlewares/errorHandler";
 import publicCallRecordPageRoutes from "./public/callRecord/callRecord.page.routes";
 
+import { getKeepAliveStatus, triggerKeepAlivePing } from "./services/keepAlive.service";
+
 const app = express();
 
 app.use(ipBlocker);
@@ -24,6 +26,27 @@ app.use(cookieParser());
 app.use(helmet());
 if (config.cors.enabled) app.use(cors(corsOptions));
 else console.log("⚠️  CORS is disabled by config");
+
+// Fast, zero-overhead health and keep-alive endpoints for Render
+// Placed before rate limiter, body parsers, and MongoDB transactions for 0.1ms responses
+app.get(["/health", "/ping", "/api/health"], (_req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.status(200).json({
+    status: "ok",
+    service: "fintara-backend",
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/api/keep-alive", async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  if (req.query.trigger === "true") {
+    const result = await triggerKeepAlivePing();
+    return res.status(200).json(result);
+  }
+  return res.status(200).json(getKeepAliveStatus());
+});
 
 if (config.security.rateLimitEnabled) {
   app.set("trust proxy", 1);

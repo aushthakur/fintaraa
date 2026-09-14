@@ -12,6 +12,7 @@ import { startCommunicationOutboxWorker } from "./services/communicationOutbox.s
 import { startPushCampaignWorker } from "./services/pushCampaign.service";
 import { ensureDefaultDripCampaign } from "./services/applicationDrip.service";
 import { startCallbackReminderScheduler } from "./services/callbackReminder.service";
+import { startKeepAliveWorker, stopKeepAliveWorker } from "./services/keepAlive.service";
 
 // Load environment variables
 config();
@@ -35,6 +36,7 @@ configureSocket(httpServer, app);
 // Graceful shutdown
 const shutdown = (): void => {
   logger.info("Shutting down the server...");
+  stopKeepAliveWorker();
   httpServer.close(() => {
     logger.info("Server closed.");
     process.exit(0);
@@ -70,6 +72,7 @@ const startServer = async (): Promise<void> => {
     startCallbackReminderScheduler();
     startCommunicationOutboxWorker();
     startPushCampaignWorker();
+    startKeepAliveWorker();
     httpServer.listen(port, () => {
       logger.info(
         `Server is running at http://localhost:${port}`.blue,
